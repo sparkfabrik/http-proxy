@@ -2,7 +2,7 @@
 
 set -eo pipefail
 
-REPO=codekitchen/dinghy-http-proxy
+REPO=sparkfabrik/http-proxy
 TAG=$REPO:${1:?"Must supply tag"}
 LATEST=$REPO:latest
 
