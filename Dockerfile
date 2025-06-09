@@ -31,6 +31,9 @@ COPY nginx.tmpl Procfile reload-nginx /app/
 
 COPY htdocs /var/www/default/htdocs/
 
+# Remove local-service from dnsmasq config.
+RUN sed -i '/local-service/d' /etc/dnsmasq.conf
+
 ENV DOMAIN_TLD=docker
 ENV DNS_IP=127.0.0.1
 ENV HOSTMACHINE_IP=127.0.0.1

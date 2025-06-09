@@ -7,15 +7,14 @@ docker-build: ## Build the Docker image
 	docker build -t $(DOCKER_IMAGE_NAME) .
 
 docker-run: docker-build ## Run the Docker container
-	docker rm -vf spark-http-proxy || true
+	docker rm -vf http-proxy || true
 	docker run -d -v /var/run/docker.sock:/tmp/docker.sock:ro \
-		--name=spark-http-proxy \
-        -p 127.0.0.1:80:80 \
-        -p 127.0.0.1:19322:19322/udp \
-        -p 127.0.0.1:19322:19322/tcp \
-		-e CONTAINER_NAME=spark-http-proxy \
-		-e DNS_IP=127.0.0.1 \
-		-e DOMAIN_TLD=loc \
+        --name=http-proxy \
+        -p 80:80 \
+        -p 19322:19322/udp \
+        -e CONTAINER_NAME=http-proxy \
+        -e DNS_IP=127.0.0.1 \
+        -e DOMAIN_TLD=loc \
 		$(DOCKER_IMAGE_NAME)
 
 build: ## Build the go app.
@@ -27,5 +26,5 @@ test-dns: ## Test DNS resolution (run in another terminal while dnsmasq is runni
 	dig @127.0.0.1 -p 19322 hostmachine.loc
 	@echo "Testing any .loc domain:"
 	dig @127.0.0.1 -p 19322 test.loc
-	@echo "Testing with nslookup:"
-	nslookup hostmachine.loc 127.0.0.1:19322
+	@echo "Testing specific domain with IP with dnscacheutil:"
+	dscacheutil -q host -a name test.loc
