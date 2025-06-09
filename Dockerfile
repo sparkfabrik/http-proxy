@@ -6,7 +6,7 @@ COPY go.mod .
 RUN go get -v github.com/fsouza/go-dockerclient
 RUN GOOS=linux GOARCH=$TARGETARCH CGO_ENABLED=0 go build -v -o join-networks
 
-FROM jwilder/nginx-proxy:alpine
+FROM jwilder/nginx-proxy:1.7-alpine
 LABEL Author="Brian Palmer <brian@codekitchen.net>"
 
 RUN apk upgrade --no-cache \
