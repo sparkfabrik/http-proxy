@@ -1,9 +1,12 @@
-# Dinghy HTTP Proxy
+# Spark HTTP Proxy
 
-[![Docker Automated build](https://img.shields.io/docker/automated/codekitchen/dinghy-http-proxy.svg)](https://hub.docker.com/r/codekitchen/dinghy-http-proxy/)
+[![GitHub Container Registry](https://img.shields.io/badge/ghcr.io-sparkfabrik%2Fhttp--proxy-blue)](https://ghcr.io/sparkfabrik/http-proxy)
+[![CI Pipeline](https://github.com/sparkfabrik/http-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/sparkfabrik/http-proxy/actions/workflows/ci.yml)
 
-This is the HTTP Proxy and DNS server that
-[Dinghy](https://github.com/codekitchen/dinghy) uses.
+This is a refactored and enhanced version of the [codekitchen/dinghy-http-proxy](https://github.com/codekitchen/dinghy-http-proxy) project.
+
+Spark HTTP Proxy is an HTTP Proxy and DNS server originally designed for
+[Dinghy](https://github.com/codekitchen/dinghy) but enhanced for broader use cases and improved maintainability.
 
 The proxy is based on jwilder's excellent
 [nginx-proxy](https://github.com/jwilder/nginx-proxy) project, with
@@ -11,6 +14,16 @@ modifications to make it more suitable for local development work.
 
 A DNS resolver is also added. By default it will resolve all `*.docker` domains
 to the Docker VM, but this can be changed.
+
+## What's New in This Refactor
+
+This version includes several improvements over the original dinghy-http-proxy:
+
+- Enhanced error handling and logging
+- Improved code organization and maintainability
+- Better input validation
+- More robust network management
+- Updated dependencies and security improvements
 
 ## Configuration
 
@@ -44,10 +57,10 @@ docker-compose tags.
 
 #### Multiple Hosts
 
-If you need to support multiple virtual hosts for a container, you can separate each entry with commas.  For example, `foo.bar.com,baz.bar.com,bar.com` and each host will be setup the same.
+If you need to support multiple virtual hosts for a container, you can separate each entry with commas. For example, `foo.bar.com,baz.bar.com,bar.com` and each host will be setup the same.
 
 Additionally you can customize the port for each host by appending a port
-number: `foo.bar.com,baz.bar.com:3000`.  Each name will point to its specified
+number: `foo.bar.com,baz.bar.com:3000`. Each name will point to its specified
 port and any name without a port will use the default.
 
 #### Wildcard Hosts
@@ -81,31 +94,31 @@ This happens automatically for the auto-generated docker-compose hostnames.
 
 SSL is supported using single host certificates using naming conventions.
 
-To enable SSL, just put your certificates and privates keys in the ```HOME/.dinghy/certs``` directory
-for any virtual hosts in use.  The certificate and keys should be named after the virtual host with a `.crt` and
-`.key` extension.  For example, a container with `VIRTUAL_HOST=foo.bar.com.docker` should have a
+To enable SSL, just put your certificates and privates keys in the `HOME/.dinghy/certs` directory
+for any virtual hosts in use. The certificate and keys should be named after the virtual host with a `.crt` and
+`.key` extension. For example, a container with `VIRTUAL_HOST=foo.bar.com.docker` should have a
 `foo.bar.com.docker.crt` and `foo.bar.com.docker.key` file in the certs directory.
 
 #### How SSL Support Works
 
 The SSL cipher configuration is based on [mozilla nginx intermediate profile](https://wiki.mozilla.org/Security/Server_Side_TLS#Nginx) which
 should provide compatibility with clients back to Firefox 1, Chrome 1, IE 7, Opera 5, Safari 1,
-Windows XP IE8, Android 2.3, Java 7.  The configuration also enables HSTS, and SSL
+Windows XP IE8, Android 2.3, Java 7. The configuration also enables HSTS, and SSL
 session caches.
 
 The default behavior for the proxy when port 80 and 443 are exposed is as follows:
 
-* If a container has a usable cert, port 80 will redirect to 443 for that container so that HTTPS
-is always preferred when available.
-* If the container does not have a usable cert, port 80 will be used.
+- If a container has a usable cert, port 80 will redirect to 443 for that container so that HTTPS
+  is always preferred when available.
+- If the container does not have a usable cert, port 80 will be used.
 
 To serve traffic in both SSL and non-SSL modes without redirecting to SSL, you can include the
-environment variable `HTTPS_METHOD=noredirect` (the default is `HTTPS_METHOD=redirect`).  You can also
+environment variable `HTTPS_METHOD=noredirect` (the default is `HTTPS_METHOD=redirect`). You can also
 disable the non-SSL site entirely with `HTTPS_METHOD=nohttp`.
 
 #### How to quickly generate self-signed certificates
 
-You can generate self-signed certificates using ```openssl```.
+You can generate self-signed certificates using `openssl`.
 
 ```bash
 openssl req -x509 -newkey rsa:2048 -keyout foo.bar.com.docker.key \
@@ -133,8 +146,8 @@ We include a few environment variables to customize the proxy / dns server:
 
 You'll need the IP of your VM:
 
-* For docker-machine, run `docker-machine ip <machine_name>` to get the IP.
-* For Docker for Mac, you can use `127.0.0.1` as the IP, since it forwards docker ports to the host machine.
+- For docker-machine, run `docker-machine ip <machine_name>` to get the IP.
+- For Docker for Mac, you can use `127.0.0.1` as the IP, since it forwards docker ports to the host machine.
 
 Then start the proxy:
 
@@ -144,7 +157,7 @@ Then start the proxy:
       -p 80:80 -p 443:443 -p 19322:19322/udp \
       -e DNS_IP=<vm_ip> -e CONTAINER_NAME=http-proxy \
       --name http-proxy \
-      codekitchen/dinghy-http-proxy
+      sparkfabrik/http-proxy
 
 You will also need to configure OS X to use the DNS resolver. To do this, create
 a file `/etc/resolver/docker` (creating the `/etc/resolver` directory if it does
@@ -169,7 +182,7 @@ the proxy:
       -p 80:80 -p 443:443 -p 19322:19322/udp \
       -e CONTAINER_NAME=http-proxy \
       --name http-proxy \
-      codekitchen/dinghy-http-proxy
+      sparkfabrik/http-proxy
 
 The `DNS_IP` environment variable is not necessary when Docker is running
 directly on the host, as it defaults to `127.0.0.1`.
@@ -180,9 +193,10 @@ here, it knows how to configure common distros for `dinghy-http-proxy`.
 
 ### Windows
 
-* For Docker for Windows, you can use `127.0.0.1` as the DNS IP.
+- For Docker for Windows, you can use `127.0.0.1` as the DNS IP.
 
 From Powershell:
+
 ```
 docker run -d --restart=always `
   -v /var/run/docker.sock:/tmp/docker.sock:ro `
@@ -190,17 +204,18 @@ docker run -d --restart=always `
   -e CONTAINER_NAME=http-proxy `
   -e DNS_IP=127.0.0.1 `
   --name http-proxy `
-  codekitchen/dinghy-http-proxy
+  sparkfabrik/http-proxy
 ```
 
 From docker-compose:
+
 ```
 version: '2'
 services:
 
   http-proxy:
     container_name: http-proxy
-    image: codekitchen/dinghy-http-proxy
+    image: sparkfabrik/http-proxy
     environment:
       - DNS_IP=127.0.0.1
       - CONTAINER_NAME=http-proxy
@@ -214,5 +229,5 @@ services:
 
 You will have to add the hosts to `C:\Windows\System32\drivers\etc\hosts` manually. There are various Powershell scripts available to help manage this:
 
- - http://get-carbon.org/Set-HostsEntry.html
- - https://gist.github.com/markembling/173887
+- http://get-carbon.org/Set-HostsEntry.html
+- https://gist.github.com/markembling/173887
