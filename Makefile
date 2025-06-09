@@ -21,6 +21,8 @@ build: ## Build the go app.
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o join-networks
 
 test-dns: ## Test DNS resolution (run in another terminal while dnsmasq is running)
+	@echo "Clear dns cache and restart mDNSResponder"
+	@sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder
 	@echo "Testing DNS resolution on port 19322:"
 	@echo "Testing hostmachine.loc:"
 	dig @127.0.0.1 -p 19322 hostmachine.loc
