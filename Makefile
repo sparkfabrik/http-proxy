@@ -9,12 +9,12 @@ docker-build: ## Build the Docker image
 docker-run: docker-build ## Run the Docker container
 	docker rm -vf http-proxy || true
 	docker run -d -v /var/run/docker.sock:/tmp/docker.sock:ro \
-		--name=http-proxy \
+        --name=http-proxy \
         -p 80:80 \
         -p 19322:19322/udp \
-		-e CONTAINER_NAME=http-proxy \
-		-e DNS_IP=127.0.0.1 \
-		-e DOMAIN_TLD=loc \
+        -e CONTAINER_NAME=http-proxy \
+        -e DNS_IP=127.0.0.1 \
+        -e DOMAIN_TLD=loc \
 		$(DOCKER_IMAGE_NAME)
 
 build: ## Build the go app.
