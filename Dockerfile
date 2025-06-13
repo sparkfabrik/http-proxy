@@ -1,9 +1,10 @@
 FROM golang:1.24 AS builder
 ARG TARGETARCH
 WORKDIR /go/src/github.com/sparkfabrik/http-proxy
-COPY join-networks.go .
 COPY go.mod .
-RUN go get -v github.com/fsouza/go-dockerclient
+COPY go.sum .
+RUN go mod download
+COPY join-networks.go .
 RUN GOOS=linux GOARCH=$TARGETARCH CGO_ENABLED=0 go build -v -o join-networks
 
 FROM jwilder/nginx-proxy:1.7-alpine
