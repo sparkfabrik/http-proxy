@@ -19,11 +19,66 @@ to the Docker VM, but this can be changed.
 
 This version includes several improvements over the original dinghy-http-proxy:
 
-- Enhanced error handling and logging
-- Improved code organization and maintainability
-- Better input validation
-- More robust network management
-- Updated dependencies and security improvements
+### Code Organization
+
+- **Go Project Structure**: Reorganized into standard Go project layout with `cmd/` and `pkg/` directories
+- **Multiple Applications**: Split into separate applications:
+  - `cmd/dns-server/` - DNS server with security hardening
+  - `cmd/join-networks/` - Network management with robust retry logic
+- **Shared Packages**: Created reusable packages in `pkg/`:
+  - `pkg/config/` - Centralized configuration management
+  - `pkg/logger/` - Shared logging utilities
+
+### Security Enhancements
+
+- **DNS Security**: DNS server now silently drops queries for non-configured TLD domains instead of responding with NXDOMAIN
+- **Input Validation**: Enhanced validation throughout the codebase
+- **Configuration Cleanup**: Removed unused environment variables for cleaner security posture
+
+### Network Management
+
+- **Robust Network Operations**: Advanced retry mechanisms with exponential backoff
+- **Connectivity Validation**: Automatic connectivity checks during network operations
+- **Rollback Capabilities**: Automatic rollback on operation failures to maintain consistent state
+- **Smart Network Discovery**: Intelligent detection of active bridge networks
+
+### Development & Maintenance
+
+- **Enhanced Error Handling**: Comprehensive error handling and logging throughout
+- **Graceful Shutdown**: Proper signal handling for clean shutdowns
+- **Dry-run Mode**: Testing capabilities without making actual changes
+- **Updated Dependencies**: Latest Go modules and security improvements
+
+## Project Structure
+
+This project follows the standard Go project layout:
+
+```
+├── cmd/                    # Main applications
+│   ├── dns-server/        # DNS server with security hardening
+│   │   └── main.go
+│   └── join-networks/     # Network management application
+│       └── main.go
+├── pkg/                   # Shared packages
+│   ├── config/           # Configuration management
+│   │   └── config.go
+│   └── logger/           # Logging utilities
+│       └── logger.go
+├── Dockerfile            # Multi-stage build for both applications
+├── Makefile             # Build automation
+├── go.mod               # Go module definition
+└── ...                  # Other project files
+```
+
+### Applications
+
+- **DNS Server** (`cmd/dns-server/`): Provides DNS resolution for configured TLD domains with security hardening
+- **Join Networks** (`cmd/join-networks/`): Manages Docker network connections with robust retry logic and connectivity validation
+
+### Shared Packages
+
+- **Config** (`pkg/config/`): Centralized configuration management with environment variable support
+- **Logger** (`pkg/logger/`): Shared logging utilities with consistent formatting
 
 ## Configuration
 
@@ -137,10 +192,24 @@ outside of Dinghy, this proxy now supports running standalone.
 
 #### Environment variables
 
-We include a few environment variables to customize the proxy / dns server:
+#### Environment Variables
 
-- `DOMAIN_TLD` default: `docker` - The DNS server will only respond to `*.docker` by default. You can change this to `dev` if it suits your workflow
-- `DNS_IP` default: `127.0.0.1` - Setting this variable is explained below
+The proxy supports several environment variables for customization:
+
+**DNS Server Configuration:**
+
+- `DOMAIN_TLD` (default: `docker`) - The DNS server will only respond to domains with this TLD (e.g., `*.docker`)
+- `DNS_IP` (default: `127.0.0.1`) - IP address that DNS queries should resolve to
+- `LOG_LEVEL` (default: `info`) - Logging level (debug, info, warn, error)
+
+**Network Management:**
+
+- `CONTAINER_NAME` - Name of the container (used for network operations)
+
+**Security Features:**
+
+- The DNS server now silently drops queries for non-configured TLD domains for enhanced security
+- Network operations include automatic connectivity validation and rollback capabilities
 
 ### OS X
 
@@ -231,3 +300,54 @@ You will have to add the hosts to `C:\Windows\System32\drivers\etc\hosts` manual
 
 - http://get-carbon.org/Set-HostsEntry.html
 - https://gist.github.com/markembling/173887
+
+## Development
+
+### Building the Project
+
+The project uses a Makefile for build automation:
+
+```bash
+# Build both applications
+make build
+
+# Build individual applications
+make build-dns-server
+make build-join-networks
+
+# Build Docker image
+make docker-build
+
+# Clean build artifacts
+make clean
+```
+
+### Testing
+
+The applications support dry-run mode for testing:
+
+```bash
+# Test DNS server configuration
+./build/dns-server -dry-run
+
+# Test network operations without making changes
+./build/join-networks -container-name test-container -dry-run
+```
+
+### Project Architecture
+
+- **Multi-stage Docker Build**: Efficient Docker image with separate binaries
+- **Shared Configuration**: Centralized environment variable management
+- **Robust Error Handling**: Comprehensive logging and error recovery
+- **Security Hardening**: DNS server only responds to configured domains
+- **Network Resilience**: Automatic retry logic with connectivity validation
+
+### Contributing
+
+When contributing to this project:
+
+1. Follow Go best practices and the existing project structure
+2. Add tests for new functionality
+3. Update documentation for any configuration changes
+4. Use the shared `pkg/` packages for common functionality
+5. Ensure proper error handling and logging
