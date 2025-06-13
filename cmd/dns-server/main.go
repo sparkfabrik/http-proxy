@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/miekg/dns"
 	"github.com/sparkfabrik/http-proxy/pkg/config"
@@ -125,20 +126,29 @@ func main() {
 		Handler: dns.DefaultServeMux,
 	}
 
+	// Create error channel for server startup errors
+	errChan := make(chan error, 2)
+
 	// Start servers in goroutines
 	go func() {
 		if err := udpServer.ListenAndServe(); err != nil {
-			log.Error(fmt.Sprintf("Failed to start UDP server: %v", err))
-			os.Exit(1)
+			errChan <- fmt.Errorf("UDP server failed: %v", err)
 		}
 	}()
 
 	go func() {
 		if err := tcpServer.ListenAndServe(); err != nil {
-			log.Error(fmt.Sprintf("Failed to start TCP server: %v", err))
-			os.Exit(1)
+			errChan <- fmt.Errorf("TCP server failed: %v", err)
 		}
 	}()
+
+	// Check for startup errors
+	select {
+	case err := <-errChan:
+		log.Error(err.Error())
+		os.Exit(1)
+	case <-time.After(100 * time.Millisecond):
+	}
 
 	log.Info("DNS server started successfully")
 
