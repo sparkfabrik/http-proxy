@@ -17,8 +17,12 @@ docker-run: docker-build ## Run the Docker container
         -e DOMAIN_TLD=loc \
 		$(DOCKER_IMAGE_NAME)
 
-build: ## Build the go app.
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o join-networks
+docker-logs: ## Show logs of the Docker container
+	docker logs -f http-proxy
+
+build: ## Build the go apps
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o join-networks ./cmd/join-networks
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o dns-server ./cmd/dns-server
 
 test-dns: ## Test DNS resolution (run in another terminal while dnsmasq is running)
 	@echo "Clear dns cache and restart mDNSResponder"
