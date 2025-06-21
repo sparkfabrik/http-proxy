@@ -1,0 +1,10 @@
+services:
+  whoami:
+    image: traefik/whoami
+    labels:
+      - "traefik.http.routers.whoami.rule=Host(`whoami-traefik.loc`)"
+
+  whoami_dinghy:
+    image: traefik/whoami
+    environment:
+      - VIRTUAL_HOST=whoami-dinghy.loc

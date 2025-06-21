@@ -81,7 +81,7 @@ func main() {
 
 	// Load configuration
 	cfg := config.Load()
-	log := logger.New("dns-server")
+	log := logger.NewWithLevel("dns-server", logger.LevelInfo)
 
 	// Override config with command line flags if provided
 	if *port != "" {
@@ -103,13 +103,13 @@ func main() {
 
 	// Validate target IP
 	if net.ParseIP(cfg.DNSIP) == nil {
-		log.Error(fmt.Sprintf("Invalid target IP address: %s", cfg.DNSIP))
+		log.Error("Invalid target IP address", "ip", cfg.DNSIP)
 		os.Exit(1)
 	}
 
-	log.Info(fmt.Sprintf("Starting DNS server on port %s", cfg.DNSPort))
-	log.Info(fmt.Sprintf("Handling TLD: .%s", cfg.DomainTLD))
-	log.Info(fmt.Sprintf("Resolving to: %s", cfg.DNSIP))
+	log.Info("Starting DNS server", "port", cfg.DNSPort)
+	log.Info("Handling TLD", "tld", "."+cfg.DomainTLD)
+	log.Info("Resolving to", "target_ip", cfg.DNSIP)
 
 	// Create DNS server
 	dns.HandleFunc(".", server.handleDNSRequest)
@@ -145,7 +145,7 @@ func main() {
 	// Check for startup errors
 	select {
 	case err := <-errChan:
-		log.Error(err.Error())
+		log.Error("Server startup failed", "error", err)
 		os.Exit(1)
 	case <-time.After(100 * time.Millisecond):
 	}

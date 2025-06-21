@@ -4,7 +4,7 @@ help: ## Show help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
 docker-build: ## Build the Docker image
-	docker build -t $(DOCKER_IMAGE_NAME) .
+	docker build -t $(DOCKER_IMAGE_NAME) -f build/Dockerfile .
 
 docker-run: docker-build ## Run the Docker container
 	docker rm -vf http-proxy || true
@@ -34,3 +34,9 @@ test-dns: ## Test DNS resolution (run in another terminal while dnsmasq is runni
 	dig @127.0.0.1 -p 19322 test.loc
 	@echo "Testing specific domain with IP with dnscacheutil:"
 	dscacheutil -q host -a name test.loc
+
+compose-up: ## Run Traefik with Docker
+	@docker rm -vf http-proxy || true
+	@docker-compose up -d --remove-orphans
+	@cd build/traefik/test && \
+		docker-compose up -d
