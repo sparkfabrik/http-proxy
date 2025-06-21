@@ -1,0 +1,47 @@
+services:
+  dinghy_layer:
+    build:
+      context: .
+      dockerfile: build/Dockerfile
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - traefik_dynamic:/traefik/dynamic
+    command: ["sh", "-c", "/usr/local/bin/dinghy-layer"]
+  join_networks:
+    build:
+      context: .
+      dockerfile: build/Dockerfile
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command:
+      ["sh", "-c", "/usr/local/bin/join-networks -container-name http-proxy"]
+
+  dns:
+    build:
+      context: .
+      dockerfile: build/Dockerfile
+    ports:
+      - "19322:19322/udp"
+    command: ["sh", "-c", "/usr/local/bin/dns-server "]
+
+  traefik:
+    image: traefik:v3.4
+    container_name: http-proxy
+    command:
+      - "--api.insecure=true"
+      - "--log.level=INFO"
+      - "--accesslog=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedByDefault=true"
+      - "--providers.file.directory=/traefik/dynamic"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - traefik_dynamic:/traefik/dynamic
+
+volumes:
+  traefik_dynamic:

@@ -15,14 +15,14 @@ type Config struct {
 // Load loads configuration from environment variables with defaults
 func Load() *Config {
 	return &Config{
-		DomainTLD: getEnvOrDefault("DOMAIN_TLD", "loc"),
-		DNSIP:     getEnvOrDefault("DNS_IP", "127.0.0.1"),
-		DNSPort:   getEnvOrDefault("DNS_PORT", "19322"),
+		DomainTLD: GetEnvOrDefault("DOMAIN_TLD", "loc"),
+		DNSIP:     GetEnvOrDefault("DNS_IP", "127.0.0.1"),
+		DNSPort:   GetEnvOrDefault("DNS_PORT", "19322"),
 	}
 }
 
-// getEnvOrDefault returns the environment variable value or a default if not set
-func getEnvOrDefault(key, defaultValue string) string {
+// GetEnvOrDefault returns the environment variable value or a default if not set
+func GetEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
 	}
