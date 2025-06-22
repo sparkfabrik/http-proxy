@@ -7,7 +7,7 @@
 
 Perfect for local development environments, this proxy eliminates manual configuration by detecting containers with `VIRTUAL_HOST` environment variables and instantly making them accessible via custom domains.
 
-> **Note**: This is a refactored and enhanced version of the [codekitchen/dinghy-http-proxy](https://github.com/codekitchen/dinghy-http-proxy) project. Spark HTTP Proxy is an HTTP Proxy and DNS server originally designed for [Dinghy](https://github.com/codekitchen/dinghy) but enhanced for broader use cases and improved maintainability. The proxy is based on jwilder's excellent [nginx-proxy](https://github.com/jwilder/nginx-proxy) project, with modifications to make it more suitable for local development work.
+> **Note**: This is a refactored and enhanced version of the [codekitchen/dinghy-http-proxy](https://github.com/codekitchen/dinghy-http-proxy) project. Spark HTTP Proxy is an HTTP Proxy and DNS server originally designed for [Dinghy](https://github.com/codekitchen/dinghy) but enhanced for broader use cases and improved maintainability.
 
 ## Quick Start
 
@@ -144,6 +144,107 @@ This proxy is a **drop-in replacement** for nginx-proxy. Simply:
 
 No configuration changes needed! 🚀
 
+## Testing
+
+This project includes comprehensive integration tests that validate all HTTP proxy and DNS functionality using real Docker containers.
+
+### Running Tests Locally
+
+The easiest way to run all tests:
+
+```bash
+make test
+```
+
+Or directly run the test script:
+
+```bash
+# Run comprehensive integration tests
+./test/test.sh
+
+# Keep environment running for manual inspection
+KEEP_RUNNING=true ./test/test.sh
+
+# Run with debug output
+DEBUG=true ./test/test.sh
+```
+
+### What Gets Tested
+
+The integration test suite validates:
+
+**HTTP Proxy Functionality:**
+
+- ✅ Traefik label-based routing (`traefik.http.routers.*`)
+- ✅ VIRTUAL_HOST environment variable routing
+- ✅ VIRTUAL_PORT custom port handling
+- ✅ Multiple domain configurations
+- ✅ Container lifecycle events (start/stop/restart)
+
+**DNS Server Functionality:**
+
+- ✅ DNS resolution for `.spark.loc` domains
+- ✅ Custom TLD support (configurable via `DOMAIN_TLD`)
+- ✅ Real-time DNS updates when containers change
+
+**End-to-End Scenarios:**
+
+- ✅ Full stack startup and teardown
+- ✅ Multiple container configurations
+- ✅ HTTP accessibility via curl
+- ✅ DNS resolution via dig
+- ✅ Automatic cleanup and resource management
+
+### Test Architecture
+
+The test script (`test/test.sh`):
+
+1. **Environment Setup**: Starts the full HTTP proxy stack with `docker-compose`
+2. **Container Deployment**: Launches test containers with different routing configurations:
+   - Traefik labels with `app1.spark.loc`
+   - VIRTUAL_HOST with `app2.spark.loc`
+   - VIRTUAL_HOST + VIRTUAL_PORT with `app3.spark.loc:8080`
+3. **HTTP Testing**: Uses `curl` to verify each container is accessible via its domain
+4. **DNS Testing**: Uses `dig` to verify DNS server resolves domains correctly
+5. **Cleanup**: Automatically removes all test resources
+
+### Continuous Integration
+
+Tests run automatically in GitHub Actions on every push and pull request:
+
+- **Dependencies**: Installs `curl` and `dnsutils` for testing
+- **Build Validation**: Ensures Docker image builds successfully
+- **Integration Tests**: Runs the full test suite via `make test`
+- **Multi-Architecture**: Tests on `linux/amd64` and `linux/arm64`
+
+See the [CI workflow](.github/workflows/ci.yml) for complete configuration.
+
+### Manual Testing
+
+For quick manual verification:
+
+```bash
+# Start the stack
+docker-compose up -d
+
+# Test a simple container
+docker run -d --name test-app \
+  -e VIRTUAL_HOST=test.spark.loc \
+  nginx:alpine
+
+# Verify HTTP access
+curl -H "Host: test.spark.loc" http://localhost
+
+# Verify DNS resolution
+dig @127.0.0.1 -p 19322 test.spark.loc
+
+# Cleanup
+docker-compose down
+docker rm -f test-app
+```
+
+For detailed testing documentation and troubleshooting, see [TEST_README.md](TEST_README.md).
+
 ## Troubleshooting
 
 ### Container not accessible?
@@ -152,12 +253,14 @@ No configuration changes needed! 🚀
 2. **Check logs**: `docker logs http-proxy`
 3. **Verify DNS**: Can you `ping myapp.local`?
 4. **Test with curl**: `curl -H "Host: myapp.local" http://localhost`
+5. **Run integration tests**: `make test` to verify the entire stack
 
 ### Common Issues
 
 - **Port conflicts**: Make sure port 80 isn't used by another service
 - **Docker socket**: Ensure `/var/run/docker.sock` is mounted
 - **Network access**: Container must be on the same Docker network or default bridge
+- **DNS issues**: Check if port 19322/udp is available for the DNS server
 
 ### Debug Mode
 
@@ -167,8 +270,37 @@ Enable verbose logging:
 docker run -d \
   -e LOG_LEVEL=debug \
   -p 80:80 \
+  -p 19322:19322/udp \
   -v /var/run/docker.sock:/var/run/docker.sock \
   ghcr.io/sparkfabrik/http-proxy:latest
+```
+
+### Testing Individual Components
+
+Test HTTP proxy only:
+
+```bash
+# Start just the HTTP proxy
+docker-compose up http-proxy
+
+# Test with a simple container
+docker run -d --name test \
+  -e VIRTUAL_HOST=test.spark.loc \
+  nginx:alpine
+
+curl -H "Host: test.spark.loc" http://localhost
+```
+
+Test DNS server only:
+
+```bash
+# Start the full stack
+docker-compose up -d
+
+# Test DNS resolution
+dig @127.0.0.1 -p 19322 any-domain.spark.loc
+
+# Should return 127.0.0.1 for any .spark.loc domain
 ```
 
 ## License

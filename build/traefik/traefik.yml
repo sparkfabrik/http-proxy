@@ -1,0 +1,50 @@
+# Traefik configuration for local development
+# Equivalent to nginx settings for generous timeouts and body sizes
+
+# Global configuration
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+# API and dashboard
+api:
+  dashboard: true
+  insecure: true
+
+# Logging
+log:
+  level: INFO
+
+accessLog: {}
+
+# Entry points
+entryPoints:
+  web:
+    address: ":80"
+    # Transport configuration for generous timeouts
+    transport:
+      respondingTimeouts:
+        # Equivalent to proxy_read_timeout 86400s (24 hours)
+        readTimeout: "86400s"
+        # Equivalent to proxy_send_timeout 86400s (24 hours)
+        writeTimeout: "86400s"
+        # Idle timeout for keep-alive connections
+        idleTimeout: "300s"
+
+# Providers
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: true
+    watch: true
+
+  file:
+    # Watch the dynamic directory for changes from dinghy-layer
+    directory: "/traefik/dynamic"
+    watch: true
+
+# Servers transport configuration for backend connections
+serversTransport:
+  insecureSkipVerify: true
+  # For large uploads and long-running requests
+  maxIdleConnsPerHost: 200

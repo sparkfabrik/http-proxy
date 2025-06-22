@@ -1,5 +1,7 @@
 DOCKER_IMAGE_NAME ?= sparkfabrik/http-proxy:latest
 
+.PHONY: help docker-build docker-run docker-logs build test test-dns compose-up
+
 help: ## Show help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
@@ -23,6 +25,11 @@ docker-logs: ## Show logs of the Docker container
 build: ## Build the go apps
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o join-networks ./cmd/join-networks
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o dns-server ./cmd/dns-server
+
+test: ## Run integration tests
+	@echo "Running integration tests..."
+	@chmod +x test/test.sh
+	@./test/test.sh
 
 test-dns: ## Test DNS resolution (run in another terminal while dnsmasq is running)
 	@echo "Clear dns cache and restart mDNSResponder"

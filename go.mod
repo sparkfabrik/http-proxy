@@ -7,6 +7,7 @@ require (
 	github.com/docker/go-connections v0.5.0
 	github.com/miekg/dns v1.1.66
 	github.com/traefik/traefik/v3 v3.4.1
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -67,6 +68,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250519155744-55703ea1f237 // indirect
 	google.golang.org/grpc v1.72.1 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gotest.tools/v3 v3.5.0 // indirect
 )

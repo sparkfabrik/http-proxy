@@ -4,21 +4,19 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
-	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
 	"github.com/sparkfabrik/http-proxy/pkg/config"
 	"github.com/sparkfabrik/http-proxy/pkg/logger"
+	"github.com/sparkfabrik/http-proxy/pkg/service"
+	"github.com/sparkfabrik/http-proxy/pkg/utils"
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"gopkg.in/yaml.v3"
 )
@@ -32,78 +30,47 @@ const (
 
 	// ConfigDirPermissions defines the permissions for config directories
 	ConfigDirPermissions = 0755
-
-	// DefaultDockerTimeout is the default timeout for Docker operations
-	DefaultDockerTimeout = 30 * time.Second
 )
 
-// CompatibilityLayer encapsulates the compatibility layer functionality
+// CompatibilityLayer implements the service.EventHandler interface
 type CompatibilityLayer struct {
-	client *client.Client
-	logger *logger.Logger
-	config *CompatibilityConfig
-}
-
-// NewCompatibilityLayer creates a new CompatibilityLayer instance
-func NewCompatibilityLayer(ctx context.Context, cfg *CompatibilityConfig) (*CompatibilityLayer, error) {
-	// Initialize logger
-	log := logger.NewWithLevel("dinghy-compatibility", logger.LogLevel(cfg.LogLevel))
-
-	// Initialize Docker client
-	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Docker client: %w", err)
-	}
-
-	// Test Docker connection with timeout
-	pingCtx, cancel := context.WithTimeout(ctx, DefaultDockerTimeout)
-	defer cancel()
-
-	if _, err := dockerClient.Ping(pingCtx); err != nil {
-		dockerClient.Close()
-		return nil, fmt.Errorf("failed to connect to Docker daemon: %w", err)
-	}
-
-	log.Debug("Successfully connected to Docker daemon")
-
-	return &CompatibilityLayer{
-		client: dockerClient,
-		logger: log,
-		config: cfg,
-	}, nil
-}
-
-// Close cleanly shuts down the compatibility layer
-func (cl *CompatibilityLayer) Close() error {
-	return cl.client.Close()
+	dockerClient *client.Client
+	logger       *logger.Logger
+	config       *CompatibilityConfig
 }
 
 // CompatibilityConfig holds the configuration for the compatibility layer
 type CompatibilityConfig struct {
 	DryRun            bool
 	LogLevel          string
-	CheckInterval     time.Duration
 	TraefikDynamicDir string
 }
 
 // Validate checks if the configuration is valid
 func (c *CompatibilityConfig) Validate() error {
-	if c.CheckInterval <= 0 {
-		return fmt.Errorf("check interval must be positive, got %v", c.CheckInterval)
-	}
-
 	if c.TraefikDynamicDir == "" {
 		return fmt.Errorf("traefik dynamic directory cannot be empty")
 	}
 
-	validLogLevels := map[string]bool{
-		"debug": true, "info": true, "warn": true, "error": true,
-	}
-	if !validLogLevels[c.LogLevel] {
-		return fmt.Errorf("invalid log level %q, must be one of: debug, info, warn, error", c.LogLevel)
-	}
+	return utils.ValidateLogLevel(c.LogLevel)
+}
 
-	return nil
+// NewCompatibilityLayer creates a new CompatibilityLayer instance
+func NewCompatibilityLayer(cfg *CompatibilityConfig) *CompatibilityLayer {
+	return &CompatibilityLayer{
+		config: cfg,
+	}
+}
+
+// GetName returns the service name
+func (cl *CompatibilityLayer) GetName() string {
+	return "dinghy-compatibility"
+}
+
+// SetDependencies sets the Docker client and logger from the service framework
+func (cl *CompatibilityLayer) SetDependencies(dockerClient *client.Client, logger *logger.Logger) {
+	cl.dockerClient = dockerClient
+	cl.logger = logger
 }
 
 // TraefikLabels represents the labels to be applied to containers
@@ -129,126 +96,15 @@ func (cl *CompatibilityLayer) extractContainerInfo(inspect types.ContainerJSON) 
 	return ContainerInfo{
 		ID:          inspect.ID,
 		Name:        strings.TrimPrefix(inspect.Name, "/"),
-		VirtualHost: getEnvVar(inspect.Config.Env, "VIRTUAL_HOST"),
-		VirtualPort: getEnvVar(inspect.Config.Env, "VIRTUAL_PORT"),
+		VirtualHost: utils.GetDockerEnvVar(inspect.Config.Env, "VIRTUAL_HOST"),
+		VirtualPort: utils.GetDockerEnvVar(inspect.Config.Env, "VIRTUAL_PORT"),
 		IsRunning:   inspect.State.Running,
 	}
 }
 
-func main() {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Initialize configuration
-	cfg := &CompatibilityConfig{
-		DryRun:            config.GetEnvOrDefault("DRY_RUN", "false") == "true",
-		LogLevel:          config.GetEnvOrDefault("LOG_LEVEL", "info"),
-		CheckInterval:     parseDuration(config.GetEnvOrDefault("CHECK_INTERVAL", "30s")),
-		TraefikDynamicDir: config.GetEnvOrDefault("TRAEFIK_DYNAMIC_DIR", DefaultTraefikDynamicDir),
-	}
-
-	// Validate configuration
-	if err := cfg.Validate(); err != nil {
-		fmt.Fprintf(os.Stderr, "Invalid configuration: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Initialize compatibility layer
-	cl, err := NewCompatibilityLayer(ctx, cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize compatibility layer: %v\n", err)
-		os.Exit(1)
-	}
-	defer cl.Close()
-
-	cl.logger.Info("Starting Dinghy Compatibility Layer",
-		"dry_run", cfg.DryRun,
-		"log_level", cfg.LogLevel,
-		"check_interval", cfg.CheckInterval,
-		"traefik_dynamic_dir", cfg.TraefikDynamicDir)
-	if cfg.DryRun {
-		cl.logger.Warn("Running in dry-run mode - no actual changes will be made")
-	}
-
-	cl.logger.Info("Connected to Docker daemon")
-
-	// Setup signal handling
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	// Start the compatibility layer
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- cl.Run(ctx)
-	}()
-
-	// Wait for shutdown signal or error
-	select {
-	case <-sigChan:
-		cl.logger.Info("Received shutdown signal")
-		cancel()
-	case err := <-errChan:
-		if err != nil {
-			cl.logger.Error("Compatibility layer error", "error", err)
-			os.Exit(1)
-		}
-	}
-
-	cl.logger.Info("Shutting down gracefully")
-}
-
-// Run starts the compatibility layer event loop
-func (cl *CompatibilityLayer) Run(ctx context.Context) error {
-	// Initial scan of existing containers
-	cl.logger.Info("Performing initial scan of existing containers")
-	if err := cl.scanExistingContainers(ctx); err != nil {
-		cl.logger.Error("Initial scan failed", "error", err)
-		return err
-	}
-
-	// Listen for Docker events
-	eventsChan, errChan := cl.client.Events(ctx, events.ListOptions{
-		Filters: filters.NewArgs(
-			filters.Arg("type", "container"),
-			filters.Arg("event", "start"),
-			filters.Arg("event", "die"),
-		),
-	})
-
-	ticker := time.NewTicker(cl.config.CheckInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case event := <-eventsChan:
-			cl.processContainerSafely(ctx, event.Actor.ID, string(event.Action))
-		case err := <-errChan:
-			if err != nil {
-				cl.logger.Error("Docker events error", "error", err)
-				// Reconnect and continue
-				time.Sleep(5 * time.Second)
-				eventsChan, errChan = cl.client.Events(ctx, events.ListOptions{
-					Filters: filters.NewArgs(
-						filters.Arg("type", "container"),
-						filters.Arg("event", "start"),
-						filters.Arg("event", "die"),
-					),
-				})
-			}
-		case <-ticker.C:
-			// Periodic scan to catch any missed containers
-			cl.logger.Debug("Performing periodic container scan")
-			if err := cl.scanExistingContainers(ctx); err != nil {
-				cl.logger.Error("Periodic scan failed", "error", err)
-			}
-		}
-	}
-}
-
-func (cl *CompatibilityLayer) scanExistingContainers(ctx context.Context) error {
-	containers, err := cl.client.ContainerList(ctx, container.ListOptions{})
+// HandleInitialScan performs initial processing of existing containers
+func (cl *CompatibilityLayer) HandleInitialScan(ctx context.Context) error {
+	containers, err := cl.dockerClient.ContainerList(ctx, container.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to list containers: %w", err)
 	}
@@ -263,7 +119,7 @@ func (cl *CompatibilityLayer) scanExistingContainers(ctx context.Context) error 
 			if err := cl.processContainer(ctx, cont.ID); err != nil {
 				cl.logger.Error("Failed to process container",
 					"error", err,
-					"container_id", cl.shortContainerID(cont.ID),
+					"container_id", utils.FormatDockerID(cont.ID),
 					"container_name", cont.Names)
 				// Continue processing other containers instead of failing fast
 			}
@@ -273,8 +129,48 @@ func (cl *CompatibilityLayer) scanExistingContainers(ctx context.Context) error 
 	return nil
 }
 
+// HandleEvent processes a Docker event
+func (cl *CompatibilityLayer) HandleEvent(ctx context.Context, event events.Message) error {
+	switch event.Action {
+	case "start":
+		return cl.processContainer(ctx, event.Actor.ID)
+	case "die":
+		return cl.removeTraefikConfig(event.Actor.ID)
+	default:
+		// Unhandled events are not an error, just log and continue
+		cl.logger.Debug("Unhandled container action", "action", event.Action, "container_id", utils.FormatDockerID(event.Actor.ID))
+		return nil
+	}
+}
+
+func main() {
+	ctx := context.Background()
+
+	// Initialize configuration
+	cfg := &CompatibilityConfig{
+		DryRun:            config.GetEnvOrDefault("DRY_RUN", "false") == "true",
+		LogLevel:          config.GetEnvOrDefault("LOG_LEVEL", "info"),
+		TraefikDynamicDir: config.GetEnvOrDefault("TRAEFIK_DYNAMIC_DIR", DefaultTraefikDynamicDir),
+	}
+
+	// Validate configuration
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid configuration: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Create handler
+	handler := NewCompatibilityLayer(cfg)
+
+	// Run service with shared framework
+	if err := service.RunWithSignalHandling(ctx, handler.GetName(), cfg.LogLevel, handler); err != nil {
+		fmt.Fprintf(os.Stderr, "Service failed: %v\n", err)
+		os.Exit(1)
+	}
+}
+
 func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID string) error {
-	inspect, err := cl.client.ContainerInspect(ctx, containerID)
+	inspect, err := cl.dockerClient.ContainerInspect(ctx, containerID)
 	if err != nil {
 		return fmt.Errorf("failed to inspect container %s: %w", containerID, err)
 	}
@@ -285,7 +181,7 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 	// Skip if container is not running
 	if !containerInfo.IsRunning {
 		cl.logger.Debug("Skipping non-running container",
-			"container_id", cl.shortContainerID(containerID),
+			"container_id", utils.FormatDockerID(containerID),
 			"container_name", containerInfo.Name)
 		return nil
 	}
@@ -293,13 +189,13 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 	// Skip if no VIRTUAL_HOST found
 	if containerInfo.VirtualHost == "" {
 		cl.logger.Debug("Skipping container without VIRTUAL_HOST",
-			"container_id", cl.shortContainerID(containerID),
+			"container_id", utils.FormatDockerID(containerID),
 			"container_name", containerInfo.Name)
 		return nil
 	}
 
 	cl.logger.Info("Found container with VIRTUAL_HOST",
-		"container_id", cl.shortContainerID(containerID),
+		"container_id", utils.FormatDockerID(containerID),
 		"container_name", containerInfo.Name,
 		"virtual_host", containerInfo.VirtualHost,
 		"virtual_port", containerInfo.VirtualPort)
@@ -308,22 +204,12 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 	traefikConfig := cl.generateTraefikConfig(inspect, containerInfo.VirtualHost, containerInfo.VirtualPort)
 
 	cl.logger.Info("Generated Traefik configuration",
-		"container_id", cl.shortContainerID(containerID),
+		"container_id", utils.FormatDockerID(containerID),
 		"routers", len(traefikConfig.HTTP.Routers),
 		"services", len(traefikConfig.HTTP.Services))
 
 	// Write Traefik configuration to file
 	return cl.writeTraefikConfig(containerID, traefikConfig)
-}
-
-func getEnvVar(env []string, key string) string {
-	prefix := key + "="
-	for _, e := range env {
-		if strings.HasPrefix(e, prefix) {
-			return strings.TrimPrefix(e, prefix)
-		}
-	}
-	return ""
 }
 
 func (cl *CompatibilityLayer) generateTraefikConfig(inspect types.ContainerJSON, virtualHost, virtualPort string) *dynamic.Configuration {
@@ -343,7 +229,7 @@ func (cl *CompatibilityLayer) generateTraefikConfig(inspect types.ContainerJSON,
 	// Get container IP address
 	containerIP := getContainerIP(inspect)
 	if containerIP == "" {
-		cl.logger.Error("Could not determine container IP", "container_id", cl.shortContainerID(inspect.ID))
+		cl.logger.Error("Could not determine container IP", "container_id", utils.FormatDockerID(inspect.ID))
 		return config
 	}
 
@@ -417,7 +303,7 @@ func getEffectivePort(hosts []virtualHost, virtualPort string, inspect types.Con
 func (cl *CompatibilityLayer) writeTraefikConfig(containerID string, config *dynamic.Configuration) error {
 	if cl.config.DryRun {
 		cl.logger.Info("DRY RUN: Would write Traefik config",
-			"container_id", cl.shortContainerID(containerID),
+			"container_id", utils.FormatDockerID(containerID),
 			"config_file", cl.configFileName(containerID))
 		return nil
 	}
@@ -442,7 +328,7 @@ func (cl *CompatibilityLayer) writeTraefikConfig(containerID string, config *dyn
 	}
 
 	cl.logger.Info("Wrote Traefik configuration",
-		"container_id", cl.shortContainerID(containerID),
+		"container_id", utils.FormatDockerID(containerID),
 		"config_file", configFile)
 
 	return nil
@@ -451,7 +337,7 @@ func (cl *CompatibilityLayer) writeTraefikConfig(containerID string, config *dyn
 func (cl *CompatibilityLayer) removeTraefikConfig(containerID string) error {
 	if cl.config.DryRun {
 		cl.logger.Info("DRY RUN: Would remove Traefik config",
-			"container_id", cl.shortContainerID(containerID),
+			"container_id", utils.FormatDockerID(containerID),
 			"config_file", cl.configFileName(containerID))
 		return nil
 	}
@@ -470,7 +356,7 @@ func (cl *CompatibilityLayer) removeTraefikConfig(containerID string) error {
 	}
 
 	cl.logger.Info("Removed Traefik configuration",
-		"container_id", cl.shortContainerID(containerID),
+		"container_id", utils.FormatDockerID(containerID),
 		"config_file", configFile)
 
 	return nil
@@ -573,53 +459,7 @@ func getDefaultPort(inspect types.ContainerJSON) string {
 	return "80"
 }
 
-func parseDuration(s string) time.Duration {
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return DefaultDockerTimeout
-	}
-	return d
-}
-
-// shortContainerID returns a shortened version of a container ID for logging
-func (cl *CompatibilityLayer) shortContainerID(containerID string) string {
-	if len(containerID) >= 12 {
-		return containerID[:12]
-	}
-	return containerID
-}
-
 // configFileName returns the config file name for a container
 func (cl *CompatibilityLayer) configFileName(containerID string) string {
-	return fmt.Sprintf("%s.yaml", cl.shortContainerID(containerID))
-}
-
-// processContainerSafely wraps container processing with proper error handling and logging
-func (cl *CompatibilityLayer) processContainerSafely(ctx context.Context, containerID string, action string) {
-	// Respect context cancellation
-	select {
-	case <-ctx.Done():
-		cl.logger.Debug("Context cancelled, skipping container processing",
-			"container_id", cl.shortContainerID(containerID))
-		return
-	default:
-	}
-
-	var err error
-	switch action {
-	case "start":
-		err = cl.processContainer(ctx, containerID)
-	case "die":
-		err = cl.removeTraefikConfig(containerID)
-	default:
-		cl.logger.Debug("Unhandled container action", "action", action, "container_id", cl.shortContainerID(containerID))
-		return
-	}
-
-	if err != nil {
-		cl.logger.Error("Failed to process container",
-			"error", err,
-			"action", action,
-			"container_id", cl.shortContainerID(containerID))
-	}
+	return fmt.Sprintf("%s.yaml", utils.FormatDockerID(containerID))
 }
