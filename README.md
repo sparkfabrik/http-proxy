@@ -55,258 +55,156 @@ services:
 - **Wildcards**: `VIRTUAL_HOST=*.myapp.local`
 - **Regex patterns**: `VIRTUAL_HOST=~^api\\..*\\.local$`
 
-## Complete Setup with Docker Compose
+## Advanced Configuration with Traefik Labels
+
+While `VIRTUAL_HOST` environment variables provide simple automatic routing, you can also use **Traefik labels** for more advanced configuration. Both methods work together seamlessly.
+
+### Basic Traefik Labels Example
 
 ```yaml
-version: '3.8'
-
 services:
-  # HTTP Proxy
-  http-proxy:
-    image: ghcr.io/sparkfabrik/http-proxy:latest
-    ports:
-      - "80:80"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    restart: unless-stopped
-
-  # Your applications
-  web:
+  myapp:
     image: nginx:alpine
-    environment:
-      - VIRTUAL_HOST=web.local
-
-  api:
-    image: node:alpine
-    environment:
-      - VIRTUAL_HOST=api.local
-      - VIRTUAL_PORT=3000
-    expose:
-      - "3000"
+    labels:
+      # Define the routing rule - which domain/path routes to this service
+      - "traefik.http.routers.myapp.rule=Host(`myapp.docker`)"
+      
+      # Specify which entrypoint to use (web = port 80)
+      - "traefik.http.routers.myapp.entrypoints=web"
+      
+      # Set the target port for load balancing
+      - "traefik.http.services.myapp.loadbalancer.server.port=80"
 ```
 
-Start everything: `docker-compose up -d`
+> **Note**: `traefik.enable=true` is **not required** since auto-discovery is always enabled in this proxy.
 
-Access your apps:
+### Traefik Labels Breakdown
 
-- `http://web.local` → nginx container
-- `http://api.local` → node container
+| Label | Purpose | Example |
+|-------|---------|---------|
+| **Router Rule** | Defines which requests route to this service | `traefik.http.routers.myapp.rule=Host(\`myapp.docker\`)` |
+| **Entrypoints** | Which proxy port to listen on | `traefik.http.routers.myapp.entrypoints=web` |
+| **Service Port** | Target port on the container | `traefik.http.services.myapp.loadbalancer.server.port=8080` |
 
-## How It Works
+### Understanding Traefik Core Concepts
 
-The proxy uses a **dinghy compatibility layer** that:
+To effectively use Traefik labels, it helps to understand the key concepts:
 
-1. **Monitors Docker Events** - Detects when containers start/stop
-2. **Scans Environment Variables** - Looks for `VIRTUAL_HOST` in container config
-3. **Generates Traefik Config** - Creates routing rules automatically
-4. **Updates Routes Instantly** - Your apps become accessible immediately
+#### **Entrypoints** - The "Front Door"
+An **entrypoint** is where Traefik listens for incoming traffic. Think of it as the "front door" of your proxy.
 
-### Reliability Features
-
-- **Real-time Events**: Instant response when containers change
-- **Periodic Scanning**: Safety net that catches missed containers (every 30s)
-- **Auto-recovery**: Reconnects to Docker if connection is lost
-- **Graceful Cleanup**: Removes routes when containers stop
-
-## Configuration
-
-Set these environment variables on the proxy container:
-
-```bash
-# Optional configuration
-CHECK_INTERVAL=30s      # How often to scan for missed containers
-LOG_LEVEL=info          # debug, info, warn, error
-DRY_RUN=false          # Test mode - doesn't make actual changes
+```yaml
+# In our Traefik configuration:
+entrypoints:
+  web:              # ← This is just a custom name! You can call it anything
+    address: ":80"    # Listen on port 80 for HTTP traffic
+  websecure:        # ← Another custom name
+    address: ":443"   # Listen on port 443 for HTTPS traffic (if configured)
+  api:              # ← You could even call it "api" or "http" or "frontend"
+    address: ":8080"  # Listen on port 8080
 ```
 
-## DNS Setup (Optional)
+**Important**: `web` is just a **custom name** that we chose. You could name your entrypoints anything:
+- `http`, `https`, `frontend`, `api`, `public` - whatever makes sense to you!
 
-For `.local` domains to work automatically, add this DNS server:
+When you specify `traefik.http.routers.myapp.entrypoints=web`, you're telling Traefik:
+> *"Route requests that come through the entrypoint named 'web' (which happens to be port 80) to my application"*
 
-```bash
-# Add DNS server to the proxy
-docker run -d --name http-proxy \
-  -p 80:80 \
-  -p 53:53/udp \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/sparkfabrik/http-proxy:latest
+The entrypoint name must match between:
+1. **Traefik configuration** (where you define `web: address: ":80"`)
+2. **Container labels** (where you reference `entrypoints=web`)
+
+#### **Load Balancer** - The "Traffic Director"
+The **load balancer** determines how traffic gets distributed to your actual application containers.
+
+```yaml
+# This label creates a load balancer configuration:
+- "traefik.http.services.myapp.loadbalancer.server.port=8080"
 ```
 
-Then configure your system to use `127.0.0.1` as DNS server for `.local` domains.
+This tells Traefik:
+> *"When routing to this service, send traffic to port 8080 on the container"*
 
-## Migration from nginx-proxy
+#### **The Complete Flow**
 
-This proxy is a **drop-in replacement** for nginx-proxy. Simply:
+Here's how a request flows through Traefik:
 
-1. Stop your nginx-proxy container
-2. Start this proxy with the same port mappings
-3. Your existing containers with `VIRTUAL_HOST` will work immediately
-
-No configuration changes needed! 🚀
-
-## Testing
-
-This project includes comprehensive integration tests that validate all HTTP proxy and DNS functionality using real Docker containers.
-
-### Running Tests Locally
-
-The easiest way to run all tests:
-
-```bash
-make test
+```
+1. [Browser] → http://myapp.docker
+                    ↓
+2. [Entrypoint :80] ← "web" entrypoint receives the request
+                    ↓
+3. [Router] ← Checks rule: Host(`myapp.docker`) ✓ Match!
+                    ↓
+4. [Service] ← Routes to the configured service
+                    ↓
+5. [Load Balancer] ← Forwards to container port 8080
+                    ↓
+6. [Container] ← Your app receives the request
 ```
 
-Or directly run the test script:
+#### **Advanced Load Balancer Features**
 
-```bash
-# Run comprehensive integration tests
-./test/test.sh
+While we typically use simple port mapping, Traefik's load balancer supports much more:
 
-# Keep environment running for manual inspection
-KEEP_RUNNING=true ./test/test.sh
+```yaml
+services:
+  # Multiple container instances (automatic load balancing)
+  web-app:
+    image: nginx:alpine
+    deploy:
+      replicas: 3  # 3 instances of the same app
+    labels:
+      - "traefik.http.routers.webapp.rule=Host(`webapp.docker`)"
+      - "traefik.http.routers.webapp.entrypoints=web"
+      # Traefik automatically balances between all 3 instances!
 
-# Run with debug output
-DEBUG=true ./test/test.sh
+  # Health check configuration
+  api-service:
+    image: myapi:latest
+    labels:
+      - "traefik.http.routers.api.rule=Host(`api.docker`)"
+      - "traefik.http.routers.api.entrypoints=web"
+      - "traefik.http.services.api.loadbalancer.server.port=3000"
+      # Configure health checks
+      - "traefik.http.services.api.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.api.loadbalancer.healthcheck.interval=30s"
 ```
 
-### What Gets Tested
+#### **Why This Architecture Matters**
 
-The integration test suite validates:
+This separation of concerns provides powerful flexibility:
 
-**HTTP Proxy Functionality:**
+- **Entrypoints**: Control *where* Traefik listens (ports, protocols)
+- **Routers**: Control *which* requests go *where* (domains, paths, headers)
+- **Services**: Control *how* traffic reaches your apps (ports, health checks, load balancing)
 
-- ✅ Traefik label-based routing (`traefik.http.routers.*`)
-- ✅ VIRTUAL_HOST environment variable routing
-- ✅ VIRTUAL_PORT custom port handling
-- ✅ Multiple domain configurations
-- ✅ Container lifecycle events (start/stop/restart)
+Example of advanced routing:
 
-**DNS Server Functionality:**
+```yaml
+services:
+  # Same app, different routing based on subdomain
+  app-v1:
+    image: myapp:v1
+    labels:
+      - "traefik.http.routers.app-v1.rule=Host(`v1.myapp.docker`)"
+      - "traefik.http.routers.app-v1.entrypoints=web"
+      - "traefik.http.services.app-v1.loadbalancer.server.port=8080"
 
-- ✅ DNS resolution for `.spark.loc` domains
-- ✅ Custom TLD support (configurable via `DOMAIN_TLD`)
-- ✅ Real-time DNS updates when containers change
+  app-v2:
+    image: myapp:v2  
+    labels:
+      - "traefik.http.routers.app-v2.rule=Host(`v2.myapp.docker`)"
+      - "traefik.http.routers.app-v2.entrypoints=web"
+      - "traefik.http.services.app-v2.loadbalancer.server.port=8080"
 
-**End-to-End Scenarios:**
-
-- ✅ Full stack startup and teardown
-- ✅ Multiple container configurations
-- ✅ HTTP accessibility via curl
-- ✅ DNS resolution via dig
-- ✅ Automatic cleanup and resource management
-
-### Test Architecture
-
-The test script (`test/test.sh`):
-
-1. **Environment Setup**: Starts the full HTTP proxy stack with `docker-compose`
-2. **Container Deployment**: Launches test containers with different routing configurations:
-   - Traefik labels with `app1.spark.loc`
-   - VIRTUAL_HOST with `app2.spark.loc`
-   - VIRTUAL_HOST + VIRTUAL_PORT with `app3.spark.loc:8080`
-3. **HTTP Testing**: Uses `curl` to verify each container is accessible via its domain
-4. **DNS Testing**: Uses `dig` to verify DNS server resolves domains correctly
-5. **Cleanup**: Automatically removes all test resources
-
-### Continuous Integration
-
-Tests run automatically in GitHub Actions on every push and pull request:
-
-- **Dependencies**: Installs `curl` and `dnsutils` for testing
-- **Build Validation**: Ensures Docker image builds successfully
-- **Integration Tests**: Runs the full test suite via `make test`
-- **Multi-Architecture**: Tests on `linux/amd64` and `linux/arm64`
-
-See the [CI workflow](.github/workflows/ci.yml) for complete configuration.
-
-### Manual Testing
-
-For quick manual verification:
-
-```bash
-# Start the stack
-docker-compose up -d
-
-# Test a simple container
-docker run -d --name test-app \
-  -e VIRTUAL_HOST=test.spark.loc \
-  nginx:alpine
-
-# Verify HTTP access
-curl -H "Host: test.spark.loc" http://localhost
-
-# Verify DNS resolution
-dig @127.0.0.1 -p 19322 test.spark.loc
-
-# Cleanup
-docker-compose down
-docker rm -f test-app
+  # Route 90% traffic to v1, 10% to v2 (canary deployment)
+  app-main:
+    image: myapp:v1
+    labels:
+      - "traefik.http.routers.app-main.rule=Host(`myapp.docker`)"
+      - "traefik.http.routers.app-main.entrypoints=web"
+      - "traefik.http.services.app-main.loadbalancer.server.port=8080"
+      # Weight-based routing (advanced feature)
+      - "traefik.http.services.app-main.loadbalancer.server.weight=90"
 ```
-
-For detailed testing documentation and troubleshooting, see [TEST_README.md](TEST_README.md).
-
-## Troubleshooting
-
-### Container not accessible?
-
-1. **Check environment variables**: `docker inspect <container>` and look for `VIRTUAL_HOST`
-2. **Check logs**: `docker logs http-proxy`
-3. **Verify DNS**: Can you `ping myapp.local`?
-4. **Test with curl**: `curl -H "Host: myapp.local" http://localhost`
-5. **Run integration tests**: `make test` to verify the entire stack
-
-### Common Issues
-
-- **Port conflicts**: Make sure port 80 isn't used by another service
-- **Docker socket**: Ensure `/var/run/docker.sock` is mounted
-- **Network access**: Container must be on the same Docker network or default bridge
-- **DNS issues**: Check if port 19322/udp is available for the DNS server
-
-### Debug Mode
-
-Enable verbose logging:
-
-```bash
-docker run -d \
-  -e LOG_LEVEL=debug \
-  -p 80:80 \
-  -p 19322:19322/udp \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/sparkfabrik/http-proxy:latest
-```
-
-### Testing Individual Components
-
-Test HTTP proxy only:
-
-```bash
-# Start just the HTTP proxy
-docker-compose up http-proxy
-
-# Test with a simple container
-docker run -d --name test \
-  -e VIRTUAL_HOST=test.spark.loc \
-  nginx:alpine
-
-curl -H "Host: test.spark.loc" http://localhost
-```
-
-Test DNS server only:
-
-```bash
-# Start the full stack
-docker-compose up -d
-
-# Test DNS resolution
-dig @127.0.0.1 -p 19322 any-domain.spark.loc
-
-# Should return 127.0.0.1 for any .spark.loc domain
-```
-
-## License
-
-MIT License - see [LICENSE](LICENSE) file for details.
-
----
-
-**Need help?** [Open an issue](https://github.com/sparkfabrik/http-proxy/issues) or check the [discussions](https://github.com/sparkfabrik/http-proxy/discussions).

@@ -1,0 +1,57 @@
+# Example Applications for HTTP Proxy Stack
+# This file demonstrates different ways to configure applications to work with the http-proxy
+#
+# Prerequisites:
+#   1. Start the http-proxy stack first:
+#      docker compose up -d
+#   2. Then start these examples:
+#      docker compose -f compose.examples.yml up -d
+#
+# Access examples:
+#   - http://whoami-traefik.docker
+#   - http://whoami-virtual.docker  
+#   - http://whoami-custom.docker
+#   - http://whoami-multi1.docker and http://whoami-multi2.docker
+#   - http://nginx.docker and http://www.nginx.docker
+
+services:
+  # Example 1: Using Traefik labels (recommended)
+  whoami-traefik:
+    image: traefik/whoami:latest
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whoami-traefik.rule=Host(`whoami-traefik.docker`)"
+      - "traefik.http.routers.whoami-traefik.entrypoints=web"
+      - "traefik.http.services.whoami-traefik.loadbalancer.server.port=80"
+
+  # Example 2: Using VIRTUAL_HOST (dinghy/dinghy-http-proxy compatible)
+  whoami-virtual:
+    image: traefik/whoami:latest
+    environment:
+      - VIRTUAL_HOST=whoami-virtual.docker
+
+  # Example 3: Using VIRTUAL_HOST with custom port
+  whoami-custom-port:
+    image: traefik/whoami:latest
+    environment:
+      - VIRTUAL_HOST=whoami-custom.docker
+      - VIRTUAL_PORT=80
+
+  # Example 4: Multi-domain VIRTUAL_HOST
+  whoami-multi:
+    image: traefik/whoami:latest
+    environment:
+      - VIRTUAL_HOST=whoami-multi1.docker,whoami-multi2.docker
+
+  # Example 5: Web application with multiple domains
+  nginx-example:
+    image: nginx:alpine
+    environment:
+      - VIRTUAL_HOST=nginx.docker,www.nginx.docker
+    volumes:
+      - ./html:/usr/share/nginx/html:ro
+
+networks:
+  default:
+    name: http-proxy_default
+    external: true

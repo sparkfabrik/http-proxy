@@ -1,0 +1,63 @@
+# HTTP Proxy Stack - Production Ready Configuration
+# This demonstrates how to use the published images from GitHub Container Registry
+# 
+# Usage:
+#   docker compose up -d
+#
+# Access:
+#   - Traefik Dashboard: http://localhost:8080
+#   - DNS Server: UDP port 19322
+#   - HTTP Proxy: Port 80
+
+services:
+  # Watches Docker events and generates Traefik configuration for VIRTUAL_HOST
+  dinghy_layer:
+    image: ghcr.io/sparkfabrik/http-proxy:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - traefik_dynamic:/traefik/dynamic
+    command: ["sh", "-c", "/usr/local/bin/dinghy-layer"]
+    labels:
+      - "traefik.enable=false"
+    restart: unless-stopped
+
+  # Automatically joins containers to the http-proxy network
+  join_networks:
+    image: ghcr.io/sparkfabrik/http-proxy:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: ["sh", "-c", "/usr/local/bin/join-networks -container-name http-proxy"]
+    labels:
+      - "traefik.enable=false"
+    restart: unless-stopped
+
+  # DNS server for .docker domain resolution
+  dns:
+    image: ghcr.io/sparkfabrik/http-proxy:latest
+    ports:
+      - "19322:19322/udp"
+    command: ["sh", "-c", "/usr/local/bin/dns-server"]
+    labels:
+      - "traefik.enable=false"
+    restart: unless-stopped
+
+  # Main HTTP reverse proxy
+  traefik:
+    image: ghcr.io/sparkfabrik/http-proxy-traefik:latest
+    container_name: http-proxy
+    ports:
+      - "80:80"      # HTTP entrypoint
+      - "8080:8080"  # Traefik dashboard
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - traefik_dynamic:/traefik/dynamic
+    labels:
+      - "traefik.enable=false"
+    restart: unless-stopped
+
+volumes:
+  traefik_dynamic:
+
+networks:
+  default:
+    name: http-proxy_default
