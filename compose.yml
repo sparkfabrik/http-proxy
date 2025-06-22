@@ -7,7 +7,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - traefik_dynamic:/traefik/dynamic
     command: ["sh", "-c", "/usr/local/bin/dinghy-layer"]
-    
+
   join_networks:
     build:
       context: .
@@ -23,7 +23,7 @@ services:
       dockerfile: build/Dockerfile
     ports:
       - "19322:19322/udp"
-    command: ["sh", "-c", "/usr/local/bin/dns-server "]
+    command: ["sh", "-c", "/usr/local/bin/dns-server"]
 
   traefik:
     build:
