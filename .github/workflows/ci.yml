@@ -57,8 +57,8 @@ jobs:
 
       - name: Validate compose configuration
         run: |
-          docker-compose config
-          docker-compose build --dry-run || echo "Dry run not supported, skipping"
+          docker compose config
+          docker compose build --dry-run || echo "Dry run not supported, skipping"
 
       - name: Upload test logs on failure
         if: failure()
@@ -67,7 +67,6 @@ jobs:
           name: test-logs-${{ github.run_id }}
           path: |
             test-logs/
-            docker-compose logs
           retention-days: 7
 
   security-scan:
