@@ -17,7 +17,6 @@ import (
 	"github.com/sparkfabrik/http-proxy/pkg/logger"
 	"github.com/sparkfabrik/http-proxy/pkg/service"
 	"github.com/sparkfabrik/http-proxy/pkg/utils"
-	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"gopkg.in/yaml.v3"
 )
 
@@ -212,13 +211,8 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 	return cl.writeTraefikConfig(containerID, traefikConfig)
 }
 
-func (cl *CompatibilityLayer) generateTraefikConfig(inspect types.ContainerJSON, virtualHost, virtualPort string) *dynamic.Configuration {
-	config := &dynamic.Configuration{
-		HTTP: &dynamic.HTTPConfiguration{
-			Routers:  make(map[string]*dynamic.Router),
-			Services: make(map[string]*dynamic.Service),
-		},
-	}
+func (cl *CompatibilityLayer) generateTraefikConfig(inspect types.ContainerJSON, virtualHost, virtualPort string) *config.TraefikConfig {
+	traefikConfig := config.NewTraefikConfig()
 
 	// Generate service name from container name
 	serviceName := generateServiceName(inspect.Name)
@@ -230,7 +224,7 @@ func (cl *CompatibilityLayer) generateTraefikConfig(inspect types.ContainerJSON,
 	containerIP := getContainerIP(inspect)
 	if containerIP == "" {
 		cl.logger.Error("Could not determine container IP", "container_id", utils.FormatDockerID(inspect.ID))
-		return config
+		return traefikConfig
 	}
 
 	for i, host := range hosts {
@@ -246,7 +240,7 @@ func (cl *CompatibilityLayer) generateTraefikConfig(inspect types.ContainerJSON,
 			rule = fmt.Sprintf("Host(`%s`)", host.hostname)
 		}
 
-		config.HTTP.Routers[routerName] = &dynamic.Router{
+		traefikConfig.HTTP.Routers[routerName] = &config.Router{
 			Rule:        rule,
 			Service:     serviceName,
 			EntryPoints: []string{"web"},
@@ -257,18 +251,17 @@ func (cl *CompatibilityLayer) generateTraefikConfig(inspect types.ContainerJSON,
 	port := getEffectivePort(hosts, virtualPort, inspect)
 	serverURL := fmt.Sprintf("http://%s:%s", containerIP, port)
 
-	loadBalancer := &dynamic.ServersLoadBalancer{
-		Servers: []dynamic.Server{
+	loadBalancer := &config.LoadBalancer{
+		Servers: []config.Server{
 			{URL: serverURL},
 		},
 	}
-	loadBalancer.SetDefaults()
 
-	config.HTTP.Services[serviceName] = &dynamic.Service{
+	traefikConfig.HTTP.Services[serviceName] = &config.Service{
 		LoadBalancer: loadBalancer,
 	}
 
-	return config
+	return traefikConfig
 }
 
 func getContainerIP(inspect types.ContainerJSON) string {
@@ -300,7 +293,7 @@ func getEffectivePort(hosts []virtualHost, virtualPort string, inspect types.Con
 	return getDefaultPort(inspect)
 }
 
-func (cl *CompatibilityLayer) writeTraefikConfig(containerID string, config *dynamic.Configuration) error {
+func (cl *CompatibilityLayer) writeTraefikConfig(containerID string, cfg *config.TraefikConfig) error {
 	if cl.config.DryRun {
 		cl.logger.Info("DRY RUN: Would write Traefik config",
 			"container_id", utils.FormatDockerID(containerID),
@@ -317,7 +310,7 @@ func (cl *CompatibilityLayer) writeTraefikConfig(containerID string, config *dyn
 	configFile := filepath.Join(cl.config.TraefikDynamicDir, cl.configFileName(containerID))
 
 	// Marshal config to YAML
-	configData, err := yaml.Marshal(config)
+	configData, err := yaml.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal Traefik config: %w", err)
 	}
