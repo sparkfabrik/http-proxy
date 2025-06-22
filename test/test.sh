@@ -37,11 +37,14 @@ HTTP_PORT="80"
 TRAEFIK_CONTAINER="test-traefik-app"
 VIRTUAL_HOST_CONTAINER="test-virtual-host-app"
 VIRTUAL_HOST_PORT_CONTAINER="test-virtual-host-port-app"
+MULTI_VIRTUAL_HOST_CONTAINER="test-multi-virtual-host-app"
 
 # Hostname configurations for DNS testing
 TRAEFIK_HOSTNAME="app1.${TEST_DOMAIN}"
 VIRTUAL_HOST_HOSTNAME="app2.${TEST_DOMAIN}"
 VIRTUAL_HOST_PORT_HOSTNAME="app3.${TEST_DOMAIN}"
+MULTI_VIRTUAL_HOST_HOSTNAME1="app4.${TEST_DOMAIN}"
+MULTI_VIRTUAL_HOST_HOSTNAME2="app5.${TEST_DOMAIN}"
 
 # Wait function
 wait_for_container() {
@@ -130,7 +133,7 @@ test_all_dns() {
     local dns_tests_total=0
 
     # Test each hostname
-    for hostname in "$TRAEFIK_HOSTNAME" "$VIRTUAL_HOST_HOSTNAME" "$VIRTUAL_HOST_PORT_HOSTNAME"; do
+    for hostname in "$TRAEFIK_HOSTNAME" "$VIRTUAL_HOST_HOSTNAME" "$VIRTUAL_HOST_PORT_HOSTNAME" "$MULTI_VIRTUAL_HOST_HOSTNAME1" "$MULTI_VIRTUAL_HOST_HOSTNAME2"; do
         dns_tests_total=$((dns_tests_total + 1))
         if test_dns "$hostname"; then
             dns_tests_passed=$((dns_tests_passed + 1))
@@ -170,6 +173,7 @@ cleanup() {
     docker rm -f "$TRAEFIK_CONTAINER" 2>/dev/null || true
     docker rm -f "$VIRTUAL_HOST_CONTAINER" 2>/dev/null || true
     docker rm -f "$VIRTUAL_HOST_PORT_CONTAINER" 2>/dev/null || true
+    docker rm -f "$MULTI_VIRTUAL_HOST_CONTAINER" 2>/dev/null || true
 
     success "Cleanup completed"
 }
@@ -188,6 +192,7 @@ full_cleanup_and_rebuild() {
     docker rm -f "$TRAEFIK_CONTAINER" 2>/dev/null || true
     docker rm -f "$VIRTUAL_HOST_CONTAINER" 2>/dev/null || true
     docker rm -f "$VIRTUAL_HOST_PORT_CONTAINER" 2>/dev/null || true
+    docker rm -f "$MULTI_VIRTUAL_HOST_CONTAINER" 2>/dev/null || true
 
     # Remove any dangling images from previous builds (optional, but ensures clean state)
     log "Cleaning up dangling images..."
@@ -252,10 +257,19 @@ main() {
         --env "VIRTUAL_PORT=80" \
         nginx:alpine
 
+    # Container 4: Multiple comma-separated VIRTUAL_HOST values
+    log "Creating container with multiple VIRTUAL_HOST values: ${MULTI_VIRTUAL_HOST_CONTAINER}"
+    docker run -d \
+        --name "$MULTI_VIRTUAL_HOST_CONTAINER" \
+        --env "VIRTUAL_HOST=app4.${TEST_DOMAIN},app5.${TEST_DOMAIN}" \
+        --env "VIRTUAL_PORT=80" \
+        nginx:alpine
+
     # Wait for containers to be ready
     wait_for_container "$TRAEFIK_CONTAINER"
     wait_for_container "$VIRTUAL_HOST_CONTAINER"
     wait_for_container "$VIRTUAL_HOST_PORT_CONTAINER"
+    wait_for_container "$MULTI_VIRTUAL_HOST_CONTAINER"
 
     # Give some time for the proxy to detect and configure routes
     log "Waiting for proxy configuration to propagate..."
@@ -266,7 +280,7 @@ main() {
     log "======================================="
 
     local test_passed=0
-    local test_total=3
+    local test_total=5
 
     # Test Traefik labeled container
     if test_http_access "app1.${TEST_DOMAIN}"; then
@@ -283,11 +297,21 @@ main() {
         test_passed=$((test_passed + 1))
     fi
 
+    # Test multi-VIRTUAL_HOST container (first hostname)
+    if test_http_access "app4.${TEST_DOMAIN}"; then
+        test_passed=$((test_passed + 1))
+    fi
+
+    # Test multi-VIRTUAL_HOST container (second hostname)
+    if test_http_access "app5.${TEST_DOMAIN}"; then
+        test_passed=$((test_passed + 1))
+    fi
+
     # Show detailed curl responses for debugging
     log "Detailed HTTP responses:"
     log "========================"
 
-    for app in app1 app2 app3; do
+    for app in app1 app2 app3 app4 app5; do
         log "Testing ${app}.${TEST_DOMAIN}:"
         if curl -f -s -H "Host: ${app}.${TEST_DOMAIN}" http://localhost:${HTTP_PORT} | head -5; then
             success "Response received from ${app}.${TEST_DOMAIN}"
@@ -353,6 +377,7 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "   - Traefik labels"
     echo "   - VIRTUAL_HOST environment variable"
     echo "   - VIRTUAL_HOST + VIRTUAL_PORT environment variables"
+    echo "   - Multiple comma-separated VIRTUAL_HOST values"
     echo "4. Testing HTTP access to all containers using curl"
     echo "5. Testing DNS resolution for all domains"
     echo ""
