@@ -55,6 +55,166 @@ services:
 - **Wildcards**: `VIRTUAL_HOST=*.myapp.local`
 - **Regex patterns**: `VIRTUAL_HOST=~^api\\..*\\.local$`
 
+## CORS Support
+
+The proxy supports Cross-Origin Resource Sharing (CORS) through environment variables:
+
+```yaml
+services:
+  myapi:
+    image: myapi:latest
+    environment:
+      - VIRTUAL_HOST=api.local
+      - CORS_ENABLED=true  # Enables CORS for all origins
+```
+
+When `CORS_ENABLED=true` is set, the following CORS headers are automatically added:
+
+- `Access-Control-Allow-Origin: *`
+- `Access-Control-Allow-Methods: GET, OPTIONS, PUT, POST, DELETE, PATCH`
+- `Access-Control-Allow-Headers: *`
+- `Access-Control-Allow-Credentials: true`
+- `Access-Control-Max-Age: 86400`
+
+### Using Traefik Labels for CORS
+
+For more granular control, you can also enable CORS using Traefik labels instead of the `CORS_ENABLED` environment variable:
+
+```yaml
+services:
+  myapi:
+    image: myapi:latest
+    environment:
+      - VIRTUAL_HOST=api.local  # Creates HTTP and HTTPS routes
+    labels:
+      # Define CORS middleware
+      - "traefik.http.middlewares.api-cors.headers.accesscontrolalloworiginlist=*"
+      - "traefik.http.middlewares.api-cors.headers.accesscontrolallowmethods=GET,OPTIONS,PUT,POST,DELETE,PATCH"
+      - "traefik.http.middlewares.api-cors.headers.accesscontrolallowheaders=*"
+      - "traefik.http.middlewares.api-cors.headers.accesscontrolallowcredentials=true"
+      - "traefik.http.middlewares.api-cors.headers.accesscontrolmaxage=86400"
+
+      # Apply CORS middleware to both HTTP and HTTPS routes
+      - "traefik.http.routers.api-http.middlewares=api-cors"
+      - "traefik.http.routers.api-https.middlewares=api-cors"
+      - "traefik.http.routers.api-http.rule=Host(`api.local`)"
+      - "traefik.http.routers.api-https.rule=Host(`api.local`)"
+      - "traefik.http.routers.api-http.entrypoints=http"
+      - "traefik.http.routers.api-https.entrypoints=https"
+      - "traefik.http.routers.api-https.tls=true"
+      - "traefik.http.services.api.loadbalancer.server.port=80"
+```
+
+This approach gives you full control over CORS configuration and allows for domain-specific settings.
+
+## HTTPS Support
+
+The proxy automatically exposes both HTTP and HTTPS for all applications configured with `VIRTUAL_HOST`. Both protocols are available without any additional configuration.
+
+### Automatic HTTP and HTTPS Routes
+
+When you set `VIRTUAL_HOST=myapp.local`, you automatically get:
+- **HTTP**: `http://myapp.local` (port 80)
+- **HTTPS**: `https://myapp.local` (port 443)
+
+```yaml
+services:
+  myapp:
+    image: nginx:alpine
+    environment:
+      - VIRTUAL_HOST=myapp.local  # Creates both HTTP and HTTPS routes automatically
+```
+
+### Self-Signed Certificates
+
+Traefik automatically generates self-signed certificates for HTTPS routes. For trusted certificates in development, you can use mkcert to generate wildcard certificates.
+
+### Trusted Local Certificates with mkcert
+
+For browser-trusted certificates without warnings, generate wildcard certificates using [mkcert](https://github.com/FiloSottile/mkcert) (install with `brew install mkcert` on macOS):
+
+```bash
+# Install the local CA
+mkcert -install
+
+# Create the certificates directory
+mkdir -p ~/.config/spark/http-proxy/certs
+
+# Generate wildcard certificate for .loc domains
+mkcert -cert-file ~/.config/spark/http-proxy/certs/wildcard.loc.pem \
+       -key-file ~/.config/spark/http-proxy/certs/wildcard.loc-key.pem \
+       "*.loc"
+
+# For complex multi-level domains, you can generate additional certificates:
+# mkcert -cert-file ~/.config/spark/http-proxy/certs/sparkfabrik.loc.pem \
+#        -key-file ~/.config/spark/http-proxy/certs/sparkfabrik.loc-key.pem \
+#        "*.sparkfabrik.loc"
+```
+
+#### Start the proxy
+
+The certificates will be automatically detected and loaded when you start the proxy:
+
+```bash
+docker compose up -d
+```
+
+The Traefik container's entrypoint script scans `~/.config/spark/http-proxy/certs/` for certificate files and automatically generates the TLS configuration in `/traefik/dynamic/auto-tls.yml`. You don't need to manually edit any configuration files!
+
+Now your `.loc` domains will use trusted certificates! 🎉
+
+✅ `https://myapp.loc` - Trusted  
+✅ `https://api.loc` - Trusted  
+✅ `https://project.loc` - Trusted
+
+**Note**: The `*.loc` certificate covers single-level subdomains. For multi-level domains like `app.project.sparkfabrik.loc`, generate additional certificates as shown in the commented example above.
+
+#### How Certificate Matching Works
+
+Traefik automatically matches certificates to incoming HTTPS requests using **SNI (Server Name Indication)**:
+
+1. **Certificate Detection**: The entrypoint script scans `/traefik/certs` and extracts domain information from each certificate's Subject Alternative Names (SAN)
+2. **Automatic Matching**: When a browser requests `https://myapp.loc`, Traefik:
+   - Receives the domain name via SNI
+   - Looks through available certificates for one that matches `myapp.loc`
+   - Finds the `*.loc` wildcard certificate and uses it
+   - Serves the HTTPS response with the trusted certificate
+
+3. **Wildcard Coverage**: 
+   - `*.loc` covers: `myapp.loc`, `api.loc`, `database.loc`
+   - `*.loc` does NOT cover: `sub.myapp.loc`, `api.project.loc`
+   - For multi-level domains, generate specific certificates like `*.project.loc`
+
+4. **Fallback**: If no matching certificate is found, Traefik generates a self-signed certificate for that domain
+
+You can see which domains each certificate covers in the container logs when it starts up.
+
+### Using Traefik Labels Instead of VIRTUAL_HOST
+
+If you prefer to use Traefik labels instead of `VIRTUAL_HOST`, you can achieve the same HTTP and HTTPS routes manually:
+
+```yaml
+services:
+  myapp:
+    image: nginx:alpine
+    labels:
+      # HTTP router
+      - "traefik.http.routers.myapp.rule=Host(`myapp.local`)"
+      - "traefik.http.routers.myapp.entrypoints=http"
+      - "traefik.http.routers.myapp.service=myapp"
+
+      # HTTPS router
+      - "traefik.http.routers.myapp-tls.rule=Host(`myapp.local`)"
+      - "traefik.http.routers.myapp-tls.entrypoints=https"
+      - "traefik.http.routers.myapp-tls.tls=true"
+      - "traefik.http.routers.myapp-tls.service=myapp"
+
+      # Service configuration
+      - "traefik.http.services.myapp.loadbalancer.server.port=80"
+```
+
+This manual approach gives you the same result as `VIRTUAL_HOST=myapp.local` but with more control over the configuration.
+
 ## Advanced Configuration with Traefik Labels
 
 While `VIRTUAL_HOST` environment variables provide simple automatic routing, you can also use **Traefik labels** for more advanced configuration. Both methods work together seamlessly.
@@ -68,10 +228,10 @@ services:
     labels:
       # Define the routing rule - which domain/path routes to this service
       - "traefik.http.routers.myapp.rule=Host(`myapp.docker`)"
-      
-      # Specify which entrypoint to use (web = port 80)
-      - "traefik.http.routers.myapp.entrypoints=web"
-      
+
+      # Specify which entrypoint to use (http = port 80)
+      - "traefik.http.routers.myapp.entrypoints=http"
+
       # Set the target port for load balancing
       - "traefik.http.services.myapp.loadbalancer.server.port=80"
 ```
@@ -83,7 +243,7 @@ services:
 | Label | Purpose | Example |
 |-------|---------|---------|
 | **Router Rule** | Defines which requests route to this service | `traefik.http.routers.myapp.rule=Host(\`myapp.docker\`)` |
-| **Entrypoints** | Which proxy port to listen on | `traefik.http.routers.myapp.entrypoints=web` |
+| **Entrypoints** | Which proxy port to listen on | `traefik.http.routers.myapp.entrypoints=http` |
 | **Service Port** | Target port on the container | `traefik.http.services.myapp.loadbalancer.server.port=8080` |
 
 ### Understanding Traefik Core Concepts
@@ -96,7 +256,7 @@ An **entrypoint** is where Traefik listens for incoming traffic. Think of it as 
 ```yaml
 # In our Traefik configuration:
 entrypoints:
-  web:              # ← This is just a custom name! You can call it anything
+  http:              # ← This is just a custom name! You can call it anything
     address: ":80"    # Listen on port 80 for HTTP traffic
   websecure:        # ← Another custom name
     address: ":443"   # Listen on port 443 for HTTPS traffic (if configured)
@@ -104,11 +264,11 @@ entrypoints:
     address: ":8080"  # Listen on port 8080
 ```
 
-**Important**: `web` is just a **custom name** that we chose. You could name your entrypoints anything:
+**Important**: `http` is just a **custom name** that we chose. You could name your entrypoints anything:
 - `http`, `https`, `frontend`, `api`, `public` - whatever makes sense to you!
 
-When you specify `traefik.http.routers.myapp.entrypoints=web`, you're telling Traefik:
-> *"Route requests that come through the entrypoint named 'web' (which happens to be port 80) to my application"*
+When you specify `traefik.http.routers.myapp.entrypoints=http`, you're telling Traefik:
+> *"Route requests that come through the entrypoint named 'http' (which happens to be port 80) to my application"*
 
 The entrypoint name must match between:
 1. **Traefik configuration** (where you define `web: address: ":80"`)
@@ -192,7 +352,7 @@ services:
       - "traefik.http.services.app-v1.loadbalancer.server.port=8080"
 
   app-v2:
-    image: myapp:v2  
+    image: myapp:v2
     labels:
       - "traefik.http.routers.app-v2.rule=Host(`v2.myapp.docker`)"
       - "traefik.http.routers.app-v2.entrypoints=web"
@@ -208,3 +368,27 @@ services:
       # Weight-based routing (advanced feature)
       - "traefik.http.services.app-main.loadbalancer.server.weight=90"
 ```
+
+## Dinghy Layer Compatibility
+
+This HTTP proxy provides compatibility with the original [dinghy-http-proxy](https://github.com/codekitchen/dinghy-http-proxy) environment variables:
+
+### Supported Environment Variables
+
+| Variable | Support | Description |
+|----------|---------|-------------|
+| `VIRTUAL_HOST` | ✅ **Full** | Automatic HTTP and HTTPS routing |
+| `VIRTUAL_PORT` | ✅ **Full** | Backend port configuration |
+| `CORS_ENABLED` | ✅ **Full** | Enable CORS for all origins |
+
+### Unsupported Variables
+
+| Variable | Status | Alternative |
+|----------|--------|-------------|
+| `CORS_DOMAINS` | ❌ **Not supported** | Use Traefik labels for fine-grained CORS control |
+
+### Migration Notes
+
+- **HTTPS**: Unlike the original dinghy-http-proxy, HTTPS is automatically enabled for all `VIRTUAL_HOST` entries
+- **CORS**: Only global CORS enablement is supported. For domain-specific CORS, use Traefik labels
+- **Multiple domains**: Comma-separated domains in `VIRTUAL_HOST` work the same way

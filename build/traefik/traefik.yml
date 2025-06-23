@@ -19,7 +19,7 @@ accessLog: {}
 
 # Entry points
 entryPoints:
-  web:
+  http:
     address: ":80"
     # Transport configuration for generous timeouts
     transport:
@@ -31,6 +31,15 @@ entryPoints:
         # Idle timeout for keep-alive connections
         idleTimeout: "300s"
 
+  https:
+    address: ":443"
+    # Transport configuration for generous timeouts (same as HTTP)
+    transport:
+      respondingTimeouts:
+        readTimeout: "86400s"
+        writeTimeout: "86400s"
+        idleTimeout: "300s"
+
 # Providers
 providers:
   docker:
@@ -39,7 +48,7 @@ providers:
     watch: true
 
   file:
-    # Watch the dynamic directory for changes from dinghy-layer
+    # Watch the dynamic directory for changes from dinghy-layer and certificates
     directory: "/traefik/dynamic"
     watch: true
 
@@ -48,3 +57,17 @@ serversTransport:
   insecureSkipVerify: true
   # For large uploads and long-running requests
   maxIdleConnsPerHost: 200
+
+# TLS configuration for local development
+tls:
+  options:
+    default:
+      # Allow older TLS versions for development
+      minVersion: "VersionTLS10"
+      # Cipher suites for development (less restrictive)
+      cipherSuites:
+        - "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+        - "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305"
+        - "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+        - "TLS_RSA_WITH_AES_256_GCM_SHA384"
+        - "TLS_RSA_WITH_AES_128_GCM_SHA256"

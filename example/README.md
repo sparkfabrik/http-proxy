@@ -42,6 +42,7 @@ docker compose -f compose.examples.yml ps
   - <http://whoami-custom.docker>
   - <http://whoami-multi1.docker> and <http://whoami-multi2.docker>
   - <http://nginx.docker> and <http://www.nginx.docker>
+  - <http://whoami-https.docker> and <https://whoami-https.docker> (HTTPS example)
 
 ## DNS Configuration
 
@@ -68,7 +69,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.myapp.rule=Host(`myapp.docker`)"
-      - "traefik.http.routers.myapp.entrypoints=web"
+      - "traefik.http.routers.myapp.entrypoints=http"
 ```
 
 ### 2. VIRTUAL_HOST Environment Variable
@@ -101,7 +102,7 @@ To add your own services to be proxied:
        image: myapp:latest
        environment:
          - VIRTUAL_HOST=myapp.docker
-   
+
    networks:
      default:
        name: http-proxy_default

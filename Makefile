@@ -5,26 +5,9 @@ DOCKER_IMAGE_NAME ?= sparkfabrik/http-proxy:latest
 help: ## Show help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-docker-build: ## Build the Docker image
-	docker build -t $(DOCKER_IMAGE_NAME) -f build/Dockerfile .
-
-docker-run: docker-build ## Run the Docker container
-	docker rm -vf http-proxy || true
-	docker run -d -v /var/run/docker.sock:/tmp/docker.sock:ro \
-        --name=http-proxy \
-        -p 80:80 \
-        -p 19322:19322/udp \
-        -e CONTAINER_NAME=http-proxy \
-        -e DNS_IP=127.0.0.1 \
-        -e DOMAIN_TLD=loc \
-		$(DOCKER_IMAGE_NAME)
-
-docker-logs: ## Show logs of the Docker container
-	docker logs -f http-proxy
-
-build: ## Build the go apps
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o join-networks ./cmd/join-networks
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o dns-server ./cmd/dns-server
+dev-up: ## Run the development environment
+	@echo "Starting development environment..."
+	@docker-compose up -d --build --remove-orphans
 
 test: ## Run integration tests
 	@echo "Running integration tests..."

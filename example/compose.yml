@@ -1,6 +1,6 @@
 # HTTP Proxy Stack - Production Ready Configuration
 # This demonstrates how to use the published images from GitHub Container Registry
-# 
+#
 # Usage:
 #   docker compose up -d
 #
@@ -8,6 +8,7 @@
 #   - Traefik Dashboard: http://localhost:8080
 #   - DNS Server: UDP port 19322
 #   - HTTP Proxy: Port 80
+#   - HTTPS Proxy: Port 443 (manual configuration required)
 
 services:
   # Watches Docker events and generates Traefik configuration for VIRTUAL_HOST
@@ -26,7 +27,8 @@ services:
     image: ghcr.io/sparkfabrik/http-proxy:latest
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    command: ["sh", "-c", "/usr/local/bin/join-networks -container-name http-proxy"]
+    command:
+      ["sh", "-c", "/usr/local/bin/join-networks -container-name http-proxy"]
     labels:
       - "traefik.enable=false"
     restart: unless-stopped
@@ -47,10 +49,12 @@ services:
     container_name: http-proxy
     ports:
       - "80:80"      # HTTP entrypoint
+      - "443:443"    # HTTPS entrypoint
       - "8080:8080"  # Traefik dashboard
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
       - traefik_dynamic:/traefik/dynamic
+      - "${HOME}/.config/spark/http-proxy/certs:/traefik/certs:ro"  # Auto-load user certificates
     labels:
       - "traefik.enable=false"
     restart: unless-stopped

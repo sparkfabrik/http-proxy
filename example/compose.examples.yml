@@ -9,7 +9,7 @@
 #
 # Access examples:
 #   - http://whoami-traefik.docker
-#   - http://whoami-virtual.docker  
+#   - http://whoami-virtual.docker
 #   - http://whoami-custom.docker
 #   - http://whoami-multi1.docker and http://whoami-multi2.docker
 #   - http://nginx.docker and http://www.nginx.docker
@@ -21,7 +21,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.whoami-traefik.rule=Host(`whoami-traefik.docker`)"
-      - "traefik.http.routers.whoami-traefik.entrypoints=web"
+      - "traefik.http.routers.whoami-traefik.entrypoints=http"
       - "traefik.http.services.whoami-traefik.loadbalancer.server.port=80"
 
   # Example 2: Using VIRTUAL_HOST (dinghy/dinghy-http-proxy compatible)
@@ -48,8 +48,19 @@ services:
     image: nginx:alpine
     environment:
       - VIRTUAL_HOST=nginx.docker,www.nginx.docker
-    volumes:
-      - ./html:/usr/share/nginx/html:ro
+
+  # Example 6: VIRTUAL_HOST automatically creates both HTTP and HTTPS routes
+  whoami-automatic-https:
+    image: traefik/whoami:latest
+    environment:
+      - VIRTUAL_HOST=whoami-https.docker # Automatically available on both HTTP and HTTPS
+
+  # Example 7: API with CORS enabled
+  whoami-cors:
+    image: traefik/whoami:latest
+    environment:
+      - VIRTUAL_HOST=api.docker
+      - CORS_ENABLED=true # Enables CORS for all origins
 
 networks:
   default:
