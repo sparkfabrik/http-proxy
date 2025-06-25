@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: build/Dockerfile
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik_dynamic:/traefik/dynamic
     command: ["sh", "-c", "/usr/local/bin/dinghy-layer"]
     labels:
@@ -41,7 +41,7 @@ services:
       - "443:443"
       - "8080:8080"
     volumes:
-      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - traefik_dynamic:/traefik/dynamic
       - "${LOCAL_HOME:-$HOME}/.config/spark/http-proxy/certs:/traefik/certs:ro"
     labels:

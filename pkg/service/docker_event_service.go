@@ -109,7 +109,9 @@ func (s *Service) Run(ctx context.Context) error {
 	select {
 	case <-sigChan:
 		s.logger.Info("Received shutdown signal")
-		// Cancel context to stop event loop
+		if err := s.Close(); err != nil {
+			s.logger.Error("Error while closing service", "error", err)
+		}
 		return context.Canceled
 	case err := <-errChan:
 		if err != nil {

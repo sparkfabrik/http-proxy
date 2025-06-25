@@ -358,7 +358,7 @@ main() {
 }
 
 # Handle script interruption
-# trap cleanup EXIT
+trap cleanup EXIT
 
 # Check if help is requested
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then

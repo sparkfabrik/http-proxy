@@ -343,17 +343,9 @@ This HTTP proxy provides compatibility with the original [dinghy-http-proxy](htt
 | `VIRTUAL_HOST` | ✅ **Full** | Automatic HTTP and HTTPS routing |
 | `VIRTUAL_PORT` | ✅ **Full** | Backend port configuration       |
 
-### Unsupported Variables
-
-| Variable       | Status               | Alternative                                      |
-| -------------- | -------------------- | ------------------------------------------------ |
-| `CORS_ENABLED` | ❌ **Removed**       | Use Traefik labels for CORS control             |
-| `CORS_DOMAINS` | ❌ **Not supported** | Use Traefik labels for fine-grained CORS control |
-
 ### Migration Notes
 
 - **Security**: **`exposedByDefault: false`** ensures only containers with `VIRTUAL_HOST` or `traefik.*` labels are managed
 - **HTTPS**: Unlike the original dinghy-http-proxy, HTTPS is automatically enabled for all `VIRTUAL_HOST` entries
-- **CORS**: Not supported via environment variables. Use Traefik labels for CORS control
 - **Multiple domains**: Comma-separated domains in `VIRTUAL_HOST` work the same way
 - **Container selection**: Unmanaged containers are completely ignored, preventing accidental exposure
