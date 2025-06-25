@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+
+set -e
+
+export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-spark-http-proxy}
+export COMPOSE_FILE=${COMPOSE_FILE:-compose.yml}
+
+show_usage() {
+  echo "Usage: $0 <command> [options]"
+  echo "Commands:"
+  echo "  start                Clean restart (down -v && up -d)"
+  echo "  dashboard            Open Traefik dashboard (http://localhost:8080)"
+  echo "  generate-mkcert      Generate SSL certificates"
+  echo "  up, down, logs...    Standard Docker Compose commands"
+}
+
+generate_mkcert() {
+  local domain="$1"
+
+  if [ -z "$domain" ]; then
+    read -p "Enter domain name: " domain
+  fi
+
+  if [ -z "$domain" ]; then
+    echo "Error: Domain name required"
+    exit 1
+  fi
+
+  if ! command -v mkcert >/dev/null 2>&1; then
+    echo "Error: mkcert not installed"
+    exit 1
+  fi
+
+  local cert_dir="$HOME/.config/spark/http-proxy/certs"
+  mkdir -p "$cert_dir"
+
+  echo "Generating certificates for: $domain"
+  mkcert -cert-file "$cert_dir/$domain.pem" \
+         -key-file "$cert_dir/$domain-key.pem" \
+         "$domain"
+}
+
+open_dashboard() {
+  local url="http://localhost:8080"
+  echo "Opening Traefik dashboard: $url"
+
+  if command -v open >/dev/null 2>&1; then
+    open "$url"
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$url"
+  else
+    echo "Cannot open browser automatically. Please visit: $url"
+    exit 1
+  fi
+}
+
+case "$1" in
+  ""|"-h"|"--help")
+    show_usage
+    exit 0
+    ;;
+  start)
+    docker compose down -v
+    docker compose up -d
+    ;;
+  dashboard)
+    open_dashboard
+    ;;
+  generate-mkcert)
+    generate_mkcert "$2"
+    ;;
+  *)
+    docker compose "$@"
+    ;;
+esac
