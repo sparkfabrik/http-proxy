@@ -45,6 +45,26 @@ jobs:
           cache-from: type=gha,scope=traefik
           cache-to: type=gha,mode=max,scope=traefik
 
+      - name: Build Prometheus image for testing
+        uses: docker/build-push-action@v5
+        with:
+          context: ./build/prometheus
+          file: ./build/prometheus/Dockerfile
+          push: false
+          tags: ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}-prometheus:test
+          cache-from: type=gha,scope=prometheus
+          cache-to: type=gha,mode=max,scope=prometheus
+
+      - name: Build Grafana image for testing
+        uses: docker/build-push-action@v5
+        with:
+          context: ./build/grafana
+          file: ./build/grafana/Dockerfile
+          push: false
+          tags: ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}-grafana:test
+          cache-from: type=gha,scope=grafana
+          cache-to: type=gha,mode=max,scope=grafana
+
       - name: Install test dependencies
         run: |
           sudo apt-get update -qq
@@ -114,6 +134,16 @@ jobs:
             dockerfile: ./build/Dockerfile
             image_name: ${{ github.repository }}-services
             cache_scope: services
+          - name: prometheus
+            context: ./build/prometheus
+            dockerfile: ./build/prometheus/Dockerfile
+            image_name: ${{ github.repository }}-prometheus
+            cache_scope: prometheus
+          - name: grafana
+            context: ./build/grafana
+            dockerfile: ./build/grafana/Dockerfile
+            image_name: ${{ github.repository }}-grafana
+            cache_scope: grafana
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -185,6 +215,16 @@ jobs:
             dockerfile: ./build/Dockerfile
             image_name: ${{ github.repository }}-services
             cache_scope: services
+          - name: prometheus
+            context: ./build/prometheus
+            dockerfile: ./build/prometheus/Dockerfile
+            image_name: ${{ github.repository }}-prometheus
+            cache_scope: prometheus
+          - name: grafana
+            context: ./build/grafana
+            dockerfile: ./build/grafana/Dockerfile
+            image_name: ${{ github.repository }}-grafana
+            cache_scope: grafana
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

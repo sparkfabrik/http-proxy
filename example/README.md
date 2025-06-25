@@ -38,20 +38,57 @@ services:
 
 ## Quick Start
 
-### 1. Start the HTTP Proxy Stack
+### 1. Basic HTTP Proxy
 
 ```bash
-# Start the core proxy services
+# Using Docker Compose directly
 docker compose up -d
+
+# Using the convenience script
+./bin/spark-http-proxy start
 
 # Check status
 docker compose ps
-
-# View logs
-docker compose logs -f
 ```
 
-### 2. Start Example Applications (Optional)
+### 2. HTTP Proxy with Monitoring
+
+```bash
+# Using Docker Compose with profiles
+docker compose --profile metrics up -d
+
+# Using the convenience script (recommended)
+./bin/spark-http-proxy start-with-metrics
+
+# Check all services including monitoring
+docker compose ps
+```
+
+### 3. Access Services
+
+**Basic Stack:**
+
+- **Traefik Dashboard**: <http://localhost:8080>
+
+**With Monitoring:**
+
+- **Traefik Dashboard**: <http://localhost:8080>
+- **Grafana Dashboard**: <http://localhost:8081> (admin/admin)
+- **Prometheus**: <http://localhost:9090>
+
+### 4. Convenience Commands
+
+```bash
+# Open dashboards in browser
+./bin/spark-http-proxy dashboard    # Traefik
+./bin/spark-http-proxy grafana      # Grafana (if running)
+./bin/spark-http-proxy prometheus   # Prometheus (if running)
+
+# Stop only monitoring services (keep proxy running)
+./bin/spark-http-proxy stop-metrics
+```
+
+### 5. Start Example Applications (Optional)
 
 ```bash
 # Start example applications
@@ -61,16 +98,14 @@ docker compose -f compose.examples.yml up -d
 docker compose -f compose.examples.yml ps
 ```
 
-### 3. Access Services
+**Example Apps Access:**
 
-- **Traefik Dashboard**: <http://localhost:8080>
-- **Example Apps** (if started):
-  - <http://whoami-traefik.docker>
-  - <http://whoami-virtual.docker>
-  - <http://whoami-custom.docker>
-  - <http://whoami-multi1.docker> and <http://whoami-multi2.docker>
-  - <http://nginx.docker> and <http://www.nginx.docker>
-  - <http://whoami-https.docker> and <https://whoami-https.docker> (HTTPS example)
+- <http://whoami-traefik.docker>
+- <http://whoami-virtual.docker>
+- <http://whoami-custom.docker>
+- <http://whoami-multi1.docker> and <http://whoami-multi2.docker>
+- <http://nginx.docker> and <http://www.nginx.docker>
+- <http://whoami-https.docker> and <https://whoami-https.docker> (HTTPS example)
 
 ## DNS Configuration
 

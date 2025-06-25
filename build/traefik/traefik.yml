@@ -17,6 +17,19 @@ log:
 
 accessLog: {}
 
+# Metrics configuration for Prometheus
+metrics:
+  prometheus:
+    addEntryPointsLabels: true
+    addServicesLabels: true
+    addRoutersLabels: true
+    buckets:
+      - 0.1
+      - 0.3
+      - 1.2
+      - 5.0
+    entryPoint: metrics
+
 # Entry points
 entryPoints:
   http:
@@ -40,6 +53,10 @@ entryPoints:
         writeTimeout: "86400s"
         idleTimeout: "300s"
 
+  # Metrics endpoint for Prometheus
+  metrics:
+    address: ":8082"
+
 # Providers
 providers:
   docker:
@@ -51,6 +68,16 @@ providers:
     # Watch the dynamic directory for changes from dinghy-layer and certificates
     directory: "/traefik/dynamic"
     watch: true
+
+# Global HTTP configuration to disable HSTS
+http:
+  middlewares:
+    disable-hsts:
+      headers:
+        customResponseHeaders:
+          Strict-Transport-Security: ""
+        sslForceHost: false
+        sslRedirect: false
 
 # Servers transport configuration for backend connections
 serversTransport:
@@ -64,6 +91,8 @@ tls:
     default:
       # Allow older TLS versions for development
       minVersion: "VersionTLS10"
+      # Disable HSTS for local development
+      sniStrict: false
       # Cipher suites for development (less restrictive)
       cipherSuites:
         - "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"

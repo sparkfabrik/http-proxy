@@ -31,3 +31,15 @@ All code should be formatted with `gofmt`. Ensure that the output is consistent 
 * Write idiomatic Go code. Do not simply translate code from other languages like C++, Java, or Python.
 * Strive for simplicity and clarity.
 * Keep comments concise and informative, explaining what the code *does*, not *how* it does it.
+
+---
+applyTo: "*.*"
+---
+
+When you want to create new documentation files, follow these steps:
+
+1. Create a new Markdown file in the appropriate directory, that is docs/.
+2. Use the existing documentation files as a reference for structure and formatting.
+3. Include relevant information, code snippets, and examples to illustrate the topic.
+4. Follow the established naming conventions and directory structure.
+5. Update any necessary configuration files (e.g., `mkdocs.yml`, `README.md`) to include the new documentation.

@@ -40,12 +40,51 @@ services:
       - "80:80"
       - "443:443"
       - "8080:8080"
+      - "8082:8082"
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - traefik_dynamic:/traefik/dynamic
-      - "${LOCAL_HOME:-$HOME}/.config/spark/http-proxy/certs:/traefik/certs:ro"
+      - "${LOCAL_HOME:-$HOME}/.local/spark/http-proxy/certs:/traefik/certs:ro"
     labels:
       - "traefik.enable=false"
 
+  # Optional Prometheus service (enabled with --profile metrics)
+  prometheus:
+    build:
+      context: ./build/prometheus
+      dockerfile: Dockerfile
+    container_name: http-proxy-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus_data:/prometheus
+    labels:
+      - "traefik.enable=false"
+    profiles:
+      - metrics
+
+  # Optional Grafana service (enabled with --profile metrics)
+  grafana:
+    build:
+      context: ./build/grafana
+      dockerfile: Dockerfile
+    container_name: http-proxy-grafana
+    ports:
+      - "8081:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/traefik-official.json
+    volumes:
+      - grafana_data:/var/lib/grafana
+    labels:
+      - "traefik.enable=false"
+    depends_on:
+      - prometheus
+    profiles:
+      - metrics
+
 volumes:
   traefik_dynamic:
+  prometheus_data:
+  grafana_data:

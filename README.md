@@ -253,16 +253,16 @@ For browser-trusted certificates without warnings, generate wildcard certificate
 mkcert -install
 
 # Create the certificates directory
-mkdir -p ~/.config/spark/http-proxy/certs
+mkdir -p ~/.local/spark/http-proxy/certs
 
 # Generate wildcard certificate for .loc domains
-mkcert -cert-file ~/.config/spark/http-proxy/certs/wildcard.loc.pem \
-       -key-file ~/.config/spark/http-proxy/certs/wildcard.loc-key.pem \
+mkcert -cert-file ~/.local/spark/http-proxy/certs/wildcard.loc.pem \
+       -key-file ~/.local/spark/http-proxy/certs/wildcard.loc-key.pem \
        "*.loc"
 
 # For complex multi-level domains, you can generate additional certificates:
-# mkcert -cert-file ~/.config/spark/http-proxy/certs/sparkfabrik.loc.pem \
-#        -key-file ~/.config/spark/http-proxy/certs/sparkfabrik.loc-key.pem \
+# mkcert -cert-file ~/.local/spark/http-proxy/certs/sparkfabrik.loc.pem \
+#        -key-file ~/.local/spark/http-proxy/certs/sparkfabrik.loc-key.pem \
 #        "*.sparkfabrik.loc"
 ```
 
@@ -274,7 +274,7 @@ The certificates will be automatically detected and loaded when you start the pr
 docker compose up -d
 ```
 
-The Traefik container's entrypoint script scans `~/.config/spark/http-proxy/certs/` for certificate files and automatically generates the TLS configuration in `/traefik/dynamic/auto-tls.yml`. You don't need to manually edit any configuration files!
+The Traefik container's entrypoint script scans `~/.local/spark/http-proxy/certs/` for certificate files and automatically generates the TLS configuration in `/traefik/dynamic/auto-tls.yml`. You don't need to manually edit any configuration files!
 
 Now your `.loc` domains will use trusted certificates! 🎉
 
