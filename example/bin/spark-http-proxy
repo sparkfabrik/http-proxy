@@ -2,8 +2,14 @@
 
 set -e
 
+# Configuration - can be overridden by environment variables
 export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-spark-http-proxy}
-export COMPOSE_FILE=${COMPOSE_FILE:-compose.yml}
+export COMPOSE_FILE=${COMPOSE_FILE:-/opt/sparkdock/http-proxy-stack/compose.yml}
+
+# Fallback to local directory if system path doesn't exist
+if [ ! -f "$COMPOSE_FILE" ]; then
+  COMPOSE_FILE="$(dirname "$0")/../compose.yml"
+fi
 
 show_usage() {
   echo "Usage: $0 <command> [options]"
@@ -12,6 +18,8 @@ show_usage() {
   echo "  dashboard            Open Traefik dashboard (http://localhost:8080)"
   echo "  generate-mkcert      Generate SSL certificates"
   echo "  up, down, logs...    Standard Docker Compose commands"
+  echo ""
+  echo "Config: $COMPOSE_FILE"
 }
 
 generate_mkcert() {
@@ -60,8 +68,8 @@ case "$1" in
     exit 0
     ;;
   start)
-    docker compose down -v
-    docker compose up -d
+    docker compose -f "$COMPOSE_FILE" down -v
+    docker compose -f "$COMPOSE_FILE" up -d
     ;;
   dashboard)
     open_dashboard
@@ -70,6 +78,6 @@ case "$1" in
     generate_mkcert "$2"
     ;;
   *)
-    docker compose "$@"
+    docker compose -f "$COMPOSE_FILE" "$@"
     ;;
 esac
