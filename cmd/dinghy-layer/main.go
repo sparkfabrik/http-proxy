@@ -87,7 +87,6 @@ type ContainerInfo struct {
 	Name        string
 	VirtualHost string
 	VirtualPort string
-	CorsEnabled string
 	IsRunning   bool
 }
 
@@ -98,7 +97,6 @@ func (cl *CompatibilityLayer) extractContainerInfo(inspect types.ContainerJSON) 
 		Name:        strings.TrimPrefix(inspect.Name, "/"),
 		VirtualHost: utils.GetDockerEnvVar(inspect.Config.Env, "VIRTUAL_HOST"),
 		VirtualPort: utils.GetDockerEnvVar(inspect.Config.Env, "VIRTUAL_PORT"),
-		CorsEnabled: utils.GetDockerEnvVar(inspect.Config.Env, "CORS_ENABLED"),
 		IsRunning:   inspect.State.Running,
 	}
 }
@@ -242,39 +240,11 @@ func (cl *CompatibilityLayer) generateTraefikConfig(inspect types.ContainerJSON,
 			rule = fmt.Sprintf("Host(`%s`)", host.hostname)
 		}
 
-		// Prepare middleware list
-		var middlewares []string
-		if isCORSEnabled(containerInfo.CorsEnabled) {
-			corsMiddlewareName := fmt.Sprintf("%s-cors", serviceName)
-			middlewares = append(middlewares, corsMiddlewareName)
-
-			// Add CORS middleware to configuration
-			if traefikConfig.HTTP.Middlewares == nil {
-				traefikConfig.HTTP.Middlewares = make(map[string]*config.Middleware)
-			}
-
-			// Create CORS middleware with permissive settings
-			corsEnabled := true
-			maxAge := int64(86400)
-			traefikConfig.HTTP.Middlewares[corsMiddlewareName] = &config.Middleware{
-				Headers: &config.HeadersMiddleware{
-					AccessControlAllowMethods:     []string{"GET", "OPTIONS", "PUT", "POST", "DELETE", "PATCH"},
-					AccessControlAllowOriginList:  []string{"*"},
-					AccessControlAllowHeaders:     []string{"*"},
-					AccessControlAllowCredentials: &corsEnabled,
-					AccessControlMaxAge:           &maxAge,
-				},
-			}
-		}
-
 		// Create HTTP router
 		httpRouter := &config.Router{
 			Rule:        rule,
 			Service:     serviceName,
 			EntryPoints: []string{"http"},
-		}
-		if len(middlewares) > 0 {
-			httpRouter.Middlewares = middlewares
 		}
 		traefikConfig.HTTP.Routers[routerName] = httpRouter
 
@@ -285,9 +255,6 @@ func (cl *CompatibilityLayer) generateTraefikConfig(inspect types.ContainerJSON,
 			Service:     serviceName,
 			EntryPoints: []string{"https"},
 			TLS:         &config.RouterTLSConfig{},
-		}
-		if len(middlewares) > 0 {
-			httpsRouter.Middlewares = middlewares
 		}
 		traefikConfig.HTTP.Routers[httpsRouterName] = httpsRouter
 	}
@@ -500,9 +467,4 @@ func getDefaultPort(inspect types.ContainerJSON) string {
 // configFileName returns the config file name for a container
 func (cl *CompatibilityLayer) configFileName(containerID string) string {
 	return fmt.Sprintf("%s.yaml", utils.FormatDockerID(containerID))
-}
-
-// isCORSEnabled checks if CORS is enabled based on environment variable
-func isCORSEnabled(corsEnabled string) bool {
-	return corsEnabled == "true" || corsEnabled == "1"
 }

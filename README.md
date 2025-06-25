@@ -221,58 +221,6 @@ services:
       - "traefik.http.services.app-main.loadbalancer.server.weight=90"
 ```
 
-## CORS Support
-
-The proxy supports Cross-Origin Resource Sharing (CORS) through environment variables:
-
-```yaml
-services:
-  myapi:
-    image: myapi:latest
-    environment:
-      - VIRTUAL_HOST=api.local
-      - CORS_ENABLED=true # Enables CORS for all origins
-```
-
-When `CORS_ENABLED=true` is set, the following CORS headers are automatically added:
-
-- `Access-Control-Allow-Origin: *`
-- `Access-Control-Allow-Methods: GET, OPTIONS, PUT, POST, DELETE, PATCH`
-- `Access-Control-Allow-Headers: *`
-- `Access-Control-Allow-Credentials: true`
-- `Access-Control-Max-Age: 86400`
-
-### Using Traefik Labels for CORS
-
-For more granular control, you can also enable CORS using Traefik labels instead of the `CORS_ENABLED` environment variable:
-
-```yaml
-services:
-  myapi:
-    image: myapi:latest
-    environment:
-      - VIRTUAL_HOST=api.local # Creates HTTP and HTTPS routes
-    labels:
-      # Define CORS middleware
-      - "traefik.http.middlewares.api-cors.headers.accesscontrolalloworiginlist=*"
-      - "traefik.http.middlewares.api-cors.headers.accesscontrolallowmethods=GET,OPTIONS,PUT,POST,DELETE,PATCH"
-      - "traefik.http.middlewares.api-cors.headers.accesscontrolallowheaders=*"
-      - "traefik.http.middlewares.api-cors.headers.accesscontrolallowcredentials=true"
-      - "traefik.http.middlewares.api-cors.headers.accesscontrolmaxage=86400"
-
-      # Apply CORS middleware to both HTTP and HTTPS routes
-      - "traefik.http.routers.api-http.middlewares=api-cors"
-      - "traefik.http.routers.api-https.middlewares=api-cors"
-      - "traefik.http.routers.api-http.rule=Host(`api.local`)"
-      - "traefik.http.routers.api-https.rule=Host(`api.local`)"
-      - "traefik.http.routers.api-http.entrypoints=http"
-      - "traefik.http.routers.api-https.entrypoints=https"
-      - "traefik.http.routers.api-https.tls=true"
-      - "traefik.http.services.api.loadbalancer.server.port=80"
-```
-
-This approach gives you full control over CORS configuration and allows for domain-specific settings.
-
 ## HTTPS Support
 
 The proxy automatically exposes both HTTP and HTTPS for all applications configured with `VIRTUAL_HOST`. Both protocols are available without any additional configuration.
@@ -394,18 +342,18 @@ This HTTP proxy provides compatibility with the original [dinghy-http-proxy](htt
 | -------------- | ----------- | -------------------------------- |
 | `VIRTUAL_HOST` | ✅ **Full** | Automatic HTTP and HTTPS routing |
 | `VIRTUAL_PORT` | ✅ **Full** | Backend port configuration       |
-| `CORS_ENABLED` | ✅ **Full** | Enable CORS for all origins      |
 
 ### Unsupported Variables
 
 | Variable       | Status               | Alternative                                      |
 | -------------- | -------------------- | ------------------------------------------------ |
+| `CORS_ENABLED` | ❌ **Removed**       | Use Traefik labels for CORS control             |
 | `CORS_DOMAINS` | ❌ **Not supported** | Use Traefik labels for fine-grained CORS control |
 
 ### Migration Notes
 
 - **Security**: **`exposedByDefault: false`** ensures only containers with `VIRTUAL_HOST` or `traefik.*` labels are managed
 - **HTTPS**: Unlike the original dinghy-http-proxy, HTTPS is automatically enabled for all `VIRTUAL_HOST` entries
-- **CORS**: Only global CORS enablement is supported. For domain-specific CORS, use Traefik labels
+- **CORS**: Not supported via environment variables. Use Traefik labels for CORS control
 - **Multiple domains**: Comma-separated domains in `VIRTUAL_HOST` work the same way
 - **Container selection**: Unmanaged containers are completely ignored, preventing accidental exposure

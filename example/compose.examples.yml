@@ -55,12 +55,17 @@ services:
     environment:
       - VIRTUAL_HOST=whoami-https.docker # Automatically available on both HTTP and HTTPS
 
-  # Example 7: API with CORS enabled
+  # Example 7: API with Traefik CORS labels (if needed)
   whoami-cors:
     image: traefik/whoami:latest
     environment:
       - VIRTUAL_HOST=api.docker
-      - CORS_ENABLED=true # Enables CORS for all origins
+    labels:
+      # Example CORS configuration using Traefik labels
+      - "traefik.http.middlewares.api-cors.headers.accesscontrolalloworiginlist=*"
+      - "traefik.http.middlewares.api-cors.headers.accesscontrolallowmethods=GET,OPTIONS,PUT,POST,DELETE,PATCH"
+      - "traefik.http.routers.api-http.middlewares=api-cors"
+      - "traefik.http.routers.api-https.middlewares=api-cors"
 
 networks:
   default:
