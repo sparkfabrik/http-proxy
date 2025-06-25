@@ -5,6 +5,10 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/client"
 )
 
 // FormatDockerID returns a shortened version of a Docker ID for logging
@@ -92,4 +96,91 @@ type Logger interface {
 	Info(msg string, args ...interface{})
 	Warn(msg string, args ...interface{})
 	Error(msg string, args ...interface{})
+}
+
+// ShouldManageContainer checks if a container should be managed based on dinghy env vars or traefik labels
+// Returns true if the container has VIRTUAL_HOST environment variable or traefik labels
+func ShouldManageContainer(env []string, labels map[string]string) bool {
+	// Check for dinghy VIRTUAL_HOST environment variable
+	if GetDockerEnvVar(env, "VIRTUAL_HOST") != "" {
+		return true
+	}
+
+	// Check for traefik labels (any label starting with "traefik.")
+	for label := range labels {
+		if strings.HasPrefix(label, "traefik.") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// GetRunningContainersInNetwork returns all running containers connected to the specified network,
+// optionally excluding a container by name
+func GetRunningContainersInNetwork(ctx context.Context, dockerClient *client.Client, networkID, excludeContainerName string) ([]types.Container, error) {
+	// Get all containers
+	containers, err := dockerClient.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	var networkContainers []types.Container
+	for _, cont := range containers {
+		// Skip non-running containers
+		if cont.State != "running" {
+			continue
+		}
+
+		// Skip if this is the excluded container
+		if excludeContainerName != "" && len(cont.Names) > 0 {
+			containerName := strings.TrimPrefix(cont.Names[0], "/")
+			if containerName == excludeContainerName {
+				continue
+			}
+		}
+
+		// Check if this container is connected to the network
+		inspect, err := dockerClient.ContainerInspect(ctx, cont.ID)
+		if err != nil {
+			continue // Skip containers we can't inspect
+		}
+
+		isConnected := false
+		for _, networkData := range inspect.NetworkSettings.Networks {
+			if networkData.NetworkID == networkID {
+				isConnected = true
+				break
+			}
+		}
+
+		if isConnected {
+			networkContainers = append(networkContainers, cont)
+		}
+	}
+
+	return networkContainers, nil
+}
+
+// HasManageableContainersInNetwork checks if a network has any manageable containers,
+// optionally excluding a specific container
+func HasManageableContainersInNetwork(ctx context.Context, dockerClient *client.Client, networkID, excludeContainerName string) (bool, error) {
+	containers, err := GetRunningContainersInNetwork(ctx, dockerClient, networkID, excludeContainerName)
+	if err != nil {
+		return false, err
+	}
+
+	for _, cont := range containers {
+		// Inspect the container to get env vars and labels
+		inspect, err := dockerClient.ContainerInspect(ctx, cont.ID)
+		if err != nil {
+			continue // Skip containers we can't inspect
+		}
+
+		if ShouldManageContainer(inspect.Config.Env, inspect.Config.Labels) {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }

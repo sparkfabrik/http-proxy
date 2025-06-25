@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
@@ -247,10 +246,10 @@ func (nj *NetworkJoiner) handleContainerStop(ctx context.Context, containerName 
 			continue
 		}
 
-		// Check if network has any other active containers
-		hasActiveContainers, err := nj.networkHasActiveContainers(ctx, networkID, containerName)
+		// Check if network has any manageable containers
+		hasActiveContainers, err := utils.HasManageableContainersInNetwork(ctx, nj.dockerClient, networkID, containerName)
 		if err != nil {
-			nj.logger.Warn("Failed to check network for active containers",
+			nj.logger.Warn("Failed to check network for manageable containers",
 				"network_id", utils.FormatDockerID(networkID), "error", err)
 			continue
 		}
@@ -273,42 +272,6 @@ func (nj *NetworkJoiner) handleContainerStop(ctx context.Context, containerName 
 	}
 
 	return nil
-}
-
-// networkHasActiveContainers checks if a network has any active containers (excluding the specified container)
-func (nj *NetworkJoiner) networkHasActiveContainers(ctx context.Context, networkID, excludeContainer string) (bool, error) {
-	// Get all containers
-	containers, err := nj.dockerClient.ContainerList(ctx, container.ListOptions{All: true})
-	if err != nil {
-		return false, fmt.Errorf("failed to list containers: %w", err)
-	}
-
-	for _, cont := range containers {
-		// Skip the container we're excluding and non-running containers
-		if cont.State != "running" {
-			continue
-		}
-
-		// Skip if it's the container we're checking for
-		containerName := strings.TrimPrefix(cont.Names[0], "/")
-		if containerName == excludeContainer {
-			continue
-		}
-
-		// Check if this container is connected to the network
-		inspect, err := nj.dockerClient.ContainerInspect(ctx, cont.ID)
-		if err != nil {
-			continue // Skip containers we can't inspect
-		}
-
-		for _, networkData := range inspect.NetworkSettings.Networks {
-			if networkData.NetworkID == networkID {
-				return true, nil // Found an active container on this network
-			}
-		}
-	}
-
-	return false, nil // No active containers found on this network
 }
 
 // getContainerInfo performs a single container inspection and returns comprehensive information
@@ -390,7 +353,9 @@ func (nj *NetworkJoiner) executeJoinOperations(ctx context.Context, op *NetworkO
 		time.Sleep(stabilizationDelay)
 
 		if err := nj.quickConnectivityCheck(ctx, op.ContainerID); err != nil {
-			nj.logger.Error("Connectivity lost after joining network, rolling back", "network_id", utils.FormatDockerID(networkID), "error", err)
+			nj.logger.Error("Connectivity lost after joining network, rolling back",
+				"network_id", utils.FormatDockerID(networkID),
+				"network_name", nj.getNetworkName(ctx, networkID), "error", err)
 			nj.rollbackOperations(*operationsPerformed)
 			return fmt.Errorf("connectivity lost after joining network: %w", err)
 		}
@@ -549,6 +514,7 @@ func (nj *NetworkJoiner) getDefaultBridgeNetworkID(ctx context.Context) (string,
 }
 
 // getActiveBridgeNetworks returns bridge networks that should be joined based on activity criteria
+// Only considers containers that have dinghy env vars (VIRTUAL_HOST) or traefik labels
 func (nj *NetworkJoiner) getActiveBridgeNetworks(ctx context.Context, containerID string) (NetworkSet, error) {
 	networks := make(NetworkSet)
 
@@ -568,19 +534,34 @@ func (nj *NetworkJoiner) getActiveBridgeNetworks(ctx context.Context, containerI
 			continue
 		}
 
-		_, containsSelf := net.Containers[containerID]
 		isDefaultBridge := net.Options[defaultBridgeOption] == "true" || net.Name == defaultBridgeName
-		hasMultipleContainers := len(net.Containers) > 1
-		hasOtherContainers := len(net.Containers) == 1 && !containsSelf
 
-		if isDefaultBridge || hasMultipleContainers || hasOtherContainers {
+		// Always include default bridge
+		if isDefaultBridge {
 			networks.Add(net.ID)
-			nj.logger.Info("Including bridge network",
+			nj.logger.Info("Including default bridge network",
 				"name", net.Name,
-				"id", utils.FormatDockerID(net.ID),
-				"is_default", isDefaultBridge,
-				"multiple_containers", hasMultipleContainers,
-				"other_containers", hasOtherContainers)
+				"id", utils.FormatDockerID(net.ID))
+			continue
+		}
+
+		// For non-default networks, only include if they have manageable containers
+		hasManageableContainers, err := utils.HasManageableContainersInNetwork(ctx, nj.dockerClient, net.ID, containerID)
+		if err != nil {
+			nj.logger.Warn("Failed to check network for manageable containers",
+				"network_id", utils.FormatDockerID(net.ID), "error", err)
+			continue
+		}
+
+		if hasManageableContainers {
+			networks.Add(net.ID)
+			nj.logger.Info("Including bridge network with manageable containers",
+				"name", net.Name,
+				"id", utils.FormatDockerID(net.ID))
+		} else {
+			nj.logger.Debug("Skipping network without manageable containers",
+				"name", net.Name,
+				"id", utils.FormatDockerID(net.ID))
 		}
 	}
 

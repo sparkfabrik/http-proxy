@@ -9,6 +9,10 @@ dev-up: ## Run the development environment
 	@echo "Starting development environment..."
 	@docker-compose up -d --build --remove-orphans
 
+dev-logs-join-networks: ## Show logs for the joined networks
+	@echo "Showing logs for the joined networks..."
+	@docker-compose logs -f join_networks
+
 test: ## Run integration tests
 	@echo "Running integration tests..."
 	@chmod +x test/test.sh
