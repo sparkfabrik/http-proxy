@@ -506,4 +506,3 @@ func (cl *CompatibilityLayer) configFileName(containerID string) string {
 func isCORSEnabled(corsEnabled string) bool {
 	return corsEnabled == "true" || corsEnabled == "1"
 }
-

@@ -76,7 +76,7 @@ for cert_file in $cert_files; do
     # Get the basename without extension
     cert_base=$(basename "$cert_file" .pem)
     cert_base=$(basename "$cert_base" .crt)
-    
+
     # Look for corresponding key file
     key_file=""
     for ext in pem crt key; do
@@ -85,14 +85,14 @@ for cert_file in $cert_files; do
             key_file="$possible_key"
             break
         fi
-        
+
         possible_key="${CERTS_DIR}/${cert_base}.key"
         if [ -f "$possible_key" ]; then
             key_file="$possible_key"
             break
         fi
     done
-    
+
     if [ -n "$key_file" ]; then
         # Extract domains from certificate (simulate the new logic)
         domains=$(openssl x509 -in "$cert_file" -noout -text 2>/dev/null | \
@@ -102,13 +102,13 @@ for cert_file in $cert_files; do
                  sed 's/,.*DNS:/ /g' | \
                  sed 's/,.*//g' | \
                  tr -d ' ')
-        
+
         if [ -n "$domains" ]; then
             echo "  - Adding certificate: $(basename "$cert_file") for domains: $domains"
         else
             echo "  - Adding certificate: $(basename "$cert_file") (auto-detect domains)"
         fi
-        
+
         cat >> "${TLS_CONFIG_FILE}" << EOF
     - certFile: ${cert_file}
       keyFile: ${key_file}

@@ -48,13 +48,13 @@ services:
     image: ghcr.io/sparkfabrik/http-proxy-traefik:latest
     container_name: http-proxy
     ports:
-      - "80:80"      # HTTP entrypoint
-      - "443:443"    # HTTPS entrypoint
-      - "8080:8080"  # Traefik dashboard
+      - "80:80" # HTTP entrypoint
+      - "443:443" # HTTPS entrypoint
+      - "8080:8080" # Traefik dashboard
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
       - traefik_dynamic:/traefik/dynamic
-      - "${HOME}/.config/spark/http-proxy/certs:/traefik/certs:ro"  # Auto-load user certificates
+      - "${HOME}/.config/spark/http-proxy/certs:/traefik/certs:ro" # Auto-load user certificates
     labels:
       - "traefik.enable=false"
     restart: unless-stopped

@@ -114,6 +114,7 @@ The proxy automatically exposes both HTTP and HTTPS for all applications configu
 ### Automatic HTTP and HTTPS Routes
 
 When you set `VIRTUAL_HOST=myapp.local`, you automatically get:
+
 - **HTTP**: `http://myapp.local` (port 80)
 - **HTTPS**: `https://myapp.local` (port 443)
 
@@ -163,8 +164,8 @@ The Traefik container's entrypoint script scans `~/.config/spark/http-proxy/cert
 
 Now your `.loc` domains will use trusted certificates! 🎉
 
-✅ `https://myapp.loc` - Trusted  
-✅ `https://api.loc` - Trusted  
+✅ `https://myapp.loc` - Trusted
+✅ `https://api.loc` - Trusted
 ✅ `https://project.loc` - Trusted
 
 **Note**: The `*.loc` certificate covers single-level subdomains. For multi-level domains like `app.project.sparkfabrik.loc`, generate additional certificates as shown in the commented example above.
@@ -180,7 +181,7 @@ Traefik automatically matches certificates to incoming HTTPS requests using **SN
    - Finds the `*.loc` wildcard certificate and uses it
    - Serves the HTTPS response with the trusted certificate
 
-3. **Wildcard Coverage**: 
+3. **Wildcard Coverage**:
    - `*.loc` covers: `myapp.loc`, `api.loc`, `database.loc`
    - `*.loc` does NOT cover: `sub.myapp.loc`, `api.project.loc`
    - For multi-level domains, generate specific certificates like `*.project.loc`
