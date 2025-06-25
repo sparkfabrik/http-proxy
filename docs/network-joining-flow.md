@@ -18,6 +18,7 @@ The `join-networks` service ensures that the HTTP proxy container is automatical
 1. **At Startup**: The service scans all Docker bridge networks and connects the HTTP proxy to networks containing manageable containers
 2. **During Runtime**: When containers start/stop, the service automatically joins new networks or leaves empty ones
 3. **Security**: Only explicitly configured containers (with `VIRTUAL_HOST` or Traefik labels) are considered for routing
+4. **Fail-Fast**: If any network operation fails, the service exits and relies on container restart for recovery
 
 ## Architecture Flow
 
@@ -153,8 +154,8 @@ sequenceDiagram
     end
 
     S->>S: Calculate Network Operations
-    S->>D: Execute Join Operations
-    D-->>S: Success/Failure
+    S->>D: Execute Network Operations
+    D-->>S: Success or Process Exit on Failure
 ```
 
 ### 2. Event-Driven Network Management
@@ -188,26 +189,23 @@ stateDiagram-v2
     }
 ```
 
-### 3. Network Operation Safety
+### 3. Simplified Network Operations
 
 ```mermaid
 graph TD
-    A[Network Operation Request] --> B[Pre-operation State Capture]
-    B --> C[Execute Operation]
-    C --> D[Connectivity Check]
-    D --> E{Connection OK?}
-    E -->|Yes| F[Operation Complete]
-    E -->|No| G[Rollback Operation]
-    G --> H[Restore Previous State]
-    H --> I[Report Failure]
-
-    F --> J[Update State]
-    I --> K[Log Error]
-
+    A[Network Operation Request] --> B[Execute Operation]
+    B --> C{Success?}
+    C -->|Yes| D[Operation Complete]
+    C -->|No| E[Log Error & Exit Process]
+    
+    E --> F[Container Restart]
+    F --> G[Fresh Service Start]
+    
     style A fill:#e3f2fd
-    style F fill:#e8f5e8
-    style I fill:#ffebee
-    style G fill:#fff3e0
+    style D fill:#e8f5e8
+    style E fill:#ffebee
+    style F fill:#fff3e0
+    style G fill:#e1f5fe
 ```
 
 ## Key Components
@@ -225,12 +223,12 @@ graph TD
 3. **Check for Manageable Containers**: Looks for containers with `VIRTUAL_HOST` env vars or Traefik labels
 4. **Calculate Operations**: Determines which networks to join/leave
 
-### Safety Mechanisms
+### Failure Handling Strategy
 
-- **Connectivity Checks**: Verifies proxy container can reach Docker daemon after operations
-- **Rollback Operations**: Automatically reverses failed network changes
-- **Retry Logic**: Attempts operations multiple times with delays
-- **State Validation**: Ensures final state matches expectations
+- **Fail-Fast Approach**: Any network operation failure causes immediate process exit
+- **Container Restart**: Relies on Docker/Kubernetes to restart the service automatically
+- **Retry Logic**: Built into Docker API calls for transient failures
+- **Clean State**: Each restart starts with a fresh scan of the current state
 
 ### Event Handling
 
@@ -245,14 +243,21 @@ The service is configured via command-line flags:
 - `--container-name`: Name of the HTTP proxy container (default: "http-proxy")
 - `--log-level`: Logging verbosity level (default: "info")
 
+### Internal Configuration Constants
+
+- **Max Retries**: 3 attempts for Docker API operations
+- **Retry Delay**: 2-second delay between retry attempts
+- **Bridge Driver**: Only processes "bridge" type networks
+- **Default Bridge Protection**: Never disconnects from the default Docker bridge network
+
 ## Error Handling
 
-The service includes comprehensive error handling:
+The service uses a simplified, fail-fast error handling approach:
 
-- **Network Operation Failures**: Logged and operation skipped
-- **Connectivity Loss**: Automatic rollback with error reporting
-- **Container Info Errors**: Graceful degradation with warnings
-- **Docker API Errors**: Retry logic with exponential backoff
+- **Network Operation Failures**: Logged and process exits immediately
+- **Docker API Errors**: Built-in retry logic with exponential backoff
+- **Container Info Errors**: Process exits if critical information cannot be obtained
+- **Service Recovery**: Container orchestration handles automatic restart and recovery
 
 ## Benefits
 
@@ -260,4 +265,4 @@ The service includes comprehensive error handling:
 2. **Dynamic Management**: Responds to container lifecycle events in real-time
 3. **Safety First**: Multiple safety checks prevent connectivity loss
 4. **Efficient**: Only joins networks with manageable containers
-5. **Resilient**: Handles failures gracefully with rollback mechanisms
+5. **Resilient**: Handles failures with fail-fast approach and automatic restart recovery
