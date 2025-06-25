@@ -16,7 +16,7 @@ generate_tls_config() {
     fi
 
     # Look for certificate files (both .pem and .crt extensions)
-    cert_files=$(find "${CERTS_DIR}" -name "*.pem" -o -name "*.crt" | grep -v "\-key" | head -10)
+    cert_files=$(find "${CERTS_DIR}" -name "*.pem" -o -name "*.crt" | grep -v "\-key")
 
     if [ -z "$cert_files" ]; then
         echo "No certificate files found in ${CERTS_DIR}"
