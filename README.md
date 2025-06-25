@@ -11,26 +11,7 @@ Perfect for local development environments, this proxy eliminates manual configu
 
 ## Quick Start
 
-### 1. Start the Proxy
-
-```bash
-docker run -d --name http-proxy \
-  -p 80:80 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/sparkfabrik/http-proxy:latest
-```
-
-### 2. Run Your Application
-
-```bash
-docker run -d \
-  -e VIRTUAL_HOST=myapp.local \
-  nginx:alpine
-```
-
-### 3. Access Your App
-
-Visit `http://myapp.local` in your browser - it just works! 🎉
+To get started quickly, check the complete examples in the `example/` directory. The examples include ready-to-use Docker Compose configurations that demonstrate various use cases and configurations.
 
 ## Container Configuration
 
@@ -42,8 +23,8 @@ services:
   myapp:
     image: nginx:alpine
     environment:
-      - VIRTUAL_HOST=myapp.local           # Required: your custom domain
-      - VIRTUAL_PORT=8080                  # Optional: defaults to exposed port or 80
+      - VIRTUAL_HOST=myapp.local # Required: your custom domain
+      - VIRTUAL_PORT=8080 # Optional: defaults to exposed port or 80
     expose:
       - "8080"
 ```
@@ -55,6 +36,166 @@ services:
 - **Wildcards**: `VIRTUAL_HOST=*.myapp.local`
 - **Regex patterns**: `VIRTUAL_HOST=~^api\\..*\\.local$`
 
+## Advanced Configuration with Traefik Labels
+
+While `VIRTUAL_HOST` environment variables provide simple automatic routing, you can also use **Traefik labels** for more advanced configuration. Both methods work together seamlessly.
+
+### Basic Traefik Labels Example
+
+```yaml
+services:
+  myapp:
+    image: nginx:alpine
+    labels:
+      # Define the routing rule - which domain/path routes to this service
+      - "traefik.http.routers.myapp.rule=Host(`myapp.docker`)"
+
+      # Specify which entrypoint to use (http = port 80)
+      - "traefik.http.routers.myapp.entrypoints=http"
+
+      # Set the target port for load balancing
+      - "traefik.http.services.myapp.loadbalancer.server.port=80"
+```
+
+> **Note**: `traefik.enable=true` is **not required** since auto-discovery is always enabled in this proxy.
+
+### Traefik Labels Breakdown
+
+| Label            | Purpose                                      | Example                                                     |
+| ---------------- | -------------------------------------------- | ----------------------------------------------------------- |
+| **Router Rule**  | Defines which requests route to this service | `traefik.http.routers.myapp.rule=Host(\`myapp.docker\`)`    |
+| **Entrypoints**  | Which proxy port to listen on                | `traefik.http.routers.myapp.entrypoints=http`               |
+| **Service Port** | Target port on the container                 | `traefik.http.services.myapp.loadbalancer.server.port=8080` |
+
+### Understanding Traefik Core Concepts
+
+To effectively use Traefik labels, it helps to understand the key concepts:
+
+#### **Entrypoints** - The "Front Door"
+
+An **entrypoint** is where Traefik listens for incoming traffic. Think of it as the "front door" of your proxy.
+
+```yaml
+# In our Traefik configuration:
+entrypoints:
+  http: # ← This is just a custom name! You can call it anything
+    address: ":80" # Listen on port 80 for HTTP traffic
+  websecure: # ← Another custom name
+    address: ":443" # Listen on port 443 for HTTPS traffic (if configured)
+  api: # ← You could even call it "api" or "http" or "frontend"
+    address: ":8080" # Listen on port 8080
+```
+
+**Important**: `http` is just a **custom name** that we chose. You could name your entrypoints anything:
+
+- `http`, `https`, `frontend`, `api`, `public` - whatever makes sense to you!
+
+When you specify `traefik.http.routers.myapp.entrypoints=http`, you're telling Traefik:
+
+> _"Route requests that come through the entrypoint named 'http' (which happens to be port 80) to my application"_
+
+The entrypoint name must match between:
+
+1. **Traefik configuration** (where you define `web: address: ":80"`)
+2. **Container labels** (where you reference `entrypoints=web`)
+
+#### **Load Balancer** - The "Traffic Director"
+
+The **load balancer** determines how traffic gets distributed to your actual application containers.
+
+```yaml
+# This label creates a load balancer configuration:
+- "traefik.http.services.myapp.loadbalancer.server.port=8080"
+```
+
+This tells Traefik:
+
+> _"When routing to this service, send traffic to port 8080 on the container"_
+
+#### **The Complete Flow**
+
+Here's how a request flows through Traefik:
+
+```
+1. [Browser] → http://myapp.docker
+                    ↓
+2. [Entrypoint :80] ← "web" entrypoint receives the request
+                    ↓
+3. [Router] ← Checks rule: Host(`myapp.docker`) ✓ Match!
+                    ↓
+4. [Service] ← Routes to the configured service
+                    ↓
+5. [Load Balancer] ← Forwards to container port 8080
+                    ↓
+6. [Container] ← Your app receives the request
+```
+
+#### **Advanced Load Balancer Features**
+
+While we typically use simple port mapping, Traefik's load balancer supports much more:
+
+```yaml
+services:
+  # Multiple container instances (automatic load balancing)
+  web-app:
+    image: nginx:alpine
+    deploy:
+      replicas: 3 # 3 instances of the same app
+    labels:
+      - "traefik.http.routers.webapp.rule=Host(`webapp.docker`)"
+      - "traefik.http.routers.webapp.entrypoints=web"
+      # Traefik automatically balances between all 3 instances!
+
+  # Health check configuration
+  api-service:
+    image: myapi:latest
+    labels:
+      - "traefik.http.routers.api.rule=Host(`api.docker`)"
+      - "traefik.http.routers.api.entrypoints=web"
+      - "traefik.http.services.api.loadbalancer.server.port=3000"
+      # Configure health checks
+      - "traefik.http.services.api.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.api.loadbalancer.healthcheck.interval=30s"
+```
+
+#### **Why This Architecture Matters**
+
+This separation of concerns provides powerful flexibility:
+
+- **Entrypoints**: Control _where_ Traefik listens (ports, protocols)
+- **Routers**: Control _which_ requests go _where_ (domains, paths, headers)
+- **Services**: Control _how_ traffic reaches your apps (ports, health checks, load balancing)
+
+Example of advanced routing:
+
+```yaml
+services:
+  # Same app, different routing based on subdomain
+  app-v1:
+    image: myapp:v1
+    labels:
+      - "traefik.http.routers.app-v1.rule=Host(`v1.myapp.docker`)"
+      - "traefik.http.routers.app-v1.entrypoints=web"
+      - "traefik.http.services.app-v1.loadbalancer.server.port=8080"
+
+  app-v2:
+    image: myapp:v2
+    labels:
+      - "traefik.http.routers.app-v2.rule=Host(`v2.myapp.docker`)"
+      - "traefik.http.routers.app-v2.entrypoints=web"
+      - "traefik.http.services.app-v2.loadbalancer.server.port=8080"
+
+  # Route 90% traffic to v1, 10% to v2 (canary deployment)
+  app-main:
+    image: myapp:v1
+    labels:
+      - "traefik.http.routers.app-main.rule=Host(`myapp.docker`)"
+      - "traefik.http.routers.app-main.entrypoints=web"
+      - "traefik.http.services.app-main.loadbalancer.server.port=8080"
+      # Weight-based routing (advanced feature)
+      - "traefik.http.services.app-main.loadbalancer.server.weight=90"
+```
+
 ## CORS Support
 
 The proxy supports Cross-Origin Resource Sharing (CORS) through environment variables:
@@ -65,7 +206,7 @@ services:
     image: myapi:latest
     environment:
       - VIRTUAL_HOST=api.local
-      - CORS_ENABLED=true  # Enables CORS for all origins
+      - CORS_ENABLED=true # Enables CORS for all origins
 ```
 
 When `CORS_ENABLED=true` is set, the following CORS headers are automatically added:
@@ -85,7 +226,7 @@ services:
   myapi:
     image: myapi:latest
     environment:
-      - VIRTUAL_HOST=api.local  # Creates HTTP and HTTPS routes
+      - VIRTUAL_HOST=api.local # Creates HTTP and HTTPS routes
     labels:
       # Define CORS middleware
       - "traefik.http.middlewares.api-cors.headers.accesscontrolalloworiginlist=*"
@@ -123,7 +264,7 @@ services:
   myapp:
     image: nginx:alpine
     environment:
-      - VIRTUAL_HOST=myapp.local  # Creates both HTTP and HTTPS routes automatically
+      - VIRTUAL_HOST=myapp.local # Creates both HTTP and HTTPS routes automatically
 ```
 
 ### Self-Signed Certificates
@@ -176,12 +317,14 @@ Traefik automatically matches certificates to incoming HTTPS requests using **SN
 
 1. **Certificate Detection**: The entrypoint script scans `/traefik/certs` and extracts domain information from each certificate's Subject Alternative Names (SAN)
 2. **Automatic Matching**: When a browser requests `https://myapp.loc`, Traefik:
+
    - Receives the domain name via SNI
    - Looks through available certificates for one that matches `myapp.loc`
    - Finds the `*.loc` wildcard certificate and uses it
    - Serves the HTTPS response with the trusted certificate
 
 3. **Wildcard Coverage**:
+
    - `*.loc` covers: `myapp.loc`, `api.loc`, `database.loc`
    - `*.loc` does NOT cover: `sub.myapp.loc`, `api.project.loc`
    - For multi-level domains, generate specific certificates like `*.project.loc`
@@ -216,176 +359,22 @@ services:
 
 This manual approach gives you the same result as `VIRTUAL_HOST=myapp.local` but with more control over the configuration.
 
-## Advanced Configuration with Traefik Labels
-
-While `VIRTUAL_HOST` environment variables provide simple automatic routing, you can also use **Traefik labels** for more advanced configuration. Both methods work together seamlessly.
-
-### Basic Traefik Labels Example
-
-```yaml
-services:
-  myapp:
-    image: nginx:alpine
-    labels:
-      # Define the routing rule - which domain/path routes to this service
-      - "traefik.http.routers.myapp.rule=Host(`myapp.docker`)"
-
-      # Specify which entrypoint to use (http = port 80)
-      - "traefik.http.routers.myapp.entrypoints=http"
-
-      # Set the target port for load balancing
-      - "traefik.http.services.myapp.loadbalancer.server.port=80"
-```
-
-> **Note**: `traefik.enable=true` is **not required** since auto-discovery is always enabled in this proxy.
-
-### Traefik Labels Breakdown
-
-| Label | Purpose | Example |
-|-------|---------|---------|
-| **Router Rule** | Defines which requests route to this service | `traefik.http.routers.myapp.rule=Host(\`myapp.docker\`)` |
-| **Entrypoints** | Which proxy port to listen on | `traefik.http.routers.myapp.entrypoints=http` |
-| **Service Port** | Target port on the container | `traefik.http.services.myapp.loadbalancer.server.port=8080` |
-
-### Understanding Traefik Core Concepts
-
-To effectively use Traefik labels, it helps to understand the key concepts:
-
-#### **Entrypoints** - The "Front Door"
-An **entrypoint** is where Traefik listens for incoming traffic. Think of it as the "front door" of your proxy.
-
-```yaml
-# In our Traefik configuration:
-entrypoints:
-  http:              # ← This is just a custom name! You can call it anything
-    address: ":80"    # Listen on port 80 for HTTP traffic
-  websecure:        # ← Another custom name
-    address: ":443"   # Listen on port 443 for HTTPS traffic (if configured)
-  api:              # ← You could even call it "api" or "http" or "frontend"
-    address: ":8080"  # Listen on port 8080
-```
-
-**Important**: `http` is just a **custom name** that we chose. You could name your entrypoints anything:
-- `http`, `https`, `frontend`, `api`, `public` - whatever makes sense to you!
-
-When you specify `traefik.http.routers.myapp.entrypoints=http`, you're telling Traefik:
-> *"Route requests that come through the entrypoint named 'http' (which happens to be port 80) to my application"*
-
-The entrypoint name must match between:
-1. **Traefik configuration** (where you define `web: address: ":80"`)
-2. **Container labels** (where you reference `entrypoints=web`)
-
-#### **Load Balancer** - The "Traffic Director"
-The **load balancer** determines how traffic gets distributed to your actual application containers.
-
-```yaml
-# This label creates a load balancer configuration:
-- "traefik.http.services.myapp.loadbalancer.server.port=8080"
-```
-
-This tells Traefik:
-> *"When routing to this service, send traffic to port 8080 on the container"*
-
-#### **The Complete Flow**
-
-Here's how a request flows through Traefik:
-
-```
-1. [Browser] → http://myapp.docker
-                    ↓
-2. [Entrypoint :80] ← "web" entrypoint receives the request
-                    ↓
-3. [Router] ← Checks rule: Host(`myapp.docker`) ✓ Match!
-                    ↓
-4. [Service] ← Routes to the configured service
-                    ↓
-5. [Load Balancer] ← Forwards to container port 8080
-                    ↓
-6. [Container] ← Your app receives the request
-```
-
-#### **Advanced Load Balancer Features**
-
-While we typically use simple port mapping, Traefik's load balancer supports much more:
-
-```yaml
-services:
-  # Multiple container instances (automatic load balancing)
-  web-app:
-    image: nginx:alpine
-    deploy:
-      replicas: 3  # 3 instances of the same app
-    labels:
-      - "traefik.http.routers.webapp.rule=Host(`webapp.docker`)"
-      - "traefik.http.routers.webapp.entrypoints=web"
-      # Traefik automatically balances between all 3 instances!
-
-  # Health check configuration
-  api-service:
-    image: myapi:latest
-    labels:
-      - "traefik.http.routers.api.rule=Host(`api.docker`)"
-      - "traefik.http.routers.api.entrypoints=web"
-      - "traefik.http.services.api.loadbalancer.server.port=3000"
-      # Configure health checks
-      - "traefik.http.services.api.loadbalancer.healthcheck.path=/health"
-      - "traefik.http.services.api.loadbalancer.healthcheck.interval=30s"
-```
-
-#### **Why This Architecture Matters**
-
-This separation of concerns provides powerful flexibility:
-
-- **Entrypoints**: Control *where* Traefik listens (ports, protocols)
-- **Routers**: Control *which* requests go *where* (domains, paths, headers)
-- **Services**: Control *how* traffic reaches your apps (ports, health checks, load balancing)
-
-Example of advanced routing:
-
-```yaml
-services:
-  # Same app, different routing based on subdomain
-  app-v1:
-    image: myapp:v1
-    labels:
-      - "traefik.http.routers.app-v1.rule=Host(`v1.myapp.docker`)"
-      - "traefik.http.routers.app-v1.entrypoints=web"
-      - "traefik.http.services.app-v1.loadbalancer.server.port=8080"
-
-  app-v2:
-    image: myapp:v2
-    labels:
-      - "traefik.http.routers.app-v2.rule=Host(`v2.myapp.docker`)"
-      - "traefik.http.routers.app-v2.entrypoints=web"
-      - "traefik.http.services.app-v2.loadbalancer.server.port=8080"
-
-  # Route 90% traffic to v1, 10% to v2 (canary deployment)
-  app-main:
-    image: myapp:v1
-    labels:
-      - "traefik.http.routers.app-main.rule=Host(`myapp.docker`)"
-      - "traefik.http.routers.app-main.entrypoints=web"
-      - "traefik.http.services.app-main.loadbalancer.server.port=8080"
-      # Weight-based routing (advanced feature)
-      - "traefik.http.services.app-main.loadbalancer.server.weight=90"
-```
-
 ## Dinghy Layer Compatibility
 
 This HTTP proxy provides compatibility with the original [dinghy-http-proxy](https://github.com/codekitchen/dinghy-http-proxy) environment variables:
 
 ### Supported Environment Variables
 
-| Variable | Support | Description |
-|----------|---------|-------------|
+| Variable       | Support     | Description                      |
+| -------------- | ----------- | -------------------------------- |
 | `VIRTUAL_HOST` | ✅ **Full** | Automatic HTTP and HTTPS routing |
-| `VIRTUAL_PORT` | ✅ **Full** | Backend port configuration |
-| `CORS_ENABLED` | ✅ **Full** | Enable CORS for all origins |
+| `VIRTUAL_PORT` | ✅ **Full** | Backend port configuration       |
+| `CORS_ENABLED` | ✅ **Full** | Enable CORS for all origins      |
 
 ### Unsupported Variables
 
-| Variable | Status | Alternative |
-|----------|--------|-------------|
+| Variable       | Status               | Alternative                                      |
+| -------------- | -------------------- | ------------------------------------------------ |
 | `CORS_DOMAINS` | ❌ **Not supported** | Use Traefik labels for fine-grained CORS control |
 
 ### Migration Notes
