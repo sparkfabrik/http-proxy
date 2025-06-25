@@ -32,13 +32,11 @@ type NetworkJoiner struct {
 	dockerClient  *client.Client
 	logger        *logger.Logger
 	containerName string
-	dryRun        bool
 }
 
 // NetworkJoinerConfig holds configuration for the NetworkJoiner service
 type NetworkJoinerConfig struct {
 	ContainerName string
-	DryRun        bool
 	LogLevel      string
 }
 
@@ -55,7 +53,6 @@ func (c *NetworkJoinerConfig) Validate() error {
 func NewNetworkJoiner(cfg *NetworkJoinerConfig) *NetworkJoiner {
 	return &NetworkJoiner{
 		containerName: cfg.ContainerName,
-		dryRun:        cfg.DryRun,
 	}
 }
 
@@ -73,7 +70,7 @@ func (nj *NetworkJoiner) SetDependencies(dockerClient *client.Client, logger *lo
 // HandleInitialScan performs the initial network scan and join for the EventHandler interface
 func (nj *NetworkJoiner) HandleInitialScan(ctx context.Context) error {
 	nj.logger.Info("Performing initial network scan and join")
-	return nj.performInitialNetworkJoin(ctx, nj.containerName, nj.dryRun)
+	return nj.performInitialNetworkJoin(ctx, nj.containerName)
 }
 
 // HandleEvent processes Docker events for the EventHandler interface
@@ -81,9 +78,9 @@ func (nj *NetworkJoiner) HandleEvent(ctx context.Context, event events.Message) 
 	action := string(event.Action)
 	switch action {
 	case "start":
-		return nj.handleContainerStart(ctx, nj.containerName, nj.dryRun)
+		return nj.handleContainerStart(ctx, nj.containerName)
 	case "die":
-		return nj.handleContainerStop(ctx, nj.containerName, nj.dryRun)
+		return nj.handleContainerStop(ctx, nj.containerName)
 	default:
 		nj.logger.Debug("Unhandled container action", "action", action)
 		return nil
@@ -143,14 +140,12 @@ func (ns *NetworkState) summary() string {
 // main parses command line arguments and runs the network join service
 func main() {
 	containerName := flag.String("container-name", "", "the name of this docker container")
-	dryRun := flag.Bool("dry-run", false, "show what would be done without making changes")
 	logLevel := flag.String("log-level", "info", "log level (debug, info, warn, error)")
 	flag.Parse()
 
 	// Create and validate configuration
 	cfg := &NetworkJoinerConfig{
 		ContainerName: *containerName,
-		DryRun:        *dryRun,
 		LogLevel:      *logLevel,
 	}
 
@@ -171,7 +166,7 @@ func main() {
 }
 
 // performInitialNetworkJoin handles the initial scan and join of existing networks
-func (nj *NetworkJoiner) performInitialNetworkJoin(ctx context.Context, containerName string, dryRun bool) error {
+func (nj *NetworkJoiner) performInitialNetworkJoin(ctx context.Context, containerName string) error {
 	// Single comprehensive container inspection
 	containerInfo, err := nj.getContainerInfo(ctx, containerName)
 	if err != nil {
@@ -209,12 +204,6 @@ func (nj *NetworkJoiner) performInitialNetworkJoin(ctx context.Context, containe
 		"to_join", len(toJoin),
 		"to_leave", len(toLeave))
 
-	if dryRun {
-		nj.logger.Info("DRY RUN MODE - No changes will be made")
-		nj.logPlannedOperations(ctx, toJoin, toLeave)
-		return nil
-	}
-
 	// Create operation struct to reduce parameter passing
 	operation := &NetworkOperation{
 		ContainerName: containerName,
@@ -233,14 +222,14 @@ func (nj *NetworkJoiner) performInitialNetworkJoin(ctx context.Context, containe
 }
 
 // handleContainerStart processes container start events to join new networks
-func (nj *NetworkJoiner) handleContainerStart(ctx context.Context, containerName string, dryRun bool) error {
+func (nj *NetworkJoiner) handleContainerStart(ctx context.Context, containerName string) error {
 	// Re-scan and join any new bridge networks
 	nj.logger.Debug("Container started, checking for new networks to join")
-	return nj.performInitialNetworkJoin(ctx, containerName, dryRun)
+	return nj.performInitialNetworkJoin(ctx, containerName)
 }
 
 // handleContainerStop processes container stop events to leave empty networks
-func (nj *NetworkJoiner) handleContainerStop(ctx context.Context, containerName string, dryRun bool) error {
+func (nj *NetworkJoiner) handleContainerStop(ctx context.Context, containerName string) error {
 	nj.logger.Debug("Container stopped, checking for empty networks to leave")
 
 	// Get current container info
@@ -273,11 +262,6 @@ func (nj *NetworkJoiner) handleContainerStop(ctx context.Context, containerName 
 
 	if len(networksToLeave) > 0 {
 		nj.logger.Info("Found empty networks to leave", "count", len(networksToLeave))
-
-		if dryRun {
-			nj.logger.Info("DRY RUN: Would leave empty networks", "networks", len(networksToLeave))
-			return nil
-		}
 
 		// Leave empty networks
 		for _, networkID := range networksToLeave {
@@ -547,25 +531,6 @@ func (nj *NetworkJoiner) getNetworkName(ctx context.Context, networkID string) s
 		return netResource.Name
 	}
 	return "unknown"
-}
-
-// logPlannedOperations displays what network operations would be performed in dry-run mode
-func (nj *NetworkJoiner) logPlannedOperations(ctx context.Context, toJoin, toLeave []string) {
-	if len(toJoin) > 0 {
-		nj.logger.Info("Would JOIN networks:")
-		for _, networkID := range toJoin {
-			name := nj.getNetworkName(ctx, networkID)
-			nj.logger.Info("  - Network to join", "name", name, "id", utils.FormatDockerID(networkID))
-		}
-	}
-
-	if len(toLeave) > 0 {
-		nj.logger.Info("Would LEAVE networks:")
-		for _, networkID := range toLeave {
-			name := nj.getNetworkName(ctx, networkID)
-			nj.logger.Info("  - Network to leave", "name", name, "id", utils.FormatDockerID(networkID))
-		}
-	}
 }
 
 // getDefaultBridgeNetworkID finds the ID of the default Docker bridge network
