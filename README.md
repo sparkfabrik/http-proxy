@@ -5,7 +5,7 @@
 
 **Automatic HTTP routing for Docker containers** - A modern Traefik-based proxy that automatically discovers your containers and creates routing rules based on environment variables.
 
-Perfect for local development environments, this proxy eliminates manual configuration by detecting containers with `VIRTUAL_HOST` environment variables and instantly making them accessible via custom domains.
+Perfect for local development environments, this proxy eliminates manual configuration by detecting containers with `VIRTUAL_HOST` environment variables and instantly making them accessible via custom domains. **Only explicitly configured containers are managed**, ensuring security by default.
 
 > **Note**: This is a refactored and enhanced version of the [codekitchen/dinghy-http-proxy](https://github.com/codekitchen/dinghy-http-proxy) project. Spark HTTP Proxy is an HTTP Proxy and DNS server originally designed for [Dinghy](https://github.com/codekitchen/dinghy) but enhanced for broader use cases and improved maintainability.
 
@@ -14,6 +14,8 @@ Perfect for local development environments, this proxy eliminates manual configu
 To get started quickly, check the complete examples in the `example/` directory. The examples include ready-to-use Docker Compose configurations that demonstrate various use cases and configurations.
 
 ## Container Configuration
+
+**Important**: Only containers with explicit configuration are automatically managed by the proxy. Containers without `VIRTUAL_HOST` environment variables or `traefik.*` labels are ignored to ensure security and prevent unintended exposure.
 
 Add these environment variables to any container you want to be automatically routed:
 
@@ -35,6 +37,29 @@ services:
 - **Multiple domains**: `VIRTUAL_HOST=app.local,api.local`
 - **Wildcards**: `VIRTUAL_HOST=*.myapp.local`
 - **Regex patterns**: `VIRTUAL_HOST=~^api\\..*\\.local$`
+
+## Container Management
+
+The proxy uses **opt-in container discovery** (`exposedByDefault: false`). Only containers with explicit configuration are managed:
+
+- **Dinghy**: Containers with `VIRTUAL_HOST=domain.local` environment variable
+- **Traefik**: Containers with labels starting with `traefik.*`
+
+Unmanaged containers are ignored and never exposed.
+
+## Network Management
+
+The proxy automatically joins Docker networks that contain manageable containers, enabling seamless routing without manual network configuration. This process is handled by the `join-networks` service.
+
+📖 **[Detailed Network Joining Flow Documentation](docs/network-joining-flow.md)** - Complete technical documentation with flow diagrams explaining how automatic network discovery and joining works.
+
+## Certificate Management
+
+When certificates are generated or updated, **restart the proxy** to load the new certificates:
+
+```bash
+docker compose restart
+```
 
 ## Advanced Configuration with Traefik Labels
 
@@ -379,6 +404,8 @@ This HTTP proxy provides compatibility with the original [dinghy-http-proxy](htt
 
 ### Migration Notes
 
+- **Security**: **`exposedByDefault: false`** ensures only containers with `VIRTUAL_HOST` or `traefik.*` labels are managed
 - **HTTPS**: Unlike the original dinghy-http-proxy, HTTPS is automatically enabled for all `VIRTUAL_HOST` entries
 - **CORS**: Only global CORS enablement is supported. For domain-specific CORS, use Traefik labels
 - **Multiple domains**: Comma-separated domains in `VIRTUAL_HOST` work the same way
+- **Container selection**: Unmanaged containers are completely ignored, preventing accidental exposure

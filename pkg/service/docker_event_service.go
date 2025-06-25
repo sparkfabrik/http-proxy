@@ -124,7 +124,7 @@ func (s *Service) Run(ctx context.Context) error {
 // runEventLoop handles the initial scan and Docker event processing
 func (s *Service) runEventLoop(ctx context.Context) error {
 	// Initial scan of existing containers
-	s.logger.Info("Performing initial scan")
+	s.logger.Debug("Performing initial scan")
 	if err := s.handler.HandleInitialScan(ctx); err != nil {
 		s.logger.Error("Initial scan failed", "error", err)
 		return err
