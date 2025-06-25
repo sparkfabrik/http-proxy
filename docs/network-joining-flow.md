@@ -197,10 +197,10 @@ graph TD
     B --> C{Success?}
     C -->|Yes| D[Operation Complete]
     C -->|No| E[Log Error & Exit Process]
-    
+
     E --> F[Container Restart]
     F --> G[Fresh Service Start]
-    
+
     style A fill:#e3f2fd
     style D fill:#e8f5e8
     style E fill:#ffebee

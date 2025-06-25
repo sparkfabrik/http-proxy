@@ -45,7 +45,7 @@ providers:
   docker:
     endpoint: "unix:///var/run/docker.sock"
     exposedByDefault: false
-    watch: false
+    watch: true
 
   file:
     # Watch the dynamic directory for changes from dinghy-layer and certificates

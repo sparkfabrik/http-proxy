@@ -2,9 +2,37 @@
 
 This directory contains example configurations for using the http-proxy stack with pre-built images from GitHub Container Registry.
 
+## Available Images
+
+### Stable Release Images (recommended)
+
+- **`ghcr.io/sparkfabrik/http-proxy-traefik:latest`** - Traefik HTTP proxy
+- **`ghcr.io/sparkfabrik/http-proxy-services:latest`** - Background services (dinghy-layer, join-networks, dns-server)
+
+### Development Images (for testing)
+
+Development images are built from feature branches and include:
+
+- **`ghcr.io/sparkfabrik/http-proxy-traefik:<branch-name>`** - Latest from branch
+- **`ghcr.io/sparkfabrik/http-proxy-traefik:<branch-name>-<sha>`** - Specific commit
+- **`ghcr.io/sparkfabrik/http-proxy-services:<branch-name>`** - Latest from branch
+- **`ghcr.io/sparkfabrik/http-proxy-services:<branch-name>-<sha>`** - Specific commit
+
+To use development images, update the `compose.yml` tags accordingly:
+
+```yaml
+# Example: Use images from 'feature/new-routing' branch
+services:
+  dinghy_layer:
+    image: ghcr.io/sparkfabrik/http-proxy-services:feature-new-routing
+  # ... other services
+  traefik:
+    image: ghcr.io/sparkfabrik/http-proxy-traefik:feature-new-routing
+```
+
 ## Files
 
-- **`compose.yml`** - The main HTTP proxy stack using published images
+- **`compose.yml`** - The main HTTP proxy stack using stable published images
 - **`compose.examples.yml`** - Example applications demonstrating different routing configurations
 - **`html/index.html`** - Sample HTML file for the nginx example
 
@@ -62,6 +90,7 @@ nameserver 127.0.0.1:19322
 The example applications demonstrate different ways to configure routing:
 
 ### 1. Traefik Labels (Recommended)
+
 ```yaml
 services:
   myapp:
@@ -73,16 +102,18 @@ services:
 ```
 
 ### 2. VIRTUAL_HOST Environment Variable
+
 ```yaml
 services:
   myapp:
     image: myapp:latest
     environment:
       - VIRTUAL_HOST=myapp.docker
-      - VIRTUAL_PORT=8080  # Optional, defaults to 80
+      - VIRTUAL_PORT=8080 # Optional, defaults to 80
 ```
 
 ### 3. Multi-domain VIRTUAL_HOST
+
 ```yaml
 services:
   myapp:
@@ -96,6 +127,7 @@ services:
 To add your own services to be proxied:
 
 1. **Using a separate compose file** (recommended):
+
    ```yaml
    services:
      myapp:
@@ -127,19 +159,22 @@ docker compose down -v
 ## Troubleshooting
 
 ### Service not accessible
+
 1. Check if the container is running: `docker compose ps`
 2. Verify DNS resolution: `dig myapp.docker @127.0.0.1 -p 19322`
 3. Check Traefik dashboard: <http://localhost:8080>
 4. View logs: `docker compose logs service-name`
 
 ### DNS not working
+
 1. Verify DNS server is running: `docker compose ps dns`
 2. Test DNS server: `dig test.docker @127.0.0.1 -p 19322`
 3. Check system DNS configuration
 
 For more troubleshooting information, see the main project README.
 docker compose logs -f
-```
+
+````
 
 ## Cleanup
 
@@ -149,7 +184,7 @@ docker compose down
 
 # Remove volumes as well
 docker compose down -v
-```
+````
 
 ## Notes
 

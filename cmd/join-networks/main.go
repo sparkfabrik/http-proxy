@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/network"
@@ -20,8 +19,6 @@ const (
 	bridgeDriverName    = "bridge"
 	defaultBridgeOption = "com.docker.network.bridge.default_bridge"
 	defaultBridgeName   = "bridge"
-	maxRetries          = 3
-	retryDelay          = 2 * time.Second
 )
 
 // NetworkJoiner manages automatic Docker network connections for the HTTP proxy container.
@@ -337,28 +334,35 @@ func (nj *NetworkJoiner) executeLeaveOperations(ctx context.Context, op *Network
 	return nil
 }
 
-// safeJoinNetwork connects the HTTP proxy container to a specified network with automatic
-// retry logic to handle transient Docker API failures. Uses exponential backoff and
-// comprehensive error logging to ensure reliable network connections even under load.
+// safeJoinNetwork connects the HTTP proxy container to a specified network.
 func (nj *NetworkJoiner) safeJoinNetwork(ctx context.Context, containerName, networkID string) error {
 	netName := nj.getNetworkName(ctx, networkID)
 	nj.logger.Info("Joining network", "name", netName, "id", utils.FormatDockerID(networkID))
 
-	return utils.RetryOperation(func() error {
-		return nj.dockerClient.NetworkConnect(ctx, networkID, containerName, &network.EndpointSettings{})
-	}, fmt.Sprintf("join network %s", utils.FormatDockerID(networkID)), maxRetries, retryDelay, nj.logger)
+	err := nj.dockerClient.NetworkConnect(ctx, networkID, containerName, &network.EndpointSettings{})
+	if err != nil {
+		nj.logger.Error("Failed to join network", "name", netName, "id", utils.FormatDockerID(networkID), "error", err)
+		return fmt.Errorf("failed to join network %s: %w", utils.FormatDockerID(networkID), err)
+	}
+
+	nj.logger.Debug("Successfully joined network", "name", netName, "id", utils.FormatDockerID(networkID))
+	return nil
 }
 
-// safeLeaveNetwork disconnects the HTTP proxy container from a specified network with
-// automatic retry logic and forced disconnection. The 'force' flag ensures disconnection
-// even if the container is running, preventing stuck network connections during cleanup.
+// safeLeaveNetwork disconnects the HTTP proxy container from a specified network.
+// The 'force' flag ensures disconnection even if the container is running.
 func (nj *NetworkJoiner) safeLeaveNetwork(ctx context.Context, containerName, networkID string) error {
 	netName := nj.getNetworkName(ctx, networkID)
 	nj.logger.Info("Leaving network", "name", netName, "id", utils.FormatDockerID(networkID))
 
-	return utils.RetryOperation(func() error {
-		return nj.dockerClient.NetworkDisconnect(ctx, networkID, containerName, true)
-	}, fmt.Sprintf("leave network %s", utils.FormatDockerID(networkID)), maxRetries, retryDelay, nj.logger)
+	err := nj.dockerClient.NetworkDisconnect(ctx, networkID, containerName, true)
+	if err != nil {
+		nj.logger.Error("Failed to leave network", "name", netName, "id", utils.FormatDockerID(networkID), "error", err)
+		return fmt.Errorf("failed to leave network %s: %w", utils.FormatDockerID(networkID), err)
+	}
+
+	nj.logger.Debug("Successfully left network", "name", netName, "id", utils.FormatDockerID(networkID))
+	return nil
 }
 
 // getNetworkName retrieves the human-readable name for a network ID for logging purposes.

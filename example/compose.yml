@@ -13,7 +13,7 @@
 services:
   # Watches Docker events and generates Traefik configuration for VIRTUAL_HOST
   dinghy_layer:
-    image: ghcr.io/sparkfabrik/http-proxy:latest
+    image: ghcr.io/sparkfabrik/http-proxy-services:latest
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - traefik_dynamic:/traefik/dynamic
@@ -24,7 +24,7 @@ services:
 
   # Automatically joins containers to the http-proxy network
   join_networks:
-    image: ghcr.io/sparkfabrik/http-proxy:latest
+    image: ghcr.io/sparkfabrik/http-proxy-services:latest
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     command:
@@ -35,7 +35,7 @@ services:
 
   # DNS server for .docker domain resolution
   dns:
-    image: ghcr.io/sparkfabrik/http-proxy:latest
+    image: ghcr.io/sparkfabrik/http-proxy-services:latest
     ports:
       - "19322:19322/udp"
     command: ["sh", "-c", "/usr/local/bin/dns-server"]

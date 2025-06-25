@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -57,45 +56,6 @@ func CheckContext(ctx context.Context) error {
 	default:
 		return nil
 	}
-}
-
-// RetryOperation executes an operation with configurable retry attempts
-func RetryOperation(operation func() error, description string, maxRetries int, retryDelay time.Duration, logger Logger) error {
-	var lastErr error
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		if err := operation(); err != nil {
-			lastErr = err
-			if attempt < maxRetries {
-				logger.Warn("Operation attempt failed, retrying",
-					"attempt", attempt,
-					"max_attempts", maxRetries,
-					"operation", description,
-					"error", err,
-					"retry_delay", retryDelay)
-
-				time.Sleep(retryDelay)
-				continue
-			}
-		} else {
-			if attempt > 1 {
-				logger.Info("Operation succeeded after retry",
-					"operation", description,
-					"attempt", attempt)
-			}
-			return nil
-		}
-	}
-
-	return fmt.Errorf("operation %s failed after %d attempts: %w", description, maxRetries, lastErr)
-}
-
-// Logger interface for the retry operation
-// This allows the utility to work with any logger implementation
-type Logger interface {
-	Info(msg string, args ...interface{})
-	Warn(msg string, args ...interface{})
-	Error(msg string, args ...interface{})
 }
 
 // ShouldManageContainer checks if a container should be managed based on dinghy env vars or traefik labels
