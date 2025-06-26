@@ -39,7 +39,7 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "8080:8080"
+      - "30000:8080"
       - "8082:8082"
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
@@ -70,7 +70,7 @@ services:
       dockerfile: Dockerfile
     container_name: http-proxy-grafana
     ports:
-      - "8081:3000"
+      - "30001:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false

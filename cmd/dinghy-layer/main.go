@@ -103,7 +103,7 @@ func (cl *CompatibilityLayer) extractContainerInfo(inspect types.ContainerJSON) 
 
 // HandleInitialScan performs initial processing of existing containers
 func (cl *CompatibilityLayer) HandleInitialScan(ctx context.Context) error {
-	containers, err := cl.dockerClient.ContainerList(ctx, container.ListOptions{})
+	containers, err := utils.RetryContainerList(ctx, cl.dockerClient, container.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to list containers: %w", err)
 	}
@@ -169,7 +169,7 @@ func main() {
 }
 
 func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID string) error {
-	inspect, err := cl.dockerClient.ContainerInspect(ctx, containerID)
+	inspect, err := utils.RetryContainerInspect(ctx, cl.dockerClient, containerID)
 	if err != nil {
 		return fmt.Errorf("failed to inspect container %s: %w", containerID, err)
 	}

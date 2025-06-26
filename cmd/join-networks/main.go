@@ -261,7 +261,7 @@ func (nj *NetworkJoiner) handleContainerStop(ctx context.Context) error {
 // extracting network connections, port bindings, and connectivity status in a single API call.
 // This optimizes performance by avoiding multiple API calls and provides complete container state.
 func (nj *NetworkJoiner) getContainerInfo(ctx context.Context, containerName string) (*ContainerInfo, error) {
-	containerJSON, err := nj.dockerClient.ContainerInspect(ctx, containerName)
+	containerJSON, err := utils.RetryContainerInspect(ctx, nj.dockerClient, containerName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to inspect container %s: %w", containerName, err)
 	}
@@ -339,7 +339,7 @@ func (nj *NetworkJoiner) safeJoinNetwork(ctx context.Context, containerName, net
 	netName := nj.getNetworkName(ctx, networkID)
 	nj.logger.Info("Joining network", "name", netName, "id", utils.FormatDockerID(networkID))
 
-	err := nj.dockerClient.NetworkConnect(ctx, networkID, containerName, &network.EndpointSettings{})
+	err := utils.RetryNetworkConnect(ctx, nj.dockerClient, networkID, containerName, &network.EndpointSettings{})
 	if err != nil {
 		nj.logger.Error("Failed to join network", "name", netName, "id", utils.FormatDockerID(networkID), "error", err)
 		return fmt.Errorf("failed to join network %s: %w", utils.FormatDockerID(networkID), err)
@@ -369,7 +369,7 @@ func (nj *NetworkJoiner) safeLeaveNetwork(ctx context.Context, containerName, ne
 // Falls back to a formatted ID if the network name cannot be determined, ensuring
 // consistent logging even when networks are in transitional states.
 func (nj *NetworkJoiner) getNetworkName(ctx context.Context, networkID string) string {
-	if netResource, err := nj.dockerClient.NetworkInspect(ctx, networkID, network.InspectOptions{}); err == nil {
+	if netResource, err := utils.RetryNetworkInspect(ctx, nj.dockerClient, networkID, network.InspectOptions{}); err == nil {
 		return netResource.Name
 	}
 	return "unknown"
@@ -409,7 +409,7 @@ func (nj *NetworkJoiner) getActiveBridgeNetworks(ctx context.Context, containerI
 			continue
 		}
 
-		net, err := nj.dockerClient.NetworkInspect(ctx, netOverview.ID, network.InspectOptions{})
+		net, err := utils.RetryNetworkInspect(ctx, nj.dockerClient, netOverview.ID, network.InspectOptions{})
 		if err != nil {
 			nj.logger.Warn("Failed to get info for network", "network_id", netOverview.ID, "error", err)
 			continue

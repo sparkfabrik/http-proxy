@@ -4,11 +4,129 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 )
+
+// RetryConfig configures retry behavior for operations
+type RetryConfig struct {
+	// MaxAttempts is the maximum number of attempts (including the first one)
+	MaxAttempts int
+	// InitialDelay is the delay before the first retry
+	InitialDelay time.Duration
+	// MaxDelay is the maximum delay between retries
+	MaxDelay time.Duration
+	// BackoffMultiplier is the factor by which the delay increases after each retry
+	BackoffMultiplier float64
+}
+
+// DefaultRetryConfig returns a sensible default retry configuration for Docker operations
+func DefaultRetryConfig() RetryConfig {
+	return RetryConfig{
+		MaxAttempts:       3,
+		InitialDelay:      100 * time.Millisecond,
+		MaxDelay:          2 * time.Second,
+		BackoffMultiplier: 2.0,
+	}
+}
+
+// RetryableFunc is a function that can be retried. It should return an error if the operation
+// should be retried, or nil if successful. The context can be used to cancel the operation.
+type RetryableFunc func(ctx context.Context) error
+
+// Retry executes a function with retry logic and exponential backoff
+// It respects context cancellation and returns the last error encountered
+func Retry(ctx context.Context, config RetryConfig, fn RetryableFunc) error {
+	if config.MaxAttempts <= 0 {
+		config.MaxAttempts = 1
+	}
+
+	var lastErr error
+	delay := config.InitialDelay
+
+	for attempt := 1; attempt <= config.MaxAttempts; attempt++ {
+		// Check if context is cancelled before attempting
+		if err := CheckContext(ctx); err != nil {
+			return err
+		}
+
+		lastErr = fn(ctx)
+		if lastErr == nil {
+			return nil // Success
+		}
+
+		// Don't sleep after the last attempt
+		if attempt == config.MaxAttempts {
+			break
+		}
+
+		// Calculate next delay with exponential backoff
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+			// Continue to next attempt
+		}
+
+		// Update delay for next iteration
+		delay = time.Duration(float64(delay) * config.BackoffMultiplier)
+		if delay > config.MaxDelay {
+			delay = config.MaxDelay
+		}
+	}
+
+	return fmt.Errorf("operation failed after %d attempts: %w", config.MaxAttempts, lastErr)
+}
+
+// RetryContainerInspect wraps ContainerInspect with retry logic
+func RetryContainerInspect(ctx context.Context, dockerClient *client.Client, containerID string) (types.ContainerJSON, error) {
+	var result types.ContainerJSON
+
+	err := Retry(ctx, DefaultRetryConfig(), func(ctx context.Context) error {
+		var err error
+		result, err = dockerClient.ContainerInspect(ctx, containerID)
+		return err
+	})
+
+	return result, err
+}
+
+// RetryContainerList wraps ContainerList with retry logic
+func RetryContainerList(ctx context.Context, dockerClient *client.Client, options container.ListOptions) ([]types.Container, error) {
+	var result []types.Container
+
+	err := Retry(ctx, DefaultRetryConfig(), func(ctx context.Context) error {
+		var err error
+		result, err = dockerClient.ContainerList(ctx, options)
+		return err
+	})
+
+	return result, err
+}
+
+// RetryNetworkConnect wraps NetworkConnect with retry logic
+func RetryNetworkConnect(ctx context.Context, dockerClient *client.Client, networkID, containerName string, config *network.EndpointSettings) error {
+	return Retry(ctx, DefaultRetryConfig(), func(ctx context.Context) error {
+		return dockerClient.NetworkConnect(ctx, networkID, containerName, config)
+	})
+}
+
+// RetryNetworkInspect wraps NetworkInspect with retry logic
+func RetryNetworkInspect(ctx context.Context, dockerClient *client.Client, networkID string, options network.InspectOptions) (network.Inspect, error) {
+	var result network.Inspect
+
+	err := Retry(ctx, DefaultRetryConfig(), func(ctx context.Context) error {
+		var err error
+		result, err = dockerClient.NetworkInspect(ctx, networkID, options)
+		return err
+	})
+
+	return result, err
+}
 
 // FormatDockerID returns a shortened version of a Docker ID for logging
 // This can be used for container IDs, network IDs, or any Docker resource ID
@@ -79,8 +197,8 @@ func ShouldManageContainer(env []string, labels map[string]string) bool {
 // GetRunningContainersInNetwork returns all running containers connected to the specified network,
 // optionally excluding a container by name
 func GetRunningContainersInNetwork(ctx context.Context, dockerClient *client.Client, networkID, excludeContainerName string) ([]types.Container, error) {
-	// Get all containers
-	containers, err := dockerClient.ContainerList(ctx, container.ListOptions{All: true})
+	// Get all containers with retry logic
+	containers, err := RetryContainerList(ctx, dockerClient, container.ListOptions{All: true})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
@@ -101,7 +219,7 @@ func GetRunningContainersInNetwork(ctx context.Context, dockerClient *client.Cli
 		}
 
 		// Check if this container is connected to the network
-		inspect, err := dockerClient.ContainerInspect(ctx, cont.ID)
+		inspect, err := RetryContainerInspect(ctx, dockerClient, cont.ID)
 		if err != nil {
 			continue // Skip containers we can't inspect
 		}
@@ -132,7 +250,7 @@ func HasManageableContainersInNetwork(ctx context.Context, dockerClient *client.
 
 	for _, cont := range containers {
 		// Inspect the container to get env vars and labels
-		inspect, err := dockerClient.ContainerInspect(ctx, cont.ID)
+		inspect, err := RetryContainerInspect(ctx, dockerClient, cont.ID)
 		if err != nil {
 			continue // Skip containers we can't inspect
 		}

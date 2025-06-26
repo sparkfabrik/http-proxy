@@ -73,7 +73,7 @@ docker compose ps
 **With Monitoring:**
 
 - **Traefik Dashboard**: <http://localhost:8080>
-- **Grafana Dashboard**: <http://localhost:8081> (admin/admin)
+- **Grafana Dashboard**: <http://localhost:30001> (admin/admin)
 - **Prometheus**: <http://localhost:9090>
 
 ### 4. Convenience Commands

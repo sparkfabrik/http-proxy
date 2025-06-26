@@ -9,11 +9,11 @@
 #     docker compose --profile metrics up -d
 #
 # Access:
-#   - Traefik Dashboard: http://localhost:8080
+#   - Traefik Dashboard: http://localhost:30000
 #   - DNS Server: UDP port 19322
 #   - HTTP Proxy: Port 80
 #   - HTTPS Proxy: Port 443 (manual configuration required)
-#   - Grafana (optional): http://localhost:8081 (admin/admin)
+#   - Grafana (optional): http://localhost:30001 (admin/admin)
 #   - Prometheus (optional): http://localhost:9090
 
 services:
@@ -52,10 +52,10 @@ services:
     image: ghcr.io/sparkfabrik/http-proxy-traefik:feature-98_migrate_to_traefik
     container_name: http-proxy
     ports:
-      - "80:80" # HTTP entrypoint
-      - "443:443" # HTTPS entrypoint
-      - "8080:8080" # Traefik dashboard
-      - "8082:8082" # Metrics endpoint for Prometheus
+      - "80:80"
+      - "443:443"
+      - "30000:8080"
+      - "8082:8082"
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - traefik_dynamic:/traefik/dynamic
@@ -81,7 +81,7 @@ services:
     image: ghcr.io/sparkfabrik/http-proxy-grafana:feature-98_migrate_to_traefik
     container_name: http-proxy-grafana
     ports:
-      - "8081:3000"
+      - "30001:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false

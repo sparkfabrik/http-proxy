@@ -18,8 +18,8 @@ show_usage() {
   echo "  start-with-metrics   Start HTTP proxy with monitoring stack"
   echo "  stop-metrics         Stop only monitoring services"
   echo "  clean                Stop all services and remove volumes"
-  echo "  dashboard            Open Traefik dashboard (http://localhost:8080)"
-  echo "  grafana              Open Grafana dashboard (http://localhost:8081)"
+  echo "  dashboard            Open Traefik dashboard (http://localhost:30000)"
+  echo "  grafana              Open Grafana dashboard (http://localhost:30001)"
   echo "  prometheus           Open Prometheus (http://localhost:9090)"
   echo "  generate-mkcert      Generate SSL certificates"
   echo "  up, down, logs...    Standard Docker Compose commands"
@@ -61,7 +61,7 @@ generate_mkcert() {
 }
 
 open_dashboard() {
-  local url="http://localhost:8080"
+  local url="http://localhost:30000"
   echo "Opening Traefik dashboard: $url"
 
   if command -v open >/dev/null 2>&1; then
@@ -75,7 +75,7 @@ open_dashboard() {
 }
 
 open_grafana() {
-  local url="http://localhost:8081"
+  local url="http://localhost:30001"
   echo "Opening Grafana dashboard: $url (admin/admin)"
 
   if command -v open >/dev/null 2>&1; then
@@ -113,7 +113,7 @@ case "$1" in
     # Stop everything first to ensure clean state
     docker compose -f "$COMPOSE_FILE" --profile metrics down -v
     docker compose -f "$COMPOSE_FILE" up -d --pull always
-    echo "✅ HTTP Proxy running - Traefik Dashboard: http://localhost:8080"
+    echo "✅ HTTP Proxy running - Traefik Dashboard: http://localhost:30000"
     echo "💡 To add monitoring: $0 start-with-metrics"
     ;;
   start-with-metrics)
@@ -122,8 +122,8 @@ case "$1" in
     docker compose -f "$COMPOSE_FILE" --profile metrics down -v
     docker compose -f "$COMPOSE_FILE" --profile metrics up -d --pull always
     echo "✅ HTTP Proxy + Monitoring running:"
-    echo "   - Traefik Dashboard: http://localhost:8080"
-    echo "   - Grafana Dashboard: http://localhost:8081 (admin/admin)"
+    echo "   - Traefik Dashboard: http://localhost:30000"
+    echo "   - Grafana Dashboard: http://localhost:30001 (admin/admin)"
     echo "   - Prometheus: http://localhost:9090"
     ;;
   stop-metrics)
