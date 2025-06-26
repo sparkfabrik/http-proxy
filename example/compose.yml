@@ -39,7 +39,6 @@ services:
       - "traefik.enable=false"
     restart: unless-stopped
 
-  # DNS server for .docker domain resolution
   dns:
     image: ghcr.io/sparkfabrik/http-proxy-services:feature-98_migrate_to_traefik
     ports:
@@ -49,8 +48,7 @@ services:
       - "traefik.enable=false"
     restart: unless-stopped
 
-  # Main HTTP reverse proxy
-  traefik:
+  # Main HTTP reverse proxy  traefik:
     image: ghcr.io/sparkfabrik/http-proxy-traefik:feature-98_migrate_to_traefik
     container_name: http-proxy
     ports:
@@ -66,7 +64,6 @@ services:
       - "traefik.enable=false"
     restart: unless-stopped
 
-  # Optional Prometheus service (enabled with --profile metrics)
   prometheus:
     image: ghcr.io/sparkfabrik/http-proxy-prometheus:feature-98_migrate_to_traefik
     container_name: http-proxy-prometheus
@@ -80,7 +77,6 @@ services:
     profiles:
       - metrics
 
-  # Optional Grafana service (enabled with --profile metrics)
   grafana:
     image: ghcr.io/sparkfabrik/http-proxy-grafana:feature-98_migrate_to_traefik
     container_name: http-proxy-grafana
@@ -89,7 +85,6 @@ services:
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
-      # Set Traefik dashboard as default home dashboard
       - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/traefik-official.json
     volumes:
       - grafana_data:/var/lib/grafana

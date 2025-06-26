@@ -193,6 +193,19 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 		return nil
 	}
 
+	// Skip if traefik labels are already set.
+	// Check for traefik labels (any label starting with "traefik.")
+	labels := inspect.Config.Labels
+	for label := range labels {
+		if strings.HasPrefix(label, "traefik.") {
+			cl.logger.Debug("Skipping container with existing Traefik label",
+				"container_id", utils.FormatDockerID(containerID),
+				"container_name", containerInfo.Name,
+				"label", label)
+			return nil
+		}
+	}
+
 	cl.logger.Info("Found container with VIRTUAL_HOST",
 		"container_id", utils.FormatDockerID(containerID),
 		"container_name", containerInfo.Name,
