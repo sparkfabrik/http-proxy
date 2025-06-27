@@ -15,6 +15,10 @@ dev-up-metrics: ## Run the development environment with monitoring stack
 	@docker compose --profile metrics down -v
 	@docker compose --profile metrics up -d --build --remove-orphans
 
+dev-down: ## Stop the development environment
+	@echo "Stopping development environment..."
+	@docker compose --profile metrics down -v
+
 dev-logs-join-networks: ## Show logs for the joined networks
 	@echo "Showing logs for the joined networks..."
 	@docker-compose logs -f join_networks
