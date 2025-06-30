@@ -262,3 +262,13 @@ func HasManageableContainersInNetwork(ctx context.Context, dockerClient *client.
 
 	return false, nil
 }
+
+// SliceToSet converts a slice of strings to a map[string]struct{} for O(1) lookups
+// This is useful for creating sets from slices where you only need to check existence
+func SliceToSet(slice []string) map[string]struct{} {
+	set := make(map[string]struct{})
+	for _, item := range slice {
+		set[item] = struct{}{}
+	}
+	return set
+}

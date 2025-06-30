@@ -43,12 +43,17 @@ services:
     image: ghcr.io/sparkfabrik/http-proxy-services:feature-98_migrate_to_traefik
     ports:
       - "19322:19322/udp"
+    environment:
+      - DNS_TLDS=${DNS_TLDS:-loc}  # Comma-separated list of TLDs or specific domains to handle
+      - DNS_TARGET_IP=${DNS_TARGET_IP:-127.0.0.1}  # IP address to resolve domains to
+      - DNS_PORT=${DNS_PORT:-19322}  # Port for DNS server to listen on
     command: ["sh", "-c", "/usr/local/bin/dns-server"]
     labels:
       - "traefik.enable=false"
     restart: unless-stopped
 
-    # Main HTTP reverse proxy  traefik:
+  # Main HTTP reverse proxy
+  traefik:
     image: ghcr.io/sparkfabrik/http-proxy-traefik:feature-98_migrate_to_traefik
     container_name: http-proxy
     ports:

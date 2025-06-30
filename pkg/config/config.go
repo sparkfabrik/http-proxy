@@ -3,22 +3,35 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 )
 
-// Config holds common configuration values used across the application
-type Config struct {
-	DomainTLD string
-	DNSIP     string
-	DNSPort   string
+// DnsServerConfig holds common configuration values used across the application
+type DnsServerConfig struct {
+	Domains string // Comma-separated list of domains/TLDs to handle
+	DNSIP   string
+	DNSPort string
 }
 
 // Load loads configuration from environment variables with defaults
-func Load() *Config {
-	return &Config{
-		DomainTLD: GetEnvOrDefault("DOMAIN_TLD", "loc"),
-		DNSIP:     GetEnvOrDefault("DNS_IP", "127.0.0.1"),
-		DNSPort:   GetEnvOrDefault("DNS_PORT", "19322"),
+func Load() *DnsServerConfig {
+	return &DnsServerConfig{
+		Domains: GetEnvOrDefault("DNS_TLDS", "loc"),
+		DNSIP:   GetEnvOrDefault("DNS_IP", "127.0.0.1"),
+		DNSPort: GetEnvOrDefault("DNS_PORT", "19322"),
 	}
+}
+
+// SplitDomains splits the comma-separated domains/TLDs string into a slice
+func (c *DnsServerConfig) SplitDomains() []string {
+	domains := []string{}
+	for _, domain := range strings.Split(c.Domains, ",") {
+		domain = strings.TrimSpace(domain)
+		if domain != "" {
+			domains = append(domains, domain)
+		}
+	}
+	return domains
 }
 
 // GetEnvOrDefault returns the environment variable value or a default if not set

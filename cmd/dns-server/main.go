@@ -16,10 +16,10 @@ import (
 )
 
 type DNSServer struct {
-	customTLD string
-	targetIP  string
-	port      string
-	logger    *logger.Logger
+	customDomains []string
+	targetIP      string
+	port          string
+	logger        *logger.Logger
 }
 
 // handleDNSRequest processes incoming DNS queries
@@ -32,11 +32,28 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 			name,
 			w.RemoteAddr()))
 
-		// Only respond to queries for our configured TLD
+		// Only respond to queries for our configured domains/TLDs
 		// Security: Silently drop queries for domains we're not authoritative for
 		// This prevents DNS amplification attacks and reduces information leakage
-		if !strings.HasSuffix(name, "."+s.customTLD+".") {
-			s.logger.Debug(fmt.Sprintf("Dropping query for %s (not our TLD: .%s)", name, s.customTLD))
+		if len(s.customDomains) == 0 {
+			s.logger.Debug("No custom domains/TLDs configured, dropping query")
+			return
+		}
+
+		// Check if domain matches any configured domain/TLD
+		// Support both TLDs (e.g., "loc") and specific domains (e.g., "spark.loc")
+		domainWithoutDot := strings.TrimSuffix(name, ".")
+		found := false
+
+		for _, domain := range s.customDomains {
+			// Check if it's an exact match or a subdomain
+			if domainWithoutDot == domain || strings.HasSuffix(domainWithoutDot, "."+domain) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			s.logger.Debug(fmt.Sprintf("Dropping query for %s (not matching configured domains)", name))
 			return
 		}
 	}
@@ -74,7 +91,7 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 func main() {
 	var (
 		port      = flag.String("port", "", "DNS server port (overrides config)")
-		customTLD = flag.String("tld", "", "Custom TLD to handle (overrides config)")
+		customTLD = flag.String("tld", "", "Custom domain/TLD to handle (overrides config)")
 		targetIP  = flag.String("ip", "", "IP address to resolve to (overrides config)")
 	)
 	flag.Parse()
@@ -88,17 +105,22 @@ func main() {
 		cfg.DNSPort = *port
 	}
 	if *customTLD != "" {
-		cfg.DomainTLD = *customTLD
+		cfg.Domains = *customTLD
 	}
 	if *targetIP != "" {
 		cfg.DNSIP = *targetIP
 	}
 
 	server := &DNSServer{
-		customTLD: cfg.DomainTLD,
-		targetIP:  cfg.DNSIP,
-		port:      cfg.DNSPort,
-		logger:    log,
+		customDomains: cfg.SplitDomains(),
+		targetIP:      cfg.DNSIP,
+		port:          cfg.DNSPort,
+		logger:        log,
+	}
+
+	if len(server.customDomains) == 0 {
+		log.Error("No domains/TLDs configured")
+		os.Exit(1)
 	}
 
 	// Validate target IP
@@ -108,7 +130,7 @@ func main() {
 	}
 
 	log.Info("Starting DNS server", "port", cfg.DNSPort)
-	log.Info("Handling TLD", "tld", "."+cfg.DomainTLD)
+	log.Info("Handling domains/TLDs", "domains", cfg.SplitDomains())
 	log.Info("Resolving to", "target_ip", cfg.DNSIP)
 
 	// Create DNS server

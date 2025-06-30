@@ -53,7 +53,8 @@ func NewWithLevel(component string, level LogLevel) *Logger {
 		handler = slog.NewTextHandler(os.Stdout, opts)
 	}
 
-	logger := slog.New(handler)
+	// Create logger with component field as the first attribute
+	logger := slog.New(handler).With("component", component)
 
 	return &Logger{
 		Logger:    logger,
@@ -68,35 +69,30 @@ func isJSONFormat() bool {
 	return format == "json"
 }
 
-// withComponent adds the component field to all log entries
-func (l *Logger) withComponent() *slog.Logger {
-	return l.Logger.With("component", l.component)
-}
-
 // Info logs an info message with optional key-value pairs
 func (l *Logger) Info(msg string, args ...interface{}) {
-	l.withComponent().Info(msg, args...)
+	l.Logger.Info(msg, args...)
 }
 
 // Error logs an error message with optional key-value pairs
 func (l *Logger) Error(msg string, args ...interface{}) {
-	l.withComponent().Error(msg, args...)
+	l.Logger.Error(msg, args...)
 }
 
 // Debug logs a debug message with optional key-value pairs
 func (l *Logger) Debug(msg string, args ...interface{}) {
-	l.withComponent().Debug(msg, args...)
+	l.Logger.Debug(msg, args...)
 }
 
 // Warn logs a warning message with optional key-value pairs
 func (l *Logger) Warn(msg string, args ...interface{}) {
-	l.withComponent().Warn(msg, args...)
+	l.Logger.Warn(msg, args...)
 }
 
 // With returns a new logger with the given key-value pairs added to all log entries
 func (l *Logger) With(args ...interface{}) *Logger {
 	return &Logger{
-		Logger:    l.withComponent().With(args...),
+		Logger:    l.Logger.With(args...),
 		component: l.component,
 	}
 }
