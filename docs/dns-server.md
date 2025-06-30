@@ -14,11 +14,11 @@ The HTTP proxy includes a **built-in DNS server** that automatically resolves co
 
 ### Environment Variables
 
-| Variable                      | Default     | Description                                                |
-| ----------------------------- | ----------- | ---------------------------------------------------------- |
-| `HTTP_PROXY_DNS_TLDS`         | `loc`       | Comma-separated list of TLDs or specific domains to handle |
-| `HTTP_PROXY_DNS_TARGET_IP`    | `127.0.0.1` | IP address to resolve all configured domains to            |
-| `HTTP_PROXY_DNS_PORT`         | `19322`     | UDP port for the DNS server to listen on                   |
+| Variable                   | Default     | Description                                                |
+| -------------------------- | ----------- | ---------------------------------------------------------- |
+| `HTTP_PROXY_DNS_TLDS`      | `loc`       | Comma-separated list of TLDs or specific domains to handle |
+| `HTTP_PROXY_DNS_TARGET_IP` | `127.0.0.1` | IP address to resolve all configured domains to            |
+| `HTTP_PROXY_DNS_PORT`      | `19322`     | UDP port for the DNS server to listen on                   |
 
 ### Docker Compose Configuration
 
