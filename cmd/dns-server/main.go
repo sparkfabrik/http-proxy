@@ -24,6 +24,15 @@ type DNSServer struct {
 
 // handleDNSRequest processes incoming DNS queries
 func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
+	// Only respond to queries for our configured domains/TLDs
+	// Security: Silently drop queries for domains we're not authoritative for
+	// This prevents DNS amplification attacks and reduces information leakage
+	if len(s.customDomains) == 0 {
+		s.logger.Debug("No custom domains/TLDs configured, dropping query")
+		return
+	}
+
+	// First, validate that all questions are for domains we handle
 	for _, question := range r.Question {
 		name := strings.ToLower(question.Name)
 
@@ -31,14 +40,6 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 			dns.TypeToString[question.Qtype],
 			name,
 			w.RemoteAddr()))
-
-		// Only respond to queries for our configured domains/TLDs
-		// Security: Silently drop queries for domains we're not authoritative for
-		// This prevents DNS amplification attacks and reduces information leakage
-		if len(s.customDomains) == 0 {
-			s.logger.Debug("No custom domains/TLDs configured, dropping query")
-			return
-		}
 
 		// Check if domain matches any configured domain/TLD
 		// Support both TLDs (e.g., "loc") and specific domains (e.g., "spark.loc")
