@@ -304,7 +304,7 @@ test_dns_configurations() {
     cd "$original_dir"
 
     # Restore original DNS configuration
-    unset DNS_TLDS
+    unset HTTP_PROXY_DNS_TLDS
     docker-compose up -d dns --quiet-pull 2>/dev/null || true
     sleep 3
 
@@ -317,10 +317,10 @@ test_with_dns_config() {
     local should_resolve="$2"
     local should_not_resolve="$3"
 
-    log "Testing with DNS_TLDS='${config}'"
+    log "Testing with HTTP_PROXY_DNS_TLDS='${config}'"
 
     # Set environment variable and restart DNS service
-    export DNS_TLDS="$config"
+    export HTTP_PROXY_DNS_TLDS="$config"
     docker-compose up -d dns --quiet-pull 2>/dev/null || true
 
     # Wait for DNS service to be ready
@@ -642,7 +642,7 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "- Resolves configured domains and their subdomains"
     echo "- Rejects queries for non-configured domains (security)"
     echo "- Handles both TLD patterns (*.loc) and specific domains (spark.loc)"
-    echo "- Supports comma-separated domain lists in DNS_TLDS environment variable"
+    echo "- Supports comma-separated domain lists in HTTP_PROXY_DNS_TLDS environment variable"
     exit 0
 fi
 
