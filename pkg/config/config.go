@@ -16,9 +16,9 @@ type DnsServerConfig struct {
 // Load loads configuration from environment variables with defaults
 func Load() *DnsServerConfig {
 	return &DnsServerConfig{
-		Domains: GetEnvOrDefault("DNS_TLDS", "loc"),
-		DNSIP:   GetEnvOrDefault("DNS_IP", "127.0.0.1"),
-		DNSPort: GetEnvOrDefault("DNS_PORT", "19322"),
+		Domains: GetEnvOrDefault("HTTP_PROXY_DNS_TLDS", "loc"),
+		DNSIP:   GetEnvOrDefault("HTTP_PROXY_DNS_TARGET_IP", "127.0.0.1"),
+		DNSPort: GetEnvOrDefault("HTTP_PROXY_DNS_PORT", "19322"),
 	}
 }
 

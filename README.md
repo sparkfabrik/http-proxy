@@ -67,15 +67,15 @@ services:
   dns:
     environment:
       # Configure which domains to handle (comma-separated)
-      - DNS_TLDS=loc,dev # Handle any *.loc and *.dev domains
-      - DNS_TLDS=spark.loc,api.dev # Handle only specific domains
-      - DNS_TLDS=loc # Handle any *.loc domains (default)
+      - HTTP_PROXY_DNS_TLDS=loc,dev # Handle any *.loc and *.dev domains
+      - HTTP_PROXY_DNS_TLDS=spark.loc,api.dev # Handle only specific domains
+      - HTTP_PROXY_DNS_TLDS=loc # Handle any *.loc domains (default)
 
       # Where to resolve domains (default: 127.0.0.1)
-      - DNS_TARGET_IP=127.0.0.1
+      - HTTP_PROXY_DNS_TARGET_IP=127.0.0.1
 
       # DNS server port (default: 19322)
-      - DNS_PORT=19322
+      - HTTP_PROXY_DNS_PORT=19322
 ```
 
 ### DNS Usage Patterns
@@ -85,7 +85,7 @@ services:
 Configure TLDs to handle any subdomain automatically:
 
 ```bash
-# Environment: DNS_TLDS=loc
+# Environment: HTTP_PROXY_DNS_TLDS=loc
 ✅ myapp.loc → 127.0.0.1
 ✅ api.loc → 127.0.0.1
 ✅ anything.loc → 127.0.0.1
@@ -97,7 +97,7 @@ Configure TLDs to handle any subdomain automatically:
 Support multiple development TLDs:
 
 ```bash
-# Environment: DNS_TLDS=loc,dev,docker
+# Environment: HTTP_PROXY_DNS_TLDS=loc,dev,docker
 ✅ myapp.loc → 127.0.0.1
 ✅ api.dev → 127.0.0.1
 ✅ service.docker → 127.0.0.1
@@ -108,7 +108,7 @@ Support multiple development TLDs:
 Handle only specific domains for precise control:
 
 ```bash
-# Environment: DNS_TLDS=spark.loc,api.dev
+# Environment: HTTP_PROXY_DNS_TLDS=spark.loc,api.dev
 ✅ spark.loc → 127.0.0.1
 ✅ api.dev → 127.0.0.1
 ❌ other.loc → Not handled
@@ -426,15 +426,15 @@ services:
   dns:
     environment:
       # Configure which domains to handle (comma-separated)
-      - DNS_TLDS=loc,dev # Handle any *.loc and *.dev domains
-      - DNS_TLDS=spark.loc,api.dev # Handle only specific domains
-      - DNS_TLDS=loc # Handle any *.loc domains (default)
+      - HTTP_PROXY_DNS_TLDS=loc,dev # Handle any *.loc and *.dev domains
+      - HTTP_PROXY_DNS_TLDS=spark.loc,api.dev # Handle only specific domains
+      - HTTP_PROXY_DNS_TLDS=loc # Handle any *.loc domains (default)
 
       # Where to resolve domains (default: 127.0.0.1)
-      - DNS_TARGET_IP=127.0.0.1
+      - HTTP_PROXY_DNS_TARGET_IP=127.0.0.1
 
       # DNS server port (default: 19322)
-      - DNS_PORT=19322
+      - HTTP_PROXY_DNS_PORT=19322
 ```
 
 ### DNS Usage Patterns
@@ -444,7 +444,7 @@ services:
 Configure TLDs to handle any subdomain automatically:
 
 ```bash
-# Environment: DNS_TLDS=loc
+# Environment: HTTP_PROXY_DNS_TLDS=loc
 ✅ myapp.loc → 127.0.0.1
 ✅ api.loc → 127.0.0.1
 ✅ anything.loc → 127.0.0.1
@@ -456,7 +456,7 @@ Configure TLDs to handle any subdomain automatically:
 Support multiple development TLDs:
 
 ```bash
-# Environment: DNS_TLDS=loc,dev,docker
+# Environment: HTTP_PROXY_DNS_TLDS=loc,dev,docker
 ✅ myapp.loc → 127.0.0.1
 ✅ api.dev → 127.0.0.1
 ✅ service.docker → 127.0.0.1
@@ -467,7 +467,7 @@ Support multiple development TLDs:
 Handle only specific domains for precise control:
 
 ```bash
-# Environment: DNS_TLDS=spark.loc,api.dev
+# Environment: HTTP_PROXY_DNS_TLDS=spark.loc,api.dev
 ✅ spark.loc → 127.0.0.1
 ✅ api.dev → 127.0.0.1
 ❌ other.loc → Not handled

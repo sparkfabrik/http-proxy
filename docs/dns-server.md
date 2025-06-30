@@ -14,11 +14,11 @@ The HTTP proxy includes a **built-in DNS server** that automatically resolves co
 
 ### Environment Variables
 
-| Variable        | Default     | Description                                                |
-| --------------- | ----------- | ---------------------------------------------------------- |
-| `DNS_TLDS`      | `loc`       | Comma-separated list of TLDs or specific domains to handle |
-| `DNS_TARGET_IP` | `127.0.0.1` | IP address to resolve all configured domains to            |
-| `DNS_PORT`      | `19322`     | UDP port for the DNS server to listen on                   |
+| Variable                      | Default     | Description                                                |
+| ----------------------------- | ----------- | ---------------------------------------------------------- |
+| `HTTP_PROXY_DNS_TLDS`         | `loc`       | Comma-separated list of TLDs or specific domains to handle |
+| `HTTP_PROXY_DNS_TARGET_IP`    | `127.0.0.1` | IP address to resolve all configured domains to            |
+| `HTTP_PROXY_DNS_PORT`         | `19322`     | UDP port for the DNS server to listen on                   |
 
 ### Docker Compose Configuration
 
@@ -27,9 +27,9 @@ services:
   dns:
     image: ghcr.io/sparkfabrik/http-proxy-services:latest
     environment:
-      - DNS_TLDS=${DNS_TLDS:-loc}
-      - DNS_TARGET_IP=${DNS_TARGET_IP:-127.0.0.1}
-      - DNS_PORT=${DNS_PORT:-19322}
+      - HTTP_PROXY_HTTP_PROXY_DNS_TLDS=${DNS_TLDS:-loc}
+      - HTTP_PROXY_DNS_TARGET_IP=${DNS_TARGET_IP:-127.0.0.1}
+      - HTTP_PROXY_DNS_PORT=${DNS_PORT:-19322}
     ports:
       - "19322:19322/udp"
 ```
@@ -42,7 +42,7 @@ Handle any subdomain of specific top-level domains:
 
 ```bash
 # Configuration
-DNS_TLDS=loc
+HTTP_PROXY_HTTP_PROXY_DNS_TLDS=loc
 
 # Resolves:
 ✅ myapp.loc → 127.0.0.1
@@ -61,7 +61,7 @@ Support multiple development environments:
 
 ```bash
 # Configuration
-DNS_TLDS=loc,dev,docker
+HTTP_PROXY_HTTP_PROXY_DNS_TLDS=loc,dev,docker
 
 # Resolves:
 ✅ myapp.loc → 127.0.0.1
@@ -75,7 +75,7 @@ Handle only explicitly configured domains:
 
 ```bash
 # Configuration
-DNS_TLDS=spark.loc,api.dev
+HTTP_PROXY_HTTP_PROXY_DNS_TLDS=spark.loc,api.dev
 
 # Resolves:
 ✅ spark.loc → 127.0.0.1
@@ -93,7 +93,7 @@ Combine TLDs and specific domains:
 
 ```bash
 # Configuration
-DNS_TLDS=loc,myproject.dev
+HTTP_PROXY_HTTP_PROXY_DNS_TLDS=loc,myproject.dev
 
 # Resolves:
 ✅ anything.loc → 127.0.0.1      # TLD match
@@ -235,8 +235,8 @@ resolvectl status                                 # Show DNS servers per interfa
 services:
   dns:
     environment:
-      - DNS_TLDS=myproject.loc
-      - DNS_TARGET_IP=127.0.0.1
+      - HTTP_PROXY_HTTP_PROXY_DNS_TLDS=myproject.loc
+      - HTTP_PROXY_DNS_TARGET_IP=127.0.0.1
 
   web:
     environment:
@@ -254,8 +254,8 @@ services:
 services:
   dns:
     environment:
-      - DNS_TLDS=dev,staging,loc
-      - DNS_TARGET_IP=127.0.0.1
+      - HTTP_PROXY_HTTP_PROXY_DNS_TLDS=dev,staging,loc
+      - HTTP_PROXY_DNS_TARGET_IP=127.0.0.1
 
   # Development
   app-dev:
@@ -278,8 +278,8 @@ Point domains to a different IP address:
 services:
   dns:
     environment:
-      - DNS_TLDS=loc
-      - DNS_TARGET_IP=192.168.1.100 # Point to another machine
+      - HTTP_PROXY_HTTP_PROXY_DNS_TLDS=loc
+      - HTTP_PROXY_DNS_TARGET_IP=192.168.1.100 # Point to another machine
 ```
 
 ### Custom Port
@@ -290,7 +290,7 @@ Run DNS server on a different port:
 services:
   dns:
     environment:
-      - DNS_PORT=5353
+      - HTTP_PROXY_DNS_PORT=5353
     ports:
       - "5353:5353/udp"
 ```

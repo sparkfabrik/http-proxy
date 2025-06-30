@@ -12,9 +12,9 @@
 # DNS Configuration:
 #   The http-proxy includes a built-in DNS server that resolves .docker domains to localhost.
 #   You can configure different TLDs or specific domains using environment variables:
-#   - DNS_TLDS=docker,loc,dev (supports multiple TLDs)
-#   - DNS_TLDS=spark.loc,api.dev (supports specific domains)
-#   - DNS_TARGET_IP=127.0.0.1 (IP to resolve domains to)
+#   - HTTP_PROXY_DNS_TLDS=docker,loc,dev (supports multiple TLDs)
+#   - HTTP_PROXY_DNS_TLDS=spark.loc,api.dev (supports specific domains)
+#   - HTTP_PROXY_DNS_TARGET_IP=127.0.0.1 (IP to resolve domains to)
 #
 # Access examples:
 #   - http://whoami-traefik.docker
