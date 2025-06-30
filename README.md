@@ -53,6 +53,68 @@ The proxy automatically joins Docker networks that contain manageable containers
 
 📖 **[Detailed Network Joining Flow Documentation](docs/network-joining-flow.md)** - Complete technical documentation with flow diagrams explaining how automatic network discovery and joining works.
 
+## DNS Server
+
+The HTTP proxy includes a **built-in DNS server** that automatically resolves configured domains to localhost, eliminating the need to manually edit `/etc/hosts` or configure system DNS.
+
+### DNS Configuration
+
+The DNS server supports both **Top-Level Domains (TLDs)** and **specific domains**:
+
+```yaml
+# docker-compose.yml
+services:
+  dns:
+    environment:
+      # Configure which domains to handle (comma-separated)
+      - DNS_TLDS=loc,dev # Handle any *.loc and *.dev domains
+      - DNS_TLDS=spark.loc,api.dev # Handle only specific domains
+      - DNS_TLDS=loc # Handle any *.loc domains (default)
+
+      # Where to resolve domains (default: 127.0.0.1)
+      - DNS_TARGET_IP=127.0.0.1
+
+      # DNS server port (default: 19322)
+      - DNS_PORT=19322
+```
+
+### DNS Usage Patterns
+
+#### TLD Support (Recommended)
+
+Configure TLDs to handle any subdomain automatically:
+
+```bash
+# Environment: DNS_TLDS=loc
+✅ myapp.loc → 127.0.0.1
+✅ api.loc → 127.0.0.1
+✅ anything.loc → 127.0.0.1
+❌ myapp.dev → Not handled
+```
+
+#### Multiple TLDs
+
+Support multiple development TLDs:
+
+```bash
+# Environment: DNS_TLDS=loc,dev,docker
+✅ myapp.loc → 127.0.0.1
+✅ api.dev → 127.0.0.1
+✅ service.docker → 127.0.0.1
+```
+
+#### Specific Domains
+
+Handle only specific domains for precise control:
+
+```bash
+# Environment: DNS_TLDS=spark.loc,api.dev
+✅ spark.loc → 127.0.0.1
+✅ api.dev → 127.0.0.1
+❌ other.loc → Not handled
+❌ different.dev → Not handled
+```
+
 ## Certificate Management
 
 When certificates are generated or updated, **restart the proxy** to load the new certificates:
@@ -349,3 +411,111 @@ This HTTP proxy provides compatibility with the original [dinghy-http-proxy](htt
 - **HTTPS**: Unlike the original dinghy-http-proxy, HTTPS is automatically enabled for all `VIRTUAL_HOST` entries
 - **Multiple domains**: Comma-separated domains in `VIRTUAL_HOST` work the same way
 - **Container selection**: Unmanaged containers are completely ignored, preventing accidental exposure
+
+## DNS Server
+
+The HTTP proxy includes a **built-in DNS server** that automatically resolves configured domains to localhost, eliminating the need to manually edit `/etc/hosts` or configure system DNS.
+
+### DNS Configuration
+
+The DNS server supports both **Top-Level Domains (TLDs)** and **specific domains**:
+
+```yaml
+# docker-compose.yml
+services:
+  dns:
+    environment:
+      # Configure which domains to handle (comma-separated)
+      - DNS_TLDS=loc,dev # Handle any *.loc and *.dev domains
+      - DNS_TLDS=spark.loc,api.dev # Handle only specific domains
+      - DNS_TLDS=loc # Handle any *.loc domains (default)
+
+      # Where to resolve domains (default: 127.0.0.1)
+      - DNS_TARGET_IP=127.0.0.1
+
+      # DNS server port (default: 19322)
+      - DNS_PORT=19322
+```
+
+### DNS Usage Patterns
+
+#### TLD Support (Recommended)
+
+Configure TLDs to handle any subdomain automatically:
+
+```bash
+# Environment: DNS_TLDS=loc
+✅ myapp.loc → 127.0.0.1
+✅ api.loc → 127.0.0.1
+✅ anything.loc → 127.0.0.1
+❌ myapp.dev → Not handled
+```
+
+#### Multiple TLDs
+
+Support multiple development TLDs:
+
+```bash
+# Environment: DNS_TLDS=loc,dev,docker
+✅ myapp.loc → 127.0.0.1
+✅ api.dev → 127.0.0.1
+✅ service.docker → 127.0.0.1
+```
+
+#### Specific Domains
+
+Handle only specific domains for precise control:
+
+```bash
+# Environment: DNS_TLDS=spark.loc,api.dev
+✅ spark.loc → 127.0.0.1
+✅ api.dev → 127.0.0.1
+❌ other.loc → Not handled
+❌ different.dev → Not handled
+```
+
+### System DNS Configuration
+
+To use the built-in DNS server, configure your system to use it for domain resolution:
+
+#### Linux (systemd-resolved)
+
+```bash
+# Configure systemd-resolved to use http-proxy DNS for .loc domains
+sudo mkdir -p /etc/systemd/resolved.conf.d
+sudo tee /etc/systemd/resolved.conf.d/http-proxy.conf > /dev/null <<EOF
+[Resolve]
+DNS=172.17.0.1:19322
+Domains=~loc
+EOF
+
+# Restart systemd-resolved to apply changes
+sudo systemctl restart systemd-resolved
+
+# Verify configuration
+systemd-resolve --status
+```
+
+#### macOS
+
+```bash
+# Configure specific domains (recommended)
+sudo mkdir -p /etc/resolver
+echo "nameserver 127.0.0.1" | sudo tee /etc/resolver/loc
+echo "port 19322" | sudo tee -a /etc/resolver/loc
+```
+
+#### Manual Testing
+
+You can test DNS resolution manually without system configuration:
+
+```bash
+# Test with dig
+dig @127.0.0.1 -p 19322 myapp.loc
+
+# Test with nslookup
+nslookup myapp.loc 127.0.0.1 19322
+
+# Test with curl (using custom DNS)
+curl --dns-servers 127.0.0.1:19322 http://myapp.loc
+```
