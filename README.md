@@ -7,6 +7,14 @@
 
 Perfect for local development environments, this proxy eliminates manual configuration by detecting containers with `VIRTUAL_HOST` environment variables and instantly making them accessible via custom domains. **Only explicitly configured containers are managed**, ensuring security by default.
 
+## Features
+
+- 🚀 **Automatic Container Discovery** - Zero-configuration HTTP routing for containers with `VIRTUAL_HOST` environment variables or Traefik labels
+- 🌐 **Built-in DNS Server** - Resolves custom domains (`.loc`, `.dev`, etc.) to localhost, eliminating manual `/etc/hosts` editing
+- 🌍 **Dynamic Network Management** - Automatically joins Docker networks containing manageable containers for seamless routing
+- 🔐 **Automatic HTTPS Support** - Provides both HTTP and HTTPS routes with auto-generated certificates and mkcert integration for trusted local certificates
+- 📊 **Monitoring Ready** - Optional Prometheus metrics and Grafana dashboards for traffic monitoring and performance analysis
+
 > **Note**: This is a refactored and enhanced version of the [codekitchen/dinghy-http-proxy](https://github.com/codekitchen/dinghy-http-proxy) project. Spark HTTP Proxy is an HTTP Proxy and DNS server originally designed for [Dinghy](https://github.com/codekitchen/dinghy) but enhanced for broader use cases and improved maintainability.
 
 ## Quick Start
