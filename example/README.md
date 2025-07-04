@@ -114,7 +114,7 @@ By default, the DNS server operates in purely authoritative mode for the managed
 To enable forwarding to upstream DNS servers for external domains:
 
 ```bash
-# Set environment variable  
+# Set environment variable
 DNS_FORWARD_ENABLED=true
 
 # In docker-compose.yml
@@ -240,6 +240,7 @@ docker run -e LOG_LEVEL=debug ghcr.io/sparkfabrik/http-proxy-services:latest
 ### Other Environment Variables
 
 - **`LOG_FORMAT`** - Set to `json` for structured JSON logging (default: text)
+- **`DNS_UPSTREAM_SERVERS`** - Comma-separated list of upstream DNS servers for forwarding (default: 8.8.8.8:53,1.1.1.1:53)
 - **`DRY_RUN`** - Set to `true` to enable dry-run mode for dinghy-layer service
 
 ## Adding Your Own Services

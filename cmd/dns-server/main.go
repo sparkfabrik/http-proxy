@@ -16,21 +16,19 @@ import (
 )
 
 type DNSServer struct {
-	customTLD      string
-	targetIP       string
-	port           string
-	forwardEnabled bool
-	logger         *logger.Logger
+	customTLD       string
+	targetIP        string
+	port            string
+	forwardEnabled  bool
+	upstreamServers []string
+	logger          *logger.Logger
 }
 
 // forwardDNSQuery forwards DNS queries to upstream servers
 func (s *DNSServer) forwardDNSQuery(r *dns.Msg) (*dns.Msg, error) {
 	c := dns.Client{Timeout: 5 * time.Second}
 
-	// Use common public DNS servers as fallback
-	upstreamServers := []string{"8.8.8.8:53", "1.1.1.1:53"}
-
-	for _, server := range upstreamServers {
+	for _, server := range s.upstreamServers {
 		resp, _, err := c.Exchange(r, server)
 		if err == nil {
 			s.logger.Debug("Forwarded query", "server", server)
@@ -139,11 +137,12 @@ func main() {
 	}
 
 	server := &DNSServer{
-		customTLD:      cfg.DomainTLD,
-		targetIP:       cfg.DNSIP,
-		port:           cfg.DNSPort,
-		forwardEnabled: cfg.DNSForwardEnabled,
-		logger:         log,
+		customTLD:       cfg.DomainTLD,
+		targetIP:        cfg.DNSIP,
+		port:            cfg.DNSPort,
+		forwardEnabled:  cfg.DNSForwardEnabled,
+		upstreamServers: cfg.DNSUpstreamServers,
+		logger:          log,
 	}
 
 	// Validate target IP

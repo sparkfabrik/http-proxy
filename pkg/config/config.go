@@ -3,14 +3,16 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Config holds common configuration values used across the application
 type Config struct {
-	DomainTLD         string
-	DNSIP             string
-	DNSPort           string
-	DNSForwardEnabled bool
+	DomainTLD          string
+	DNSIP              string
+	DNSPort            string
+	DNSForwardEnabled  bool
+	DNSUpstreamServers []string
 }
 
 // Load loads configuration from environment variables with defaults
@@ -36,6 +38,24 @@ func GetEnvOrDefaultInt(key string, defaultValue int) int {
 	if value := os.Getenv(key); value != "" {
 		if intValue, err := strconv.Atoi(value); err == nil {
 			return intValue
+		}
+	}
+	return defaultValue
+}
+
+// GetEnvOrDefaultStringSlice returns an environment variable as a comma-separated slice or a default
+func GetEnvOrDefaultStringSlice(key string, defaultValue []string) []string {
+	if value := os.Getenv(key); value != "" {
+		// Split by comma and trim whitespace
+		parts := strings.Split(value, ",")
+		result := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if trimmed := strings.TrimSpace(part); trimmed != "" {
+				result = append(result, trimmed)
+			}
+		}
+		if len(result) > 0 {
+			return result
 		}
 	}
 	return defaultValue
