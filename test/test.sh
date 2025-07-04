@@ -281,6 +281,174 @@ test_all_dns() {
     fi
 }
 
+# Test upstream DNS server functionality
+test_upstream_dns() {
+    log "Testing upstream DNS server functionality..."
+    log "=========================================="
+
+    # First, check if DNS server is accessible
+    if ! check_dns_server; then
+        error "DNS server not accessible, skipping upstream tests"
+        return 1
+    fi
+
+    local upstream_tests_passed=0
+    local upstream_tests_total=0
+
+    # Check if dig is available
+    if ! command -v dig >/dev/null 2>&1; then
+        log "dig command not available, skipping upstream DNS tests"
+        return 0
+    fi
+
+    # Test 1: Query for a domain not in our configured domains but that should resolve via upstream
+    # We'll use google.com as it should always resolve via upstream servers
+    log "Test 1: Testing forwarding of external domain (google.com)..."
+    upstream_tests_total=$((upstream_tests_total + 1))
+
+    local external_result
+    local external_exit_code
+    external_result=$(dig @127.0.0.1 -p 19322 "google.com" +short +time=5 +tries=2 2>/dev/null)
+    external_exit_code=$?
+
+    if [ $external_exit_code -eq 0 ] && [ -n "$external_result" ] && [[ "$external_result" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        success "External domain google.com correctly forwarded to upstream servers (resolved to: ${external_result})"
+        upstream_tests_passed=$((upstream_tests_passed + 1))
+    else
+        # Check if forwarding is enabled - if disabled, this is expected behavior
+        log "Checking if DNS forwarding is enabled..."
+        local forwarding_enabled=$(docker compose exec -T dns env | grep DNS_FORWARD_ENABLED || echo "")
+
+        if [[ "$forwarding_enabled" == *"false"* ]] || [ -z "$forwarding_enabled" ]; then
+            warning "External domain google.com not resolved - DNS forwarding appears to be disabled (this is expected)"
+            upstream_tests_passed=$((upstream_tests_passed + 1))
+        else
+            error "External domain google.com failed to resolve via upstream servers (exit: ${external_exit_code}, result: ${external_result})"
+        fi
+    fi
+
+    # Test 2: Query for another well-known external domain
+    log "Test 2: Testing forwarding of another external domain (cloudflare.com)..."
+    upstream_tests_total=$((upstream_tests_total + 1))
+
+    local cf_result
+    local cf_exit_code
+    cf_result=$(dig @127.0.0.1 -p 19322 "cloudflare.com" +short +time=5 +tries=2 2>/dev/null)
+    cf_exit_code=$?
+
+    if [ $cf_exit_code -eq 0 ] && [ -n "$cf_result" ] && [[ "$cf_result" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        success "External domain cloudflare.com correctly forwarded to upstream servers (resolved to: ${cf_result})"
+        upstream_tests_passed=$((upstream_tests_passed + 1))
+    else
+        # Check if forwarding is enabled - if disabled, this is expected behavior
+        local forwarding_enabled=$(docker compose exec -T dns env | grep DNS_FORWARD_ENABLED || echo "")
+
+        if [[ "$forwarding_enabled" == *"false"* ]] || [ -z "$forwarding_enabled" ]; then
+            warning "External domain cloudflare.com not resolved - DNS forwarding appears to be disabled (this is expected)"
+            upstream_tests_passed=$((upstream_tests_passed + 1))
+        else
+            error "External domain cloudflare.com failed to resolve via upstream servers (exit: ${cf_exit_code}, result: ${cf_result})"
+        fi
+    fi
+
+    # Test 3: Verify configured domains still resolve to our target IP
+    log "Test 3: Verifying configured domains still resolve to target IP..."
+    upstream_tests_total=$((upstream_tests_total + 1))
+
+    if test_dns "test.spark.loc" "should_resolve"; then
+        success "Configured domain test.spark.loc still resolves correctly to target IP"
+        upstream_tests_passed=$((upstream_tests_passed + 1))
+    else
+        error "Configured domain test.spark.loc failed to resolve to target IP"
+    fi
+
+    log "Upstream DNS Test Results: ${upstream_tests_passed}/${upstream_tests_total} tests passed"
+
+    if [ "$upstream_tests_passed" -eq "$upstream_tests_total" ]; then
+        success "All upstream DNS tests passed"
+        return 0
+    else
+        warning "Some upstream DNS tests failed (${upstream_tests_passed}/${upstream_tests_total})"
+        return 1
+    fi
+}
+
+# Test DNS with forwarding enabled and disabled
+test_dns_forwarding_configurations() {
+    log "Testing DNS server with different forwarding configurations..."
+    log "============================================================"
+
+    local original_dir=$(pwd)
+    cd "$(dirname "$0")/.."
+
+    local config_tests_passed=0
+    local config_tests_total=2
+
+    # Test configuration 1: Forwarding enabled
+    log "Configuration Test 1: DNS forwarding enabled"
+    export DNS_FORWARD_ENABLED="true"
+    export DNS_UPSTREAM_SERVERS="8.8.8.8:53,1.1.1.1:53"
+    docker compose up -d dns --quiet-pull 2>/dev/null || true
+    sleep 5
+
+    if check_dns_server; then
+        # Test external domain resolution
+        local external_result
+        external_result=$(dig @127.0.0.1 -p 19322 "google.com" +short +time=5 +tries=2 2>/dev/null)
+
+        if [ -n "$external_result" ] && [[ "$external_result" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            success "DNS forwarding enabled: external domains resolve correctly"
+            config_tests_passed=$((config_tests_passed + 1))
+        else
+            warning "DNS forwarding enabled but external domain resolution failed"
+        fi
+    else
+        warning "DNS server not accessible for forwarding enabled test"
+    fi
+
+    # Test configuration 2: Forwarding disabled
+    log "Configuration Test 2: DNS forwarding disabled"
+    export DNS_FORWARD_ENABLED="false"
+    docker compose up -d dns --quiet-pull 2>/dev/null || true
+    sleep 5
+
+    if check_dns_server; then
+        # Test that external domains do NOT resolve
+        local external_result
+        local external_exit_code
+        external_result=$(dig @127.0.0.1 -p 19322 "google.com" +short +time=3 +tries=1 2>/dev/null)
+        external_exit_code=$?
+
+        # With forwarding disabled, external domains should either not resolve or timeout
+        if [ $external_exit_code -ne 0 ] || [ -z "$external_result" ]; then
+            success "DNS forwarding disabled: external domains correctly rejected"
+            config_tests_passed=$((config_tests_passed + 1))
+        else
+            warning "DNS forwarding disabled but external domain still resolved: ${external_result}"
+        fi
+    else
+        warning "DNS server not accessible for forwarding disabled test"
+    fi
+
+    cd "$original_dir"
+
+    # Restore original configuration
+    unset DNS_FORWARD_ENABLED
+    unset DNS_UPSTREAM_SERVERS
+    docker compose up -d dns --quiet-pull 2>/dev/null || true
+    sleep 3
+
+    log "DNS forwarding configuration tests: ${config_tests_passed}/${config_tests_total} passed"
+
+    if [ "$config_tests_passed" -eq "$config_tests_total" ]; then
+        success "DNS forwarding configuration tests passed"
+        return 0
+    else
+        warning "Some DNS forwarding configuration tests failed"
+        return 1
+    fi
+}
+
 # Test DNS server with different configurations using docker-compose
 test_dns_configurations() {
     log "Testing DNS server with different configurations..."
@@ -576,8 +744,31 @@ main() {
         return 1
     fi
 
-    # Step 5: Test DNS server configurations
-    log "Step 5: Testing DNS server configurations..."
+    # Step 5: Test upstream DNS functionality
+    log "Step 5: Testing upstream DNS functionality..."
+    log "============================================"
+
+    if ! test_upstream_dns; then
+        warning "Upstream DNS tests failed, but continuing..."
+        # Don't fail the entire test suite for upstream tests
+    fi
+
+    # Step 6: Test DNS forwarding configurations
+    log "Step 6: Testing DNS forwarding configurations..."
+    log "==============================================="
+
+    # Only run forwarding configuration tests if we have dig available
+    if command -v dig >/dev/null 2>&1; then
+        if ! test_dns_forwarding_configurations; then
+            warning "DNS forwarding configuration tests failed, but continuing..."
+            # Don't fail the entire test suite for configuration tests
+        fi
+    else
+        log "Skipping DNS forwarding configuration tests (dig command not available)"
+    fi
+
+    # Step 7: Test DNS server configurations
+    log "Step 7: Testing DNS server configurations..."
     log "==========================================="
 
     # Only run configuration tests if we have dig available
@@ -631,7 +822,11 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "   - TLD support (any subdomain of configured TLD should resolve)"
     echo "   - Negative tests (non-configured domains should be rejected)"
     echo "   - Edge cases and malformed domain handling"
-    echo "6. Testing different DNS server configurations using docker-compose:"
+    echo "6. Testing upstream DNS server functionality:"
+    echo "   - External domain forwarding when enabled"
+    echo "   - Configured domain resolution to target IP"
+    echo "   - Forwarding disabled behavior verification"
+    echo "7. Testing different DNS server configurations using docker-compose:"
     echo "   - Single TLD: loc"
     echo "   - Multiple TLDs: loc,dev"
     echo "   - Specific domains: spark.loc,spark.dev"

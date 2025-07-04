@@ -33,13 +33,12 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - DNS_FORWARD_ENABLED=${DNS_FORWARD_ENABLED:-false}
       - DNS_UPSTREAM_SERVERS=${DNS_UPSTREAM_SERVERS:-8.8.8.8:53,1.1.1.1:53}
-    ports:
-      - "19322:19322/udp"
-    command: ["sh", "-c", "/usr/local/bin/dns-server"]
-    environment:
       - HTTP_PROXY_DNS_TLDS=${HTTP_PROXY_DNS_TLDS:-loc}
       - HTTP_PROXY_DNS_TARGET_IP=${HTTP_PROXY_DNS_TARGET_IP:-127.0.0.1}
       - HTTP_PROXY_DNS_PORT=${HTTP_PROXY_DNS_PORT:-19322}
+    ports:
+      - "19322:19322/udp"
+    command: ["sh", "-c", "/usr/local/bin/dns-server"]
     labels:
       - "traefik.enable=false"
 
