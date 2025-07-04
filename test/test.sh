@@ -553,24 +553,21 @@ test_dns_configurations() {
 test_with_dns_config() {
     local config="$1"
     local should_resolve="$2"
-    local should_not_resolve="$3"
-
-    log "Testing with HTTP_PROXY_DNS_TLDS='${config}'"
-
-    # Set environment variable and restart DNS service properly
-    export HTTP_PROXY_DNS_TLDS="$config"
+    local should_not_resolve="$3"    log "Testing with HTTP_PROXY_DNS_TLDS='${config}'"
 
     # Stop the DNS service first to ensure clean restart
     log "Stopping DNS service to apply new configuration..."
     docker-compose stop dns 2>/dev/null || true
     docker-compose rm -f dns 2>/dev/null || true
-
-    # Start DNS service with new environment
+    
+    # Start DNS service with new environment variable explicitly set
     log "Starting DNS service with config: ${config}"
-    docker-compose up -d dns --quiet-pull 2>/dev/null || true
+    export HTTP_PROXY_DNS_TLDS="$config"
+    log "Debug: Current HTTP_PROXY_DNS_TLDS environment variable: '${HTTP_PROXY_DNS_TLDS}'"
+    docker-compose up -d dns --force-recreate --quiet-pull 2>/dev/null || true
 
     # Wait longer for DNS service to be ready with new config
-    sleep 8
+    sleep 10
 
     if ! check_dns_server; then
         warning "DNS server not accessible for config '${config}', skipping"
@@ -579,7 +576,17 @@ test_with_dns_config() {
 
     # Verify that the DNS server picked up the new configuration
     log "Verifying DNS server configuration was applied..."
-    docker compose logs --tail=5 dns 2>/dev/null | grep "Handling domains/TLDs" | tail -1 || log "Could not verify DNS configuration"
+    sleep 2  # Give logs time to appear
+    local dns_config_log=$(docker compose logs --tail=20 dns 2>/dev/null | grep "Handling domains/TLDs" | tail -1)
+    if [ -n "$dns_config_log" ]; then
+        log "DNS server configuration: ${dns_config_log}"
+    else
+        warning "Could not verify DNS configuration from logs"
+    fi
+    
+    # Also check environment variables inside the container
+    log "Checking DNS server environment variables..."
+    docker compose exec -T dns env | grep HTTP_PROXY_DNS_TLDS || log "HTTP_PROXY_DNS_TLDS not found in container environment"
 
     local config_tests_passed=0
     local config_tests_total=0
