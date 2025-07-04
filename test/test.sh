@@ -320,7 +320,7 @@ test_upstream_dns() {
         local forwarding_enabled=$(docker compose exec -T dns env | grep HTTP_PROXY_DNS_FORWARD_ENABLED || echo "")
 
         if [[ "$forwarding_enabled" == *"false"* ]] || [ -z "$forwarding_enabled" ]; then
-            warning "External domain google.com not resolved - DNS forwarding appears to be disabled (this is expected)"
+            success "External domain google.com not resolved - DNS forwarding is disabled (this is expected behavior)"
             upstream_tests_passed=$((upstream_tests_passed + 1))
         else
             error "External domain google.com failed to resolve via upstream servers (exit: ${external_exit_code}, result: ${external_result})"
@@ -344,7 +344,7 @@ test_upstream_dns() {
         local forwarding_enabled=$(docker compose exec -T dns env | grep HTTP_PROXY_DNS_FORWARD_ENABLED || echo "")
 
         if [[ "$forwarding_enabled" == *"false"* ]] || [ -z "$forwarding_enabled" ]; then
-            warning "External domain cloudflare.com not resolved - DNS forwarding appears to be disabled (this is expected)"
+            success "External domain cloudflare.com not resolved - DNS forwarding is disabled (this is expected behavior)"
             upstream_tests_passed=$((upstream_tests_passed + 1))
         else
             error "External domain cloudflare.com failed to resolve via upstream servers (exit: ${cf_exit_code}, result: ${cf_result})"

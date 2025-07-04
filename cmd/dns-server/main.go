@@ -14,6 +14,9 @@ import (
 	"github.com/sparkfabrik/http-proxy/pkg/logger"
 )
 
+// DNS_TIMEOUT defines the timeout for DNS queries to upstream servers
+const DNS_UPSTREAM_TIMEOUT = 5 * time.Second
+
 type DNSServer struct {
 	customDomains   []string
 	targetIP        string
@@ -25,7 +28,7 @@ type DNSServer struct {
 
 // forwardDNSQuery forwards DNS queries to upstream servers
 func (s *DNSServer) forwardDNSQuery(r *dns.Msg) (*dns.Msg, error) {
-	c := dns.Client{Timeout: 5 * time.Second}
+	c := dns.Client{Timeout: DNS_UPSTREAM_TIMEOUT}
 
 	for _, server := range s.upstreamServers {
 		resp, _, err := c.Exchange(r, server)
