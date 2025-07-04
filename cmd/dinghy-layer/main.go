@@ -1,3 +1,7 @@
+// Package main implements a compatibility layer for dinghy-http-proxy that
+// translates Docker container environment variables (VIRTUAL_HOST, VIRTUAL_PORT)
+// into Traefik dynamic configuration files. This allows containers configured
+// for nginx-proxy/jwilder to work seamlessly with Traefik without modification.
 package main
 
 import (
@@ -31,14 +35,20 @@ const (
 	ConfigDirPermissions = 0755
 )
 
-// CompatibilityLayer implements the service.EventHandler interface
+// CompatibilityLayer implements the service.EventHandler interface and provides
+// a compatibility layer that translates nginx-proxy environment variables to
+// Traefik dynamic configuration. It monitors Docker events and generates
+// appropriate Traefik routing rules for containers with VIRTUAL_HOST variables.
 type CompatibilityLayer struct {
 	dockerClient *client.Client
 	logger       *logger.Logger
 	config       *CompatibilityConfig
 }
 
-// CompatibilityConfig holds the configuration for the compatibility layer
+// CompatibilityConfig holds the configuration options for the compatibility layer.
+// It controls the behavior of the dinghy compatibility service including dry-run
+// mode, logging level, and the directory where Traefik dynamic configuration
+// files should be written.
 type CompatibilityConfig struct {
 	DryRun            bool
 	LogLevel          string
@@ -72,7 +82,9 @@ func (cl *CompatibilityLayer) SetDependencies(dockerClient *client.Client, logge
 	cl.logger = logger
 }
 
-// TraefikLabels represents the labels to be applied to containers
+// TraefikLabels represents the Traefik labels that would be applied to containers
+// for manual configuration. This struct is used for reference but the actual
+// implementation generates dynamic configuration files instead of container labels.
 type TraefikLabels struct {
 	Enable      string
 	Rule        string
@@ -81,7 +93,9 @@ type TraefikLabels struct {
 	ServiceName string
 }
 
-// ContainerInfo holds essential container information for processing
+// ContainerInfo holds essential container information extracted from Docker
+// container inspection. This struct contains the minimal set of data needed
+// to generate Traefik configuration from nginx-proxy environment variables.
 type ContainerInfo struct {
 	ID          string
 	Name        string
