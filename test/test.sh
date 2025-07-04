@@ -3,7 +3,7 @@
 # HTTP Proxy Integration Test Script
 # Tests the refactored dinghy-layer and join-networks services
 
-set -e
+set -xe
 
 # Colors for output
 RED='\033[0;31m'
