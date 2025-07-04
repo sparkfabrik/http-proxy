@@ -33,10 +33,10 @@ func (s *DNSServer) forwardDNSQuery(r *dns.Msg) (*dns.Msg, error) {
 	for _, server := range upstreamServers {
 		resp, _, err := c.Exchange(r, server)
 		if err == nil {
-			s.logger.Debug(fmt.Sprintf("Forwarded query to %s successfully", server))
+			s.logger.Debug("Forwarded query", "server", server)
 			return resp, nil
 		}
-		s.logger.Debug(fmt.Sprintf("Failed to forward to %s: %v", server, err))
+		s.logger.Debug("Failed to forward", "server", server, "error", err)
 	}
 
 	return nil, fmt.Errorf("all upstream servers failed")
