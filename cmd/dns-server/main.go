@@ -94,8 +94,10 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 					w.WriteMsg(response)
 				}
 			} else {
-				// Forwarding disabled - drop query silently
-				s.logger.Debug(fmt.Sprintf("Dropping query for %s (not matching configured domains)", name))
+				// Forwarding disabled - send REFUSED response
+				s.logger.Debug(fmt.Sprintf("Sending REFUSED response for %s (not matching configured domains)", name))
+				refusedResp := s.createRefusedResponse(r)
+				w.WriteMsg(refusedResp)
 			}
 			return
 		}
