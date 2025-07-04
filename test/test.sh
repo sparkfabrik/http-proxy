@@ -3,7 +3,7 @@
 # HTTP Proxy Integration Test Script
 # Tests the refactored dinghy-layer and join-networks services
 
-set -xe
+set -e
 
 # Colors for output
 RED='\033[0;31m'
@@ -807,9 +807,11 @@ main() {
 
     if [ "$all_tests_passed" = true ]; then
         success "All tests passed! HTTP proxy is working correctly."
+        log "Exit code: 0 (success)"
         return 0
     else
         error "Some tests failed. Check the logs above for details."
+        log "Exit code: 1 (failure)"
         return 1
     fi
 }
@@ -860,5 +862,16 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     exit 0
 fi
 
-# Run the main test
+# Run the main test and capture exit code
 main "$@"
+exit_code=$?
+
+# Log final result
+if [ $exit_code -eq 0 ]; then
+    log "🎉 All tests completed successfully!"
+else
+    log "❌ Tests failed with exit code: $exit_code"
+fi
+
+# Exit with the same code as main function
+exit $exit_code
