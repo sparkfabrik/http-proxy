@@ -83,7 +83,7 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 			// Not our domain - handle based on forwarding configuration
 			if s.forwardEnabled {
 				// Forward to upstream DNS servers
-				s.logger.Debug(fmt.Sprintf("Forwarding query for %s to upstream servers", name))
+				s.logger.Debug("Forwarding query to upstream servers", "name", name)
 				response, err := s.forwardDNSQuery(r)
 				if err != nil {
 					s.logger.Debug(fmt.Sprintf("Failed to forward query for %s: %v", name, err))
