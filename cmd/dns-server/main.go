@@ -162,6 +162,9 @@ func main() {
 	log.Info("Handling domains/TLDs", "domains", cfg.Domains)
 	log.Info("Resolving to", "target_ip", cfg.DNSIP)
 	log.Info("DNS forwarding", "forward_enabled", cfg.DNSForwardEnabled)
+	if cfg.DNSForwardEnabled {
+		log.Info("DNS upstream servers", "servers", cfg.DNSUpstreamServers)
+	}
 
 	// Create DNS server
 	dns.HandleFunc(".", server.handleDNSRequest)

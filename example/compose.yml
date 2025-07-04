@@ -45,8 +45,8 @@ services:
     image: ghcr.io/sparkfabrik/http-proxy-services:feature-98_migrate_to_traefik
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - DNS_FORWARD_ENABLED=${DNS_FORWARD_ENABLED:-false}
-      - DNS_UPSTREAM_SERVERS=${DNS_UPSTREAM_SERVERS:-8.8.8.8:53,1.1.1.1:53}
+      - HTTP_PROXY_DNS_FORWARD_ENABLED=${HTTP_PROXY_DNS_FORWARD_ENABLED:-false}
+      - HTTP_PROXY_DNS_UPSTREAM_SERVERS=${HTTP_PROXY_DNS_UPSTREAM_SERVERS:-8.8.8.8:53,1.1.1.1:53}
       - HTTP_PROXY_DNS_TLDS=${HTTP_PROXY_DNS_TLDS:-loc}  # Comma-separated list of TLDs or specific domains to handle
       - HTTP_PROXY_DNS_TARGET_IP=${HTTP_PROXY_DNS_TARGET_IP:-127.0.0.1}  # IP address to resolve domains to
       - HTTP_PROXY_DNS_PORT=${HTTP_PROXY_DNS_PORT:-19322}  # Port for DNS server to listen on

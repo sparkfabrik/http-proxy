@@ -21,8 +21,8 @@ func Load() *Config {
 		Domains:            GetEnvOrDefaultStringSlice("HTTP_PROXY_DNS_TLDS", []string{"loc"}),
 		DNSIP:              GetEnvOrDefault("HTTP_PROXY_DNS_TARGET_IP", "127.0.0.1"),
 		DNSPort:            GetEnvOrDefault("HTTP_PROXY_DNS_PORT", "19322"),
-		DNSForwardEnabled:  strings.ToLower(GetEnvOrDefault("DNS_FORWARD_ENABLED", "false")) == "true",
-		DNSUpstreamServers: GetEnvOrDefaultStringSlice("DNS_UPSTREAM_SERVERS", []string{"8.8.8.8:53", "1.1.1.1:53"}),
+		DNSForwardEnabled:  strings.ToLower(GetEnvOrDefault("HTTP_PROXY_DNS_FORWARD_ENABLED", "false")) == "true",
+		DNSUpstreamServers: GetEnvOrDefaultStringSlice("HTTP_PROXY_DNS_UPSTREAM_SERVERS", []string{"8.8.8.8:53", "1.1.1.1:53"}),
 	}
 }
 

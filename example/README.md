@@ -115,19 +115,19 @@ To enable forwarding to upstream DNS servers for external domains:
 
 ```bash
 # Set environment variable
-DNS_FORWARD_ENABLED=true
+HTTP_PROXY_DNS_FORWARD_ENABLED=true
 
 # In docker-compose.yml
 services:
   dns:
     environment:
-      - DNS_FORWARD_ENABLED=true
+      - HTTP_PROXY_DNS_FORWARD_ENABLED=true
 ```
 
 **Behavior:**
 
-- `DNS_FORWARD_ENABLED=false` (default): Return REFUSED for external domains
-- `DNS_FORWARD_ENABLED=true`: Forward external domains to upstream DNS
+- `HTTP_PROXY_DNS_FORWARD_ENABLED=false` (default): Return REFUSED for external domains
+- `HTTP_PROXY_DNS_FORWARD_ENABLED=true`: Forward external domains to upstream DNS
 
 **Example:**
 
@@ -240,7 +240,8 @@ docker run -e LOG_LEVEL=debug ghcr.io/sparkfabrik/http-proxy-services:latest
 ### Other Environment Variables
 
 - **`LOG_FORMAT`** - Set to `json` for structured JSON logging (default: text)
-- **`DNS_UPSTREAM_SERVERS`** - Comma-separated list of upstream DNS servers for forwarding (default: 8.8.8.8:53,1.1.1.1:53)
+- **`HTTP_PROXY_DNS_UPSTREAM_SERVERS`** - Comma-separated list of upstream DNS servers for forwarding (default: 8.8.8.8:53,1.1.1.1:53)
+- **`HTTP_PROXY_DNS_FORWARD_ENABLED`** - Enable/disable DNS forwarding for external domains (default: false)
 - **`DRY_RUN`** - Set to `true` to enable dry-run mode for dinghy-layer service
 
 ## Adding Your Own Services
