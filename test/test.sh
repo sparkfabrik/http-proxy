@@ -562,11 +562,25 @@ test_with_dns_config() {
     docker-compose stop dns 2>/dev/null || true
     docker-compose rm -f dns 2>/dev/null || true
 
-    # Start DNS service with new environment variable explicitly set
+    # Create a temporary .env file with the new configuration
+    local temp_env_file=$(mktemp)
+    echo "HTTP_PROXY_DNS_TLDS=${config}" > "$temp_env_file"
+    echo "LOG_LEVEL=${LOG_LEVEL:-info}" >> "$temp_env_file"
+    echo "HTTP_PROXY_DNS_FORWARD_ENABLED=${HTTP_PROXY_DNS_FORWARD_ENABLED:-false}" >> "$temp_env_file"
+    echo "HTTP_PROXY_DNS_UPSTREAM_SERVERS=${HTTP_PROXY_DNS_UPSTREAM_SERVERS:-8.8.8.8:53,1.1.1.1:53}" >> "$temp_env_file"
+    echo "HTTP_PROXY_DNS_TARGET_IP=${HTTP_PROXY_DNS_TARGET_IP:-127.0.0.1}" >> "$temp_env_file"
+    echo "HTTP_PROXY_DNS_PORT=${HTTP_PROXY_DNS_PORT:-19322}" >> "$temp_env_file"
+
+    log "Debug: Created temporary .env file: ${temp_env_file}"
+    log "Debug: Contents of temporary .env file:"
+    cat "$temp_env_file"
+
+    # Start DNS service with the temporary environment file
     log "Starting DNS service with config: ${config}"
-    export HTTP_PROXY_DNS_TLDS="$config"
-    log "Debug: Current HTTP_PROXY_DNS_TLDS environment variable: '${HTTP_PROXY_DNS_TLDS}'"
-    docker-compose up -d dns --force-recreate --quiet-pull 2>/dev/null || true
+    docker-compose --env-file "$temp_env_file" up -d dns --force-recreate --quiet-pull 2>/dev/null || true
+
+    # Clean up the temporary file
+    rm -f "$temp_env_file"
 
     # Wait longer for DNS service to be ready with new config
     sleep 10
