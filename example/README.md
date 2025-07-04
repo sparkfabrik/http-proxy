@@ -107,6 +107,40 @@ docker compose -f compose.examples.yml ps
 - <http://nginx.docker> and <http://www.nginx.docker>
 - <http://whoami-https.docker> and <https://whoami-https.docker> (HTTPS example)
 
+### DNS Forwarding Configuration
+
+By default, the DNS server operates in purely authoritative mode for the managed TLD (e.g., `.docker`) and returns REFUSED for external domains. This ensures security by not forwarding external DNS queries.
+
+To enable forwarding to upstream DNS servers for external domains:
+
+```bash
+# Set environment variable  
+DNS_FORWARD_ENABLED=true
+
+# In docker-compose.yml
+services:
+  dns:
+    environment:
+      - DNS_FORWARD_ENABLED=true
+```
+
+**Behavior:**
+
+- `DNS_FORWARD_ENABLED=false` (default): Return REFUSED for external domains
+- `DNS_FORWARD_ENABLED=true`: Forward external domains to upstream DNS
+
+**Example:**
+
+```bash
+# With forwarding disabled (default)
+❯ dig @127.0.0.1 -p 19322 google.com
+# Returns: status: REFUSED
+
+# With forwarding enabled
+❯ dig @127.0.0.1 -p 19322 google.com
+# Returns: google.com IP addresses
+```
+
 ## DNS Configuration
 
 To resolve `.docker` domains, configure your system DNS to use the proxy's DNS server:
@@ -157,6 +191,57 @@ services:
       - VIRTUAL_HOST=myapp.docker,api.myapp.docker,www.myapp.docker
 ```
 
+## Environment Variables
+
+The HTTP proxy stack supports several environment variables for configuration:
+
+### LOG_LEVEL
+
+Controls the logging verbosity for all proxy services. Supported levels:
+
+- **`debug`** - Detailed debugging information (most verbose)
+- **`info`** - General operational messages (default)
+- **`warn`** - Warning messages only
+- **`error`** - Error messages only (least verbose)
+
+#### Usage Examples
+
+**Set globally for all services:**
+
+```bash
+# Set log level for the entire stack
+export LOG_LEVEL=debug
+docker compose up -d
+```
+
+**Set per service in compose file:**
+
+```yaml
+services:
+  dinghy_layer:
+    image: ghcr.io/sparkfabrik/http-proxy-services:latest
+    environment:
+      - LOG_LEVEL=debug
+    # ... other configuration
+
+  dns:
+    image: ghcr.io/sparkfabrik/http-proxy-services:latest
+    environment:
+      - LOG_LEVEL=warn
+    # ... other configuration
+```
+
+**With docker run:**
+
+```bash
+docker run -e LOG_LEVEL=debug ghcr.io/sparkfabrik/http-proxy-services:latest
+```
+
+### Other Environment Variables
+
+- **`LOG_FORMAT`** - Set to `json` for structured JSON logging (default: text)
+- **`DRY_RUN`** - Set to `true` to enable dry-run mode for dinghy-layer service
+
 ## Adding Your Own Services
 
 To add your own services to be proxied:
@@ -206,11 +291,26 @@ docker compose down -v
 2. Test DNS server: `dig test.docker @127.0.0.1 -p 19322`
 3. Check system DNS configuration
 
+### Debugging with LOG_LEVEL
+
+For detailed troubleshooting, increase the logging verbosity:
+
+```bash
+# Enable debug logging for all services
+LOG_LEVEL=debug docker compose up -d
+
+# View detailed logs
+docker compose logs -f
+
+# Or for specific services
+docker compose logs -f dns
+docker compose logs -f dinghy_layer
+```
+
 For more troubleshooting information, see the main project README.
 docker compose logs -f
 
-````
-
+````bash
 ## Cleanup
 
 ```bash

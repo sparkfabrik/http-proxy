@@ -4,7 +4,27 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+
+	"github.com/sparkfabrik/http-proxy/pkg/config"
 )
+
+// getLogLevelFromEnv reads the LOG_LEVEL environment variable and returns the corresponding LogLevel.
+// If the environment variable is not set or contains an invalid value, it returns LevelInfo as default.
+func getLogLevelFromEnv() LogLevel {
+	level := strings.ToLower(config.GetEnvOrDefault("LOG_LEVEL", "info"))
+	switch level {
+	case "debug":
+		return LevelDebug
+	case "warn":
+		return LevelWarn
+	case "error":
+		return LevelError
+	case "info":
+		return LevelInfo
+	default:
+		return LevelInfo
+	}
+}
 
 // Logger provides structured logging for the application
 type Logger struct {
@@ -25,6 +45,13 @@ const (
 // New creates a new structured logger instance
 func New(component string) *Logger {
 	return NewWithLevel(component, LevelInfo)
+}
+
+// NewWithEnv creates a new logger instance using the LOG_LEVEL environment variable.
+// If LOG_LEVEL is not set or contains an invalid value, it defaults to info level.
+func NewWithEnv(component string) *Logger {
+	level := getLogLevelFromEnv()
+	return NewWithLevel(component, level)
 }
 
 // NewWithLevel creates a new logger with specified log level
@@ -64,7 +91,7 @@ func NewWithLevel(component string, level LogLevel) *Logger {
 // isJSONFormat determines if we should use JSON logging format
 // based on environment variables
 func isJSONFormat() bool {
-	format := strings.ToLower(os.Getenv("LOG_FORMAT"))
+	format := strings.ToLower(config.GetEnvOrDefault("LOG_FORMAT", "text"))
 	return format == "json"
 }
 

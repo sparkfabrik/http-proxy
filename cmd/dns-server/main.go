@@ -16,10 +16,38 @@ import (
 )
 
 type DNSServer struct {
-	customTLD string
-	targetIP  string
-	port      string
-	logger    *logger.Logger
+	customTLD      string
+	targetIP       string
+	port           string
+	forwardEnabled bool
+	logger         *logger.Logger
+}
+
+// forwardDNSQuery forwards DNS queries to upstream servers
+func (s *DNSServer) forwardDNSQuery(r *dns.Msg) (*dns.Msg, error) {
+	c := dns.Client{Timeout: 5 * time.Second}
+
+	// Use common public DNS servers as fallback
+	upstreamServers := []string{"8.8.8.8:53", "1.1.1.1:53"}
+
+	for _, server := range upstreamServers {
+		resp, _, err := c.Exchange(r, server)
+		if err == nil {
+			s.logger.Debug(fmt.Sprintf("Forwarded query to %s successfully", server))
+			return resp, nil
+		}
+		s.logger.Debug(fmt.Sprintf("Failed to forward to %s: %v", server, err))
+	}
+
+	return nil, fmt.Errorf("all upstream servers failed")
+}
+
+// createRefusedResponse creates a REFUSED response for the given request
+func (s *DNSServer) createRefusedResponse(r *dns.Msg) *dns.Msg {
+	msg := dns.Msg{}
+	msg.SetReply(r)
+	msg.Rcode = dns.RcodeRefused
+	return &msg
 }
 
 // handleDNSRequest processes incoming DNS queries
@@ -32,11 +60,27 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 			name,
 			w.RemoteAddr()))
 
-		// Only respond to queries for our configured TLD
-		// Security: Silently drop queries for domains we're not authoritative for
-		// This prevents DNS amplification attacks and reduces information leakage
+		// Check if this is a query for our managed TLD
 		if !strings.HasSuffix(name, "."+s.customTLD+".") {
-			s.logger.Debug(fmt.Sprintf("Dropping query for %s (not our TLD: .%s)", name, s.customTLD))
+			// Not our TLD - handle based on forwarding configuration
+			if s.forwardEnabled {
+				// Forward to upstream DNS servers
+				s.logger.Debug(fmt.Sprintf("Forwarding query for %s to upstream servers", name))
+				response, err := s.forwardDNSQuery(r)
+				if err != nil {
+					s.logger.Debug(fmt.Sprintf("Failed to forward query for %s: %v", name, err))
+					// If forwarding fails, return REFUSED
+					refusedResp := s.createRefusedResponse(r)
+					w.WriteMsg(refusedResp)
+				} else {
+					w.WriteMsg(response)
+				}
+			} else {
+				// Forwarding disabled - return REFUSED
+				s.logger.Debug(fmt.Sprintf("Refusing query for %s (not our TLD: .%s, forwarding disabled)", name, s.customTLD))
+				refusedResp := s.createRefusedResponse(r)
+				w.WriteMsg(refusedResp)
+			}
 			return
 		}
 	}
@@ -81,7 +125,7 @@ func main() {
 
 	// Load configuration
 	cfg := config.Load()
-	log := logger.NewWithLevel("dns-server", logger.LevelInfo)
+	log := logger.NewWithEnv("dns-server")
 
 	// Override config with command line flags if provided
 	if *port != "" {
@@ -95,10 +139,11 @@ func main() {
 	}
 
 	server := &DNSServer{
-		customTLD: cfg.DomainTLD,
-		targetIP:  cfg.DNSIP,
-		port:      cfg.DNSPort,
-		logger:    log,
+		customTLD:      cfg.DomainTLD,
+		targetIP:       cfg.DNSIP,
+		port:           cfg.DNSPort,
+		forwardEnabled: cfg.DNSForwardEnabled,
+		logger:         log,
 	}
 
 	// Validate target IP
@@ -110,6 +155,7 @@ func main() {
 	log.Info("Starting DNS server", "port", cfg.DNSPort)
 	log.Info("Handling TLD", "tld", "."+cfg.DomainTLD)
 	log.Info("Resolving to", "target_ip", cfg.DNSIP)
+	log.Info("DNS forwarding", "forward_enabled", cfg.DNSForwardEnabled)
 
 	// Create DNS server
 	dns.HandleFunc(".", server.handleDNSRequest)

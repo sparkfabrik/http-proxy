@@ -29,6 +29,7 @@ Follow these guidelines for formatting and structuring your markdown content:
 - **Tables**: Use `|` to create tables. Ensure that columns are properly aligned and headers are included.
 - **Line Length**: Break lines at 80 characters to improve readability. Use soft line breaks for long paragraphs.
 - **Whitespace**: Use blank lines to separate sections and improve readability. Avoid excessive whitespace.
+- Lists should be surrounded by blank and Headings should be surrounded by blank lines
 
 ## Validation Requirements
 
