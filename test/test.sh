@@ -553,13 +553,15 @@ test_dns_configurations() {
 test_with_dns_config() {
     local config="$1"
     local should_resolve="$2"
-    local should_not_resolve="$3"    log "Testing with HTTP_PROXY_DNS_TLDS='${config}'"
+    local should_not_resolve="$3"
+
+    log "Testing with HTTP_PROXY_DNS_TLDS='${config}'"
 
     # Stop the DNS service first to ensure clean restart
     log "Stopping DNS service to apply new configuration..."
     docker-compose stop dns 2>/dev/null || true
     docker-compose rm -f dns 2>/dev/null || true
-    
+
     # Start DNS service with new environment variable explicitly set
     log "Starting DNS service with config: ${config}"
     export HTTP_PROXY_DNS_TLDS="$config"
@@ -583,7 +585,7 @@ test_with_dns_config() {
     else
         warning "Could not verify DNS configuration from logs"
     fi
-    
+
     # Also check environment variables inside the container
     log "Checking DNS server environment variables..."
     docker compose exec -T dns env | grep HTTP_PROXY_DNS_TLDS || log "HTTP_PROXY_DNS_TLDS not found in container environment"
