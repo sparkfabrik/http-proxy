@@ -311,12 +311,25 @@ test_upstream_dns() {
     external_result=$(dig @127.0.0.1 -p 19322 "google.com" +short +time=5 +tries=2 2>/dev/null)
     external_exit_code=$?
 
-    if [ $external_exit_code -eq 0 ] && [ -n "$external_result" ] && [[ "$external_result" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        success "External domain google.com correctly forwarded to upstream servers (resolved to: ${external_result})"
-        upstream_tests_passed=$((upstream_tests_passed + 1))
+    if [ $external_exit_code -eq 0 ] && [ -n "$external_result" ]; then
+        # Get the first IP address from the result (handle multiple IPs)
+        local first_ip=$(echo "$external_result" | head -n1 | tr -d '\n')
+        if [[ "$first_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            success "External domain google.com correctly forwarded to upstream servers (resolved to: ${first_ip})"
+            upstream_tests_passed=$((upstream_tests_passed + 1))
+        else
+            # Check if forwarding is enabled - if disabled, this is expected behavior
+            log "Checking if DNS forwarding is enabled..."
+            local forwarding_enabled=$(docker compose exec -T dns env | grep HTTP_PROXY_DNS_FORWARD_ENABLED || echo "")
+
+            if [[ "$forwarding_enabled" == *"false"* ]] || [ -z "$forwarding_enabled" ]; then
+                success "External domain google.com not resolved - DNS forwarding is disabled (this is expected behavior)"
+                upstream_tests_passed=$((upstream_tests_passed + 1))
+            else
+                error "External domain google.com failed to resolve via upstream servers - invalid IP format (exit: ${external_exit_code}, first IP: ${first_ip})"
+            fi
+        fi
     else
-        # Check if forwarding is enabled - if disabled, this is expected behavior
-        log "Checking if DNS forwarding is enabled..."
         local forwarding_enabled=$(docker compose exec -T dns env | grep HTTP_PROXY_DNS_FORWARD_ENABLED || echo "")
 
         if [[ "$forwarding_enabled" == *"false"* ]] || [ -z "$forwarding_enabled" ]; then
@@ -336,9 +349,23 @@ test_upstream_dns() {
     cf_result=$(dig @127.0.0.1 -p 19322 "cloudflare.com" +short +time=5 +tries=2 2>/dev/null)
     cf_exit_code=$?
 
-    if [ $cf_exit_code -eq 0 ] && [ -n "$cf_result" ] && [[ "$cf_result" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        success "External domain cloudflare.com correctly forwarded to upstream servers (resolved to: ${cf_result})"
-        upstream_tests_passed=$((upstream_tests_passed + 1))
+    if [ $cf_exit_code -eq 0 ] && [ -n "$cf_result" ]; then
+        # Get the first IP address from the result (handle multiple IPs)
+        local first_cf_ip=$(echo "$cf_result" | head -n1 | tr -d '\n')
+        if [[ "$first_cf_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            success "External domain cloudflare.com correctly forwarded to upstream servers (resolved to: ${first_cf_ip})"
+            upstream_tests_passed=$((upstream_tests_passed + 1))
+        else
+            # Check if forwarding is enabled - if disabled, this is expected behavior
+            local forwarding_enabled=$(docker compose exec -T dns env | grep HTTP_PROXY_DNS_FORWARD_ENABLED || echo "")
+
+            if [[ "$forwarding_enabled" == *"false"* ]] || [ -z "$forwarding_enabled" ]; then
+                success "External domain cloudflare.com not resolved - DNS forwarding is disabled (this is expected behavior)"
+                upstream_tests_passed=$((upstream_tests_passed + 1))
+            else
+                error "External domain cloudflare.com failed to resolve via upstream servers - invalid IP format (exit: ${cf_exit_code}, first IP: ${first_cf_ip})"
+            fi
+        fi
     else
         # Check if forwarding is enabled - if disabled, this is expected behavior
         local forwarding_enabled=$(docker compose exec -T dns env | grep HTTP_PROXY_DNS_FORWARD_ENABLED || echo "")
@@ -398,11 +425,22 @@ test_dns_forwarding_configurations() {
         log "Executing DNS forwarding test with command: ${dig_cmd}"
         external_result=$(dig @127.0.0.1 -p 19322 "google.com" +short +time=5 +tries=2 2>/dev/null)
 
-        if [ -n "$external_result" ] && [[ "$external_result" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            success "DNS forwarding enabled: external domains resolve correctly"
-            config_tests_passed=$((config_tests_passed + 1))
+        # Check if we got at least one valid IPv4 address (handle multiple IPs)
+        if [ -n "$external_result" ]; then
+            # Get the first IP address from the result
+            local first_ip=$(echo "$external_result" | head -n1 | tr -d '\n')
+            if [[ "$first_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                success "DNS forwarding enabled: external domains resolve correctly (got ${first_ip})"
+                config_tests_passed=$((config_tests_passed + 1))
+            else
+                warning "DNS forwarding enabled but external domain resolution failed - invalid IP format"
+                log "Debug: first IP result: '${first_ip}'"
+                log "Debug: full dig command result: '${external_result}'"
+                log "Debug: DNS server logs (last 10 lines):"
+                docker compose logs --tail=10 dns 2>/dev/null || log "Could not retrieve DNS server logs"
+            fi
         else
-            warning "DNS forwarding enabled but external domain resolution failed"
+            warning "DNS forwarding enabled but external domain resolution failed - no result"
             log "Debug: dig command result: '${external_result}'"
             log "Debug: DNS server logs (last 10 lines):"
             docker compose logs --tail=10 dns 2>/dev/null || log "Could not retrieve DNS server logs"
@@ -519,17 +557,29 @@ test_with_dns_config() {
 
     log "Testing with HTTP_PROXY_DNS_TLDS='${config}'"
 
-    # Set environment variable and restart DNS service
+    # Set environment variable and restart DNS service properly
     export HTTP_PROXY_DNS_TLDS="$config"
+
+    # Stop the DNS service first to ensure clean restart
+    log "Stopping DNS service to apply new configuration..."
+    docker-compose stop dns 2>/dev/null || true
+    docker-compose rm -f dns 2>/dev/null || true
+
+    # Start DNS service with new environment
+    log "Starting DNS service with config: ${config}"
     docker-compose up -d dns --quiet-pull 2>/dev/null || true
 
-    # Wait for DNS service to be ready
-    sleep 5
+    # Wait longer for DNS service to be ready with new config
+    sleep 8
 
     if ! check_dns_server; then
         warning "DNS server not accessible for config '${config}', skipping"
         return 1
     fi
+
+    # Verify that the DNS server picked up the new configuration
+    log "Verifying DNS server configuration was applied..."
+    docker compose logs --tail=5 dns 2>/dev/null | grep "Handling domains/TLDs" | tail -1 || log "Could not verify DNS configuration"
 
     local config_tests_passed=0
     local config_tests_total=0
