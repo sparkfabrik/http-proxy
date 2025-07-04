@@ -19,7 +19,7 @@ func Load() *Config {
 		DomainTLD:         GetEnvOrDefault("DOMAIN_TLD", "loc"),
 		DNSIP:             GetEnvOrDefault("DNS_IP", "127.0.0.1"),
 		DNSPort:           GetEnvOrDefault("DNS_PORT", "19322"),
-		DNSForwardEnabled: GetEnvOrDefault("DNS_FORWARD_ENABLED", "false") == "true",
+		DNSForwardEnabled: strings.ToLower(GetEnvOrDefault("DNS_FORWARD_ENABLED", "false")) == "true",
 	}
 }
 
