@@ -680,32 +680,32 @@ main() {
     log "Testing HTTP access to all containers..."
     log "======================================="
 
-    local test_passed=0
-    local test_total=5
+    local http_tests_passed=0
+    local http_tests_total=5
 
     # Test Traefik labeled container
     if test_http_access "app1.${TEST_DOMAIN}"; then
-        test_passed=$((test_passed + 1))
+        http_tests_passed=$((http_tests_passed + 1))
     fi
 
     # Test VIRTUAL_HOST container
     if test_http_access "app2.${TEST_DOMAIN}"; then
-        test_passed=$((test_passed + 1))
+        http_tests_passed=$((http_tests_passed + 1))
     fi
 
     # Test VIRTUAL_HOST + VIRTUAL_PORT container
     if test_http_access "app3.${TEST_DOMAIN}"; then
-        test_passed=$((test_passed + 1))
+        http_tests_passed=$((http_tests_passed + 1))
     fi
 
     # Test multi-VIRTUAL_HOST container (first hostname)
     if test_http_access "app4.${TEST_DOMAIN}"; then
-        test_passed=$((test_passed + 1))
+        http_tests_passed=$((http_tests_passed + 1))
     fi
 
     # Test multi-VIRTUAL_HOST container (second hostname)
     if test_http_access "app5.${TEST_DOMAIN}"; then
-        test_passed=$((test_passed + 1))
+        http_tests_passed=$((http_tests_passed + 1))
     fi
 
     # Show detailed curl responses for debugging
@@ -738,55 +738,74 @@ main() {
     docker compose logs --tail=10 dns 2>/dev/null || true
     echo
 
+    # Initialize overall test tracking
+    local total_test_suites_passed=0
+    local total_test_suites=0
+
     # Step 4: Test DNS functionality
-    if ! test_all_dns; then
+    log "Step 4: Testing DNS functionality..."
+    log "===================================="
+    total_test_suites=$((total_test_suites + 1))
+    if test_all_dns; then
+        success "DNS tests passed"
+        total_test_suites_passed=$((total_test_suites_passed + 1))
+    else
         error "DNS tests failed"
-        return 1
     fi
 
-    # Step 5: Test upstream DNS functionality
-    log "Step 5: Testing upstream DNS functionality..."
-    log "============================================"
-
-    if ! test_upstream_dns; then
-        warning "Upstream DNS tests failed, but continuing..."
-        # Don't fail the entire test suite for upstream tests
-    fi
-
-    # Step 6: Test DNS forwarding configurations
-    log "Step 6: Testing DNS forwarding configurations..."
-    log "==============================================="
-
-    # Only run forwarding configuration tests if we have dig available
+    # Step 5: Test upstream DNS functionality (if dig is available)
     if command -v dig >/dev/null 2>&1; then
-        if ! test_dns_forwarding_configurations; then
-            warning "DNS forwarding configuration tests failed, but continuing..."
-            # Don't fail the entire test suite for configuration tests
+        log "Step 5: Testing upstream DNS functionality..."
+        log "============================================"
+        total_test_suites=$((total_test_suites + 1))
+        if test_upstream_dns; then
+            success "Upstream DNS tests passed"
+            total_test_suites_passed=$((total_test_suites_passed + 1))
+        else
+            error "Upstream DNS tests failed"
+        fi
+
+        # Step 6: Test DNS forwarding configurations
+        log "Step 6: Testing DNS forwarding configurations..."
+        log "==============================================="
+        total_test_suites=$((total_test_suites + 1))
+        if test_dns_forwarding_configurations; then
+            success "DNS forwarding configuration tests passed"
+            total_test_suites_passed=$((total_test_suites_passed + 1))
+        else
+            error "DNS forwarding configuration tests failed"
+        fi
+
+        # Step 7: Test DNS server configurations
+        log "Step 7: Testing DNS server configurations..."
+        log "==========================================="
+        total_test_suites=$((total_test_suites + 1))
+        if test_dns_configurations; then
+            success "DNS configuration tests passed"
+            total_test_suites_passed=$((total_test_suites_passed + 1))
+        else
+            error "DNS configuration tests failed"
         fi
     else
-        log "Skipping DNS forwarding configuration tests (dig command not available)"
-    fi
-
-    # Step 7: Test DNS server configurations
-    log "Step 7: Testing DNS server configurations..."
-    log "==========================================="
-
-    # Only run configuration tests if we have dig available
-    if command -v dig >/dev/null 2>&1; then
-        if ! test_dns_configurations; then
-            warning "DNS configuration tests failed, but continuing..."
-            # Don't fail the entire test suite for configuration tests
-        fi
-    else
-        log "Skipping DNS configuration tests (dig command not available)"
+        log "Skipping DNS-related tests (dig command not available)"
     fi
 
     # Final results
     log "Test Results:"
     log "============="
-    log "Passed: ${test_passed}/${test_total} HTTP tests"
+    log "HTTP Tests: ${http_tests_passed}/${http_tests_total} passed"
+    log "Test Suites: ${total_test_suites_passed}/${total_test_suites} passed"
 
-    if [ $test_passed -eq $test_total ]; then
+    # Check if all tests passed
+    local all_tests_passed=true
+    if [ $http_tests_passed -ne $http_tests_total ]; then
+        all_tests_passed=false
+    fi
+    if [ $total_test_suites_passed -ne $total_test_suites ]; then
+        all_tests_passed=false
+    fi
+
+    if [ "$all_tests_passed" = true ]; then
         success "All tests passed! HTTP proxy is working correctly."
         return 0
     else
