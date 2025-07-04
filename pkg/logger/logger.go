@@ -15,7 +15,7 @@ func getLogLevelFromEnv() LogLevel {
 	switch level {
 	case "debug":
 		return LevelDebug
-	case "warn":
+	case "warn", "warning":
 		return LevelWarn
 	case "error":
 		return LevelError
