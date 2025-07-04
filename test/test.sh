@@ -472,17 +472,26 @@ test_dns_configurations() {
     local original_dir=$(pwd)
     cd "$(dirname "$0")/.."
 
+    local dns_config_tests_passed=0
+    local dns_config_tests_total=3
+
     # Test configuration 1: Single TLD (loc)
     log "Configuration Test 1: Single TLD (loc)"
-    test_with_dns_config "loc" "test.loc,example.loc" "example.com,test.org"
+    if test_with_dns_config "loc" "test.loc,example.loc" "example.com,test.org"; then
+        dns_config_tests_passed=$((dns_config_tests_passed + 1))
+    fi
 
     # Test configuration 2: Multiple TLDs (loc,dev)
     log "Configuration Test 2: Multiple TLDs (loc,dev)"
-    test_with_dns_config "loc,dev" "test.loc,example.dev" "example.com,test.org"
+    if test_with_dns_config "loc,dev" "test.loc,example.dev" "example.com,test.org"; then
+        dns_config_tests_passed=$((dns_config_tests_passed + 1))
+    fi
 
     # Test configuration 3: Specific domains (spark.loc,spark.dev)
     log "Configuration Test 3: Specific domains (spark.loc,spark.dev)"
-    test_with_dns_config "spark.loc,spark.dev" "spark.loc,api.spark.loc,spark.dev,api.spark.dev" "other.loc,example.com"
+    if test_with_dns_config "spark.loc,spark.dev" "spark.loc,api.spark.loc,spark.dev,api.spark.dev" "other.loc,example.com"; then
+        dns_config_tests_passed=$((dns_config_tests_passed + 1))
+    fi
 
     cd "$original_dir"
 
@@ -491,7 +500,15 @@ test_dns_configurations() {
     docker-compose up -d dns --quiet-pull 2>/dev/null || true
     sleep 3
 
-    success "DNS configuration tests completed"
+    log "DNS configuration tests: ${dns_config_tests_passed}/${dns_config_tests_total} passed"
+
+    if [ "$dns_config_tests_passed" -eq "$dns_config_tests_total" ]; then
+        success "DNS configuration tests passed"
+        return 0
+    else
+        error "DNS configuration tests failed (${dns_config_tests_passed}/${dns_config_tests_total})"
+        return 1
+    fi
 }
 
 # Helper function to test with a specific DNS configuration
@@ -521,8 +538,16 @@ test_with_dns_config() {
     IFS=',' read -ra RESOLVE_DOMAINS <<< "$should_resolve"
     for domain in "${RESOLVE_DOMAINS[@]}"; do
         config_tests_total=$((config_tests_total + 1))
+        log "Testing domain '${domain}' (should resolve) with config '${config}'"
+        local dig_cmd="dig @127.0.0.1 -p 19322 \"${domain}\" +short +time=2 +tries=1"
+        log "Debug: Executing command: ${dig_cmd}"
         if test_dns "$domain" "should_resolve" >/dev/null 2>&1; then
             config_tests_passed=$((config_tests_passed + 1))
+            success "Domain '${domain}' resolved correctly"
+        else
+            warning "Domain '${domain}' failed to resolve (expected to resolve)"
+            log "Debug: DNS server logs (last 5 lines):"
+            docker compose logs --tail=5 dns 2>/dev/null || log "Could not retrieve DNS server logs"
         fi
     done
 
@@ -530,8 +555,16 @@ test_with_dns_config() {
     IFS=',' read -ra NO_RESOLVE_DOMAINS <<< "$should_not_resolve"
     for domain in "${NO_RESOLVE_DOMAINS[@]}"; do
         config_tests_total=$((config_tests_total + 1))
+        log "Testing domain '${domain}' (should NOT resolve) with config '${config}'"
+        local dig_cmd="dig @127.0.0.1 -p 19322 \"${domain}\" +short +time=2 +tries=1"
+        log "Debug: Executing command: ${dig_cmd}"
         if test_dns "$domain" "should_not_resolve" >/dev/null 2>&1; then
             config_tests_passed=$((config_tests_passed + 1))
+            success "Domain '${domain}' correctly rejected"
+        else
+            warning "Domain '${domain}' incorrectly resolved (expected to be rejected)"
+            log "Debug: DNS server logs (last 5 lines):"
+            docker compose logs --tail=5 dns 2>/dev/null || log "Could not retrieve DNS server logs"
         fi
     done
 
@@ -542,6 +575,8 @@ test_with_dns_config() {
         return 0
     else
         warning "Configuration test failed for: ${config} (${config_tests_passed}/${config_tests_total})"
+        log "Debug: Full DNS server logs for failed configuration '${config}':"
+        docker compose logs --tail=15 dns 2>/dev/null || log "Could not retrieve DNS server logs"
         return 1
     fi
 }
