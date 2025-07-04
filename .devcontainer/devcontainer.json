@@ -27,6 +27,8 @@
     "customizations": {
         "vscode": {
             "extensions": [
+                "editorconfig.editorconfig",
+                "davidanson.vscode-markdownlint",
                 "esbenp.prettier-vscode",
                 "GitHub.copilot",
                 "golang.go",
