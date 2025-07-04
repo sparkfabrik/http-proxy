@@ -502,7 +502,7 @@ test_dns_forwarding_configurations() {
     fi
 }
 
-# Test DNS server with different configurations using docker-compose
+# Test DNS server with different configurations using docker compose
 test_dns_configurations() {
     log "Testing DNS server with different configurations..."
     log "================================================="
@@ -535,7 +535,7 @@ test_dns_configurations() {
 
     # Restore original DNS configuration
     unset HTTP_PROXY_DNS_TLDS
-    docker-compose up -d dns --quiet-pull 2>/dev/null || true
+    docker compose up -d dns --quiet-pull 2>/dev/null || true
     sleep 3
 
     log "DNS configuration tests: ${dns_config_tests_passed}/${dns_config_tests_total} passed"
@@ -559,7 +559,7 @@ test_with_dns_config() {
 
     # Stop the entire stack to ensure clean restart
     log "Stopping DNS service to apply new configuration..."
-    docker-compose down 2>/dev/null || true
+    docker compose down 2>/dev/null || true
 
     # Create a temporary .env file with the new configuration
     local temp_env_file=$(mktemp)
@@ -576,11 +576,11 @@ test_with_dns_config() {
 
     # Start DNS service with the temporary environment file
     log "Starting DNS service with config: ${config}"
-    docker-compose --env-file "$temp_env_file" up -d dns --force-recreate
+    docker compose --env-file "$temp_env_file" up -d dns --force-recreate
 
     # Show the logs immediately to debug what's happening
     log "Debug: DNS service startup logs:"
-    docker-compose logs dns
+    docker compose logs dns
 
     # Clean up the temporary file
     rm -f "$temp_env_file"
@@ -963,7 +963,7 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo ""
     echo "This script tests the HTTP proxy functionality by:"
     echo "1. Full cleanup and rebuild of all Docker images (unless --no-rebuild)"
-    echo "2. Starting the HTTP proxy stack with docker-compose"
+    echo "2. Starting the HTTP proxy stack with docker compose"
     echo "3. Creating test containers with different configurations:"
     echo "   - Traefik labels"
     echo "   - VIRTUAL_HOST environment variable"
@@ -979,7 +979,7 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "   - External domain forwarding when enabled"
     echo "   - Configured domain resolution to target IP"
     echo "   - Forwarding disabled behavior verification"
-    echo "7. Testing different DNS server configurations using docker-compose:"
+    echo "7. Testing different DNS server configurations using docker compose:"
     echo "   - Single TLD: loc"
     echo "   - Multiple TLDs: loc,dev"
     echo "   - Specific domains: spark.loc,spark.dev"

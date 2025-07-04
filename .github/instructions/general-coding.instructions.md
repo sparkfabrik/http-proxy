@@ -5,6 +5,10 @@ applyTo: '**'
 
 # General Coding Guidelines
 
+## Docker
+
+- docker compose command is "docker compose" (not "docker-compose")
+
 ## Code Quality Standards
 
 - Write clean, readable, and maintainable code
