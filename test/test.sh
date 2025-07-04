@@ -394,6 +394,8 @@ test_dns_forwarding_configurations() {
     if check_dns_server; then
         # Test external domain resolution
         local external_result
+        local dig_cmd="dig @127.0.0.1 -p 19322 \"google.com\" +short +time=5 +tries=2"
+        log "Executing DNS forwarding test with command: ${dig_cmd}"
         external_result=$(dig @127.0.0.1 -p 19322 "google.com" +short +time=5 +tries=2 2>/dev/null)
 
         if [ -n "$external_result" ] && [[ "$external_result" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -401,9 +403,14 @@ test_dns_forwarding_configurations() {
             config_tests_passed=$((config_tests_passed + 1))
         else
             warning "DNS forwarding enabled but external domain resolution failed"
+            log "Debug: dig command result: '${external_result}'"
+            log "Debug: DNS server logs (last 10 lines):"
+            docker compose logs --tail=10 dns 2>/dev/null || log "Could not retrieve DNS server logs"
         fi
     else
         warning "DNS server not accessible for forwarding enabled test"
+        log "Debug: DNS server logs (last 10 lines):"
+        docker compose logs --tail=10 dns 2>/dev/null || log "Could not retrieve DNS server logs"
     fi
 
     # Test configuration 2: Forwarding disabled
@@ -416,6 +423,8 @@ test_dns_forwarding_configurations() {
         # Test that external domains do NOT resolve
         local external_result
         local external_exit_code
+        local dig_cmd="dig @127.0.0.1 -p 19322 \"google.com\" +short +time=3 +tries=1"
+        log "Executing DNS forwarding disabled test with command: ${dig_cmd}"
         external_result=$(dig @127.0.0.1 -p 19322 "google.com" +short +time=3 +tries=1 2>/dev/null)
         external_exit_code=$?
 
@@ -425,9 +434,15 @@ test_dns_forwarding_configurations() {
             config_tests_passed=$((config_tests_passed + 1))
         else
             warning "DNS forwarding disabled but external domain still resolved: ${external_result}"
+            log "Debug: dig command exit code: ${external_exit_code}"
+            log "Debug: dig command result: '${external_result}'"
+            log "Debug: DNS server logs (last 10 lines):"
+            docker compose logs --tail=10 dns 2>/dev/null || log "Could not retrieve DNS server logs"
         fi
     else
         warning "DNS server not accessible for forwarding disabled test"
+        log "Debug: DNS server logs (last 10 lines):"
+        docker compose logs --tail=10 dns 2>/dev/null || log "Could not retrieve DNS server logs"
     fi
 
     cd "$original_dir"
