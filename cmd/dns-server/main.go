@@ -47,6 +47,98 @@ func (s *DNSServer) createRefusedResponse(r *dns.Msg) *dns.Msg {
 	return &msg
 }
 
+// isDomainHandled checks if a domain matches any configured domain/TLD
+func (s *DNSServer) isDomainHandled(domain string) bool {
+	domainWithoutDot := strings.TrimSuffix(strings.ToLower(domain), ".")
+
+	for _, configuredDomain := range s.customDomains {
+		// Check if it's an exact match or a subdomain
+		if domainWithoutDot == configuredDomain || strings.HasSuffix(domainWithoutDot, "."+configuredDomain) {
+			return true
+		}
+	}
+	return false
+}
+
+// validateAllQuestions checks if all questions in the request are for domains we handle
+func (s *DNSServer) validateAllQuestions(r *dns.Msg) bool {
+	for _, question := range r.Question {
+		name := strings.ToLower(question.Name)
+
+		s.logger.Debug("DNS query",
+			"type", dns.TypeToString[question.Qtype],
+			"name", name)
+
+		if !s.isDomainHandled(name) {
+			return false
+		}
+	}
+	return true
+}
+
+// handleNonMatchingDomain handles queries for domains we don't manage
+func (s *DNSServer) handleNonMatchingDomain(w dns.ResponseWriter, r *dns.Msg) {
+	if s.forwardEnabled {
+		// Forward to upstream DNS servers
+		s.logger.Debug("Forwarding query to upstream servers")
+		response, err := s.forwardDNSQuery(r)
+		if err != nil {
+			s.logger.Debug("Failed to forward query", "error", err)
+			// If forwarding fails, return REFUSED
+			refusedResp := s.createRefusedResponse(r)
+			w.WriteMsg(refusedResp)
+		} else {
+			w.WriteMsg(response)
+		}
+	} else {
+		// Forwarding disabled - send REFUSED response
+		s.logger.Debug("Sending REFUSED response (not matching configured domains)")
+		refusedResp := s.createRefusedResponse(r)
+		w.WriteMsg(refusedResp)
+	}
+}
+
+// createARecord creates an A record for the given question
+func (s *DNSServer) createARecord(question dns.Question) (dns.RR, error) {
+	return dns.NewRR(fmt.Sprintf("%s A %s", question.Name, s.targetIP))
+}
+
+// handleQuestion processes a single DNS question and adds answers to the response
+func (s *DNSServer) handleQuestion(question dns.Question, msg *dns.Msg) {
+	name := strings.ToLower(question.Name)
+
+	switch question.Qtype {
+	case dns.TypeA:
+		// Respond with our target IP for A records
+		rr, err := s.createARecord(question)
+		if err == nil {
+			msg.Answer = append(msg.Answer, rr)
+			s.logger.Info("Resolved A record", "name", name, "ip", s.targetIP)
+		} else {
+			s.logger.Error("Failed to create A record", "name", name, "error", err)
+		}
+	case dns.TypeAAAA:
+		// For IPv6 queries, return empty response (no IPv6 support)
+		s.logger.Debug("IPv6 query - returning empty response", "name", name)
+	default:
+		// For other query types, return empty response
+		s.logger.Debug("Unsupported query type", "type", dns.TypeToString[question.Qtype], "name", name)
+	}
+}
+
+// createDNSResponse creates a DNS response for queries we handle
+func (s *DNSServer) createDNSResponse(r *dns.Msg) *dns.Msg {
+	msg := dns.Msg{}
+	msg.SetReply(r)
+	msg.Authoritative = true
+
+	for _, question := range r.Question {
+		s.handleQuestion(question, &msg)
+	}
+
+	return &msg
+}
+
 // handleDNSRequest processes incoming DNS queries
 func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 	// Only respond to queries for our configured domains/TLDs
@@ -58,79 +150,15 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	// First, validate that all questions are for domains we handle
-	for _, question := range r.Question {
-		name := strings.ToLower(question.Name)
-
-		s.logger.Debug(fmt.Sprintf("DNS query: %s %s from %s",
-			dns.TypeToString[question.Qtype],
-			name,
-			w.RemoteAddr()))
-
-		// Check if domain matches any configured domain/TLD
-		// Support both TLDs (e.g., "loc") and specific domains (e.g., "spark.loc")
-		domainWithoutDot := strings.TrimSuffix(name, ".")
-		found := false
-
-		for _, domain := range s.customDomains {
-			// Check if it's an exact match or a subdomain
-			if domainWithoutDot == domain || strings.HasSuffix(domainWithoutDot, "."+domain) {
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			// Not our domain - handle based on forwarding configuration
-			if s.forwardEnabled {
-				// Forward to upstream DNS servers
-				s.logger.Debug("Forwarding query to upstream servers", "name", name)
-				response, err := s.forwardDNSQuery(r)
-				if err != nil {
-					s.logger.Debug(fmt.Sprintf("Failed to forward query for %s: %v", name, err))
-					// If forwarding fails, return REFUSED
-					refusedResp := s.createRefusedResponse(r)
-					w.WriteMsg(refusedResp)
-				} else {
-					w.WriteMsg(response)
-				}
-			} else {
-				// Forwarding disabled - send REFUSED response
-				s.logger.Debug(fmt.Sprintf("Sending REFUSED response for %s (not matching configured domains)", name))
-				refusedResp := s.createRefusedResponse(r)
-				w.WriteMsg(refusedResp)
-			}
-			return
-		}
+	if !s.validateAllQuestions(r) {
+		// Handle queries for domains we don't manage
+		s.handleNonMatchingDomain(w, r)
+		return
 	}
 
-	// If we reach here, all queries are for our TLD - create response
-	msg := dns.Msg{}
-	msg.SetReply(r)
-	msg.Authoritative = true
-
-	for _, question := range r.Question {
-		name := strings.ToLower(question.Name)
-
-		switch question.Qtype {
-		case dns.TypeA:
-			// Respond with our target IP for A records
-			rr, err := dns.NewRR(fmt.Sprintf("%s A %s", question.Name, s.targetIP))
-			if err == nil {
-				msg.Answer = append(msg.Answer, rr)
-				s.logger.Info(fmt.Sprintf("Resolved %s to %s", name, s.targetIP))
-			} else {
-				s.logger.Error(fmt.Sprintf("Failed to create A record for %s: %v", name, err))
-			}
-		case dns.TypeAAAA:
-			// For IPv6 queries, return empty response (no IPv6 support)
-			s.logger.Debug(fmt.Sprintf("IPv6 query for %s - returning empty response", name))
-		default:
-			// For other query types, return empty response
-			s.logger.Debug(fmt.Sprintf("Unsupported query type %s for %s", dns.TypeToString[question.Qtype], name))
-		}
-	}
-
-	w.WriteMsg(&msg)
+	// All queries are for our domains - create and send response
+	response := s.createDNSResponse(r)
+	w.WriteMsg(response)
 }
 
 func main() {

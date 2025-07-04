@@ -317,7 +317,7 @@ test_upstream_dns() {
     else
         # Check if forwarding is enabled - if disabled, this is expected behavior
         log "Checking if DNS forwarding is enabled..."
-        local forwarding_enabled=$(docker compose exec -T dns env | grep DNS_FORWARD_ENABLED || echo "")
+        local forwarding_enabled=$(docker compose exec -T dns env | grep HTTP_PROXY_DNS_FORWARD_ENABLED || echo "")
 
         if [[ "$forwarding_enabled" == *"false"* ]] || [ -z "$forwarding_enabled" ]; then
             warning "External domain google.com not resolved - DNS forwarding appears to be disabled (this is expected)"
@@ -341,7 +341,7 @@ test_upstream_dns() {
         upstream_tests_passed=$((upstream_tests_passed + 1))
     else
         # Check if forwarding is enabled - if disabled, this is expected behavior
-        local forwarding_enabled=$(docker compose exec -T dns env | grep DNS_FORWARD_ENABLED || echo "")
+        local forwarding_enabled=$(docker compose exec -T dns env | grep HTTP_PROXY_DNS_FORWARD_ENABLED || echo "")
 
         if [[ "$forwarding_enabled" == *"false"* ]] || [ -z "$forwarding_enabled" ]; then
             warning "External domain cloudflare.com not resolved - DNS forwarding appears to be disabled (this is expected)"
@@ -386,8 +386,8 @@ test_dns_forwarding_configurations() {
 
     # Test configuration 1: Forwarding enabled
     log "Configuration Test 1: DNS forwarding enabled"
-    export DNS_FORWARD_ENABLED="true"
-    export DNS_UPSTREAM_SERVERS="8.8.8.8:53,1.1.1.1:53"
+    export HTTP_PROXY_DNS_FORWARD_ENABLED="true"
+    export HTTP_PROXY_DNS_UPSTREAM_SERVERS="8.8.8.8:53,1.1.1.1:53"
     docker compose up -d dns --quiet-pull 2>/dev/null || true
     sleep 5
 
@@ -408,7 +408,7 @@ test_dns_forwarding_configurations() {
 
     # Test configuration 2: Forwarding disabled
     log "Configuration Test 2: DNS forwarding disabled"
-    export DNS_FORWARD_ENABLED="false"
+    export HTTP_PROXY_DNS_FORWARD_ENABLED="false"
     docker compose up -d dns --quiet-pull 2>/dev/null || true
     sleep 5
 
@@ -433,8 +433,8 @@ test_dns_forwarding_configurations() {
     cd "$original_dir"
 
     # Restore original configuration
-    unset DNS_FORWARD_ENABLED
-    unset DNS_UPSTREAM_SERVERS
+    unset HTTP_PROXY_DNS_FORWARD_ENABLED
+    unset HTTP_PROXY_DNS_UPSTREAM_SERVERS
     docker compose up -d dns --quiet-pull 2>/dev/null || true
     sleep 3
 

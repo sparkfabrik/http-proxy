@@ -42,6 +42,7 @@ description: 'See process Copilot is following where you can edit this to reshap
 - Update file `\Copilot-Processing.md` and mark the action item(s) as complete in the tracking.
 - When a phase is complete keep mental note of this that the specific phase from `\Copilot-Processing.md` is done and does not need to be repeated.
 - Repeat this pattern until all action items are complete
+- Always run tests at the end of the implementation with the command `make test` to ensure everything works as expected.
 
 # Phase 4: Summary
 
