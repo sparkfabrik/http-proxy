@@ -28,17 +28,6 @@ test: ## Run integration tests
 	@chmod +x test/test.sh
 	@./test/test.sh
 
-test-dns: ## Test DNS resolution (run in another terminal while dnsmasq is running)
-	@echo "Clear dns cache and restart mDNSResponder"
-	@sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder
-	@echo "Testing DNS resolution on port 19322:"
-	@echo "Testing hostmachine.loc:"
-	dig @127.0.0.1 -p 19322 hostmachine.loc
-	@echo "Testing any .loc domain:"
-	dig @127.0.0.1 -p 19322 test.loc
-	@echo "Testing specific domain with IP with dnscacheutil:"
-	dscacheutil -q host -a name test.loc
-
 compose-up: ## Run Traefik with Docker
 	@docker rm -vf http-proxy || true
 	@docker-compose up -d --remove-orphans

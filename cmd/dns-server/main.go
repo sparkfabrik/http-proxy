@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -16,7 +15,7 @@ import (
 )
 
 type DNSServer struct {
-	customTLD       string
+	customDomains   []string
 	targetIP        string
 	port            string
 	forwardEnabled  bool
@@ -50,6 +49,15 @@ func (s *DNSServer) createRefusedResponse(r *dns.Msg) *dns.Msg {
 
 // handleDNSRequest processes incoming DNS queries
 func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
+	// Only respond to queries for our configured domains/TLDs
+	// Security: Silently drop queries for domains we're not authoritative for
+	// This prevents DNS amplification attacks and reduces information leakage
+	if len(s.customDomains) == 0 {
+		s.logger.Debug("No custom domains/TLDs configured, dropping query")
+		return
+	}
+
+	// First, validate that all questions are for domains we handle
 	for _, question := range r.Question {
 		name := strings.ToLower(question.Name)
 
@@ -58,9 +66,21 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 			name,
 			w.RemoteAddr()))
 
-		// Check if this is a query for our managed TLD
-		if !strings.HasSuffix(name, "."+s.customTLD+".") {
-			// Not our TLD - handle based on forwarding configuration
+		// Check if domain matches any configured domain/TLD
+		// Support both TLDs (e.g., "loc") and specific domains (e.g., "spark.loc")
+		domainWithoutDot := strings.TrimSuffix(name, ".")
+		found := false
+
+		for _, domain := range s.customDomains {
+			// Check if it's an exact match or a subdomain
+			if domainWithoutDot == domain || strings.HasSuffix(domainWithoutDot, "."+domain) {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			// Not our domain - handle based on forwarding configuration
 			if s.forwardEnabled {
 				// Forward to upstream DNS servers
 				s.logger.Debug(fmt.Sprintf("Forwarding query for %s to upstream servers", name))
@@ -74,10 +94,8 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 					w.WriteMsg(response)
 				}
 			} else {
-				// Forwarding disabled - return REFUSED
-				s.logger.Debug(fmt.Sprintf("Refusing query for %s (not our TLD: .%s, forwarding disabled)", name, s.customTLD))
-				refusedResp := s.createRefusedResponse(r)
-				w.WriteMsg(refusedResp)
+				// Forwarding disabled - drop query silently
+				s.logger.Debug(fmt.Sprintf("Dropping query for %s (not matching configured domains)", name))
 			}
 			return
 		}
@@ -114,35 +132,22 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 }
 
 func main() {
-	var (
-		port      = flag.String("port", "", "DNS server port (overrides config)")
-		customTLD = flag.String("tld", "", "Custom TLD to handle (overrides config)")
-		targetIP  = flag.String("ip", "", "IP address to resolve to (overrides config)")
-	)
-	flag.Parse()
-
 	// Load configuration
 	cfg := config.Load()
 	log := logger.NewWithEnv("dns-server")
 
-	// Override config with command line flags if provided
-	if *port != "" {
-		cfg.DNSPort = *port
-	}
-	if *customTLD != "" {
-		cfg.DomainTLD = *customTLD
-	}
-	if *targetIP != "" {
-		cfg.DNSIP = *targetIP
-	}
-
 	server := &DNSServer{
-		customTLD:       cfg.DomainTLD,
+		customDomains:   cfg.Domains,
 		targetIP:        cfg.DNSIP,
 		port:            cfg.DNSPort,
 		forwardEnabled:  cfg.DNSForwardEnabled,
 		upstreamServers: cfg.DNSUpstreamServers,
 		logger:          log,
+	}
+
+	if len(server.customDomains) == 0 {
+		log.Error("No domains/TLDs configured")
+		os.Exit(1)
 	}
 
 	// Validate target IP
@@ -152,7 +157,7 @@ func main() {
 	}
 
 	log.Info("Starting DNS server", "port", cfg.DNSPort)
-	log.Info("Handling TLD", "tld", "."+cfg.DomainTLD)
+	log.Info("Handling domains/TLDs", "domains", cfg.Domains)
 	log.Info("Resolving to", "target_ip", cfg.DNSIP)
 	log.Info("DNS forwarding", "forward_enabled", cfg.DNSForwardEnabled)
 

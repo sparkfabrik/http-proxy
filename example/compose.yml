@@ -47,6 +47,9 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - DNS_FORWARD_ENABLED=${DNS_FORWARD_ENABLED:-false}
       - DNS_UPSTREAM_SERVERS=${DNS_UPSTREAM_SERVERS:-8.8.8.8:53,1.1.1.1:53}
+      - HTTP_PROXY_DNS_TLDS=${HTTP_PROXY_DNS_TLDS:-loc}  # Comma-separated list of TLDs or specific domains to handle
+      - HTTP_PROXY_DNS_TARGET_IP=${HTTP_PROXY_DNS_TARGET_IP:-127.0.0.1}  # IP address to resolve domains to
+      - HTTP_PROXY_DNS_PORT=${HTTP_PROXY_DNS_PORT:-19322}  # Port for DNS server to listen on
     ports:
       - "19322:19322/udp"
     command: ["sh", "-c", "/usr/local/bin/dns-server"]
@@ -54,6 +57,7 @@ services:
       - "traefik.enable=false"
     restart: unless-stopped
 
+  # Main HTTP reverse proxy
   traefik:
     image: ghcr.io/sparkfabrik/http-proxy-traefik:feature-98_migrate_to_traefik
     container_name: http-proxy

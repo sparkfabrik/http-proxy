@@ -8,7 +8,7 @@ import (
 
 // Config holds common configuration values used across the application
 type Config struct {
-	DomainTLD          string
+	Domains            []string // List of domains/TLDs to handle
 	DNSIP              string
 	DNSPort            string
 	DNSForwardEnabled  bool
@@ -18,10 +18,11 @@ type Config struct {
 // Load loads configuration from environment variables with defaults
 func Load() *Config {
 	return &Config{
-		DomainTLD:         GetEnvOrDefault("DOMAIN_TLD", "loc"),
-		DNSIP:             GetEnvOrDefault("DNS_IP", "127.0.0.1"),
-		DNSPort:           GetEnvOrDefault("DNS_PORT", "19322"),
-		DNSForwardEnabled: strings.ToLower(GetEnvOrDefault("DNS_FORWARD_ENABLED", "false")) == "true",
+		Domains:            GetEnvOrDefaultStringSlice("HTTP_PROXY_DNS_TLDS", []string{"loc"}),
+		DNSIP:              GetEnvOrDefault("HTTP_PROXY_DNS_TARGET_IP", "127.0.0.1"),
+		DNSPort:            GetEnvOrDefault("HTTP_PROXY_DNS_PORT", "19322"),
+		DNSForwardEnabled:  strings.ToLower(GetEnvOrDefault("DNS_FORWARD_ENABLED", "false")) == "true",
+		DNSUpstreamServers: GetEnvOrDefaultStringSlice("DNS_UPSTREAM_SERVERS", []string{"8.8.8.8:53", "1.1.1.1:53"}),
 	}
 }
 
@@ -46,12 +47,11 @@ func GetEnvOrDefaultInt(key string, defaultValue int) int {
 // GetEnvOrDefaultStringSlice returns an environment variable as a comma-separated slice or a default
 func GetEnvOrDefaultStringSlice(key string, defaultValue []string) []string {
 	if value := os.Getenv(key); value != "" {
-		// Split by comma and trim whitespace
-		parts := strings.Split(value, ",")
-		result := make([]string, 0, len(parts))
-		for _, part := range parts {
-			if trimmed := strings.TrimSpace(part); trimmed != "" {
-				result = append(result, trimmed)
+		result := []string{}
+		for _, item := range strings.Split(value, ",") {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				result = append(result, item)
 			}
 		}
 		if len(result) > 0 {

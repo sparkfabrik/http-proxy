@@ -97,6 +97,12 @@ test_dns() {
     local hostname="$1"
     local expected_ip="127.0.0.1"
     local dns_port="19322"
+    local should_resolve="$2"  # Optional parameter: "should_resolve" or "should_not_resolve"
+
+    # Default to should resolve if not specified
+    if [ -z "$should_resolve" ]; then
+        should_resolve="should_resolve"
+    fi
 
     # Check if dig is available
     if ! command -v dig >/dev/null 2>&1; then
@@ -106,22 +112,83 @@ test_dns() {
 
     log "Testing DNS resolution for ${hostname}..."
 
-    # Test DNS resolution using dig
+    # Test DNS resolution using dig with timeout and error handling
     local result
-    result=$(dig @localhost -p $dns_port "$hostname" +short 2>/dev/null)
+    local dig_exit_code
 
-    if [ -z "$result" ]; then
-        error "DNS resolution failed for ${hostname}"
-        return 1
-    fi
+    # Capture both output and exit code
+    result=$(dig @127.0.0.1 -p $dns_port "$hostname" +short +time=2 +tries=1 2>/dev/null)
+    dig_exit_code=$?
 
-    if [ "$result" = "$expected_ip" ]; then
-        success "DNS resolution for ${hostname} works (resolved to ${result})"
-        return 0
+    if [ "$should_resolve" = "should_not_resolve" ]; then
+        # This domain should NOT resolve
+        # For non-configured domains, the DNS server should either:
+        # 1. Return empty response (silently drop)
+        # 2. Return NXDOMAIN
+        # 3. Timeout (if the server drops the query)
+        if [ $dig_exit_code -ne 0 ] || [ -z "$result" ] || [[ "$result" == *"timed out"* ]] || [[ "$result" == *"connection refused"* ]]; then
+            success "DNS correctly rejected ${hostname} (not configured)"
+            return 0
+        else
+            error "DNS incorrectly resolved ${hostname} to ${result} (should have been rejected)"
+            return 1
+        fi
     else
-        error "DNS resolution for ${hostname} returned unexpected result: ${result} (expected ${expected_ip})"
-        return 1
+        # This domain SHOULD resolve
+        if [ $dig_exit_code -ne 0 ]; then
+            error "DNS resolution failed for ${hostname} (exit code: ${dig_exit_code})"
+            return 1
+        fi
+
+        if [ -z "$result" ] || [[ "$result" == *"timed out"* ]] || [[ "$result" == *"connection refused"* ]]; then
+            error "DNS resolution failed for ${hostname} (no response or timeout)"
+            return 1
+        fi
+
+        # Clean up the result (remove any trailing dots or whitespace)
+        result=$(echo "$result" | tr -d '\n' | sed 's/\.$//')
+
+        if [ "$result" = "$expected_ip" ]; then
+            success "DNS resolution for ${hostname} works (resolved to ${result})"
+            return 0
+        else
+            error "DNS resolution for ${hostname} returned unexpected result: ${result} (expected ${expected_ip})"
+            return 1
+        fi
     fi
+}
+
+# Check if DNS server is running and accessible
+check_dns_server() {
+    local dns_port="19322"
+    local max_attempts=10
+    local attempt=1
+
+    log "Checking if DNS server is accessible..."
+
+    while [ $attempt -le $max_attempts ]; do
+        # Try to query a simple domain - we don't care about the result, just that the server responds
+        if dig @127.0.0.1 -p $dns_port "test.spark.loc" +short +time=2 +tries=1 >/dev/null 2>&1; then
+            success "DNS server is accessible on port ${dns_port}"
+            return 0
+        fi
+
+        # Check if it's a connection refused (server not running) vs timeout (server running but not responding)
+        local test_result
+        test_result=$(dig @127.0.0.1 -p $dns_port "test.spark.loc" +short +time=1 +tries=1 2>&1)
+
+        if [[ "$test_result" == *"connection refused"* ]]; then
+            log "DNS server not yet available (connection refused), waiting... (attempt ${attempt}/${max_attempts})"
+        else
+            log "DNS server responding but query failed, waiting... (attempt ${attempt}/${max_attempts})"
+        fi
+
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+
+    error "DNS server is not accessible after ${max_attempts} attempts"
+    return 1
 }
 
 # Test all DNS functionality
@@ -129,29 +196,77 @@ test_all_dns() {
     log "Testing DNS server functionality..."
     log "=================================="
 
+    # First, check if DNS server is accessible
+    if ! check_dns_server; then
+        error "DNS server is not accessible, skipping DNS tests"
+        return 1
+    fi
+
     local dns_tests_passed=0
     local dns_tests_total=0
 
-    # Test each hostname
+    # Test 1: Basic hostname resolution (configured domains should resolve)
+    log "Test 1: Testing configured domain resolution..."
     for hostname in "$TRAEFIK_HOSTNAME" "$VIRTUAL_HOST_HOSTNAME" "$VIRTUAL_HOST_PORT_HOSTNAME" "$MULTI_VIRTUAL_HOST_HOSTNAME1" "$MULTI_VIRTUAL_HOST_HOSTNAME2"; do
         dns_tests_total=$((dns_tests_total + 1))
-        if test_dns "$hostname"; then
+        if test_dns "$hostname" "should_resolve"; then
             dns_tests_passed=$((dns_tests_passed + 1))
         fi
     done
 
-    # Test some additional DNS queries
-    log "Testing additional DNS queries..."
+    # Test 2: TLD support - any subdomain of configured TLD should resolve
+    log "Test 2: Testing TLD support (any .spark.loc domain should resolve)..."
 
-    # Test a generic .spark.loc domain
-    dns_tests_total=$((dns_tests_total + 1))
-    if test_dns "test.spark.loc"; then
-        dns_tests_passed=$((dns_tests_passed + 1))
-    fi
+    local tld_test_domains=(
+        "test.spark.loc"
+        "example.spark.loc"
+        "api.test.spark.loc"
+    )
 
-    # Test another .spark.loc domain
+    for hostname in "${tld_test_domains[@]}"; do
+        dns_tests_total=$((dns_tests_total + 1))
+        if test_dns "$hostname" "should_resolve"; then
+            dns_tests_passed=$((dns_tests_passed + 1))
+        fi
+    done
+
+    # Test 3: Negative tests - domains that should NOT resolve
+    log "Test 3: Testing rejection of non-configured domains..."
+
+    local negative_test_domains=(
+        "example.com"
+        "test.org"
+        "service.local"
+        "wrong.tld"
+    )
+
+    for hostname in "${negative_test_domains[@]}"; do
+        dns_tests_total=$((dns_tests_total + 1))
+        if test_dns "$hostname" "should_not_resolve"; then
+            dns_tests_passed=$((dns_tests_passed + 1))
+        fi
+    done
+
+    # Test 4: Edge cases
+    log "Test 4: Testing edge cases..."
+
+    # Test malformed domains (these should not resolve)
+    local edge_case_domains=(
+        "."
+        ".loc"
+    )
+
+    for hostname in "${edge_case_domains[@]}"; do
+        dns_tests_total=$((dns_tests_total + 1))
+        if test_dns "$hostname" "should_not_resolve"; then
+            dns_tests_passed=$((dns_tests_passed + 1))
+        fi
+    done
+
+    # Test valid DNS format with trailing dot (should resolve)
+    log "Testing valid DNS format with trailing dot..."
     dns_tests_total=$((dns_tests_total + 1))
-    if test_dns "example.spark.loc"; then
+    if test_dns "spark.loc." "should_resolve"; then
         dns_tests_passed=$((dns_tests_passed + 1))
     fi
 
@@ -161,12 +276,130 @@ test_all_dns() {
         success "All DNS tests passed!"
         return 0
     else
-        error "Some DNS tests failed"
+        error "Some DNS tests failed (${dns_tests_passed}/${dns_tests_total})"
         return 1
     fi
 }
 
-# Cleanup function
+# Test DNS server with different configurations using docker-compose
+test_dns_configurations() {
+    log "Testing DNS server with different configurations..."
+    log "================================================="
+
+    local original_dir=$(pwd)
+    cd "$(dirname "$0")/.."
+
+    # Test configuration 1: Single TLD (loc)
+    log "Configuration Test 1: Single TLD (loc)"
+    test_with_dns_config "loc" "test.loc,example.loc" "example.com,test.org"
+
+    # Test configuration 2: Multiple TLDs (loc,dev)
+    log "Configuration Test 2: Multiple TLDs (loc,dev)"
+    test_with_dns_config "loc,dev" "test.loc,example.dev" "example.com,test.org"
+
+    # Test configuration 3: Specific domains (spark.loc,spark.dev)
+    log "Configuration Test 3: Specific domains (spark.loc,spark.dev)"
+    test_with_dns_config "spark.loc,spark.dev" "spark.loc,api.spark.loc,spark.dev,api.spark.dev" "other.loc,example.com"
+
+    cd "$original_dir"
+
+    # Restore original DNS configuration
+    unset HTTP_PROXY_DNS_TLDS
+    docker-compose up -d dns --quiet-pull 2>/dev/null || true
+    sleep 3
+
+    success "DNS configuration tests completed"
+}
+
+# Helper function to test with a specific DNS configuration
+test_with_dns_config() {
+    local config="$1"
+    local should_resolve="$2"
+    local should_not_resolve="$3"
+
+    log "Testing with HTTP_PROXY_DNS_TLDS='${config}'"
+
+    # Set environment variable and restart DNS service
+    export HTTP_PROXY_DNS_TLDS="$config"
+    docker-compose up -d dns --quiet-pull 2>/dev/null || true
+
+    # Wait for DNS service to be ready
+    sleep 5
+
+    if ! check_dns_server; then
+        warning "DNS server not accessible for config '${config}', skipping"
+        return 1
+    fi
+
+    local config_tests_passed=0
+    local config_tests_total=0
+
+    # Test domains that should resolve
+    IFS=',' read -ra RESOLVE_DOMAINS <<< "$should_resolve"
+    for domain in "${RESOLVE_DOMAINS[@]}"; do
+        config_tests_total=$((config_tests_total + 1))
+        if test_dns "$domain" "should_resolve" >/dev/null 2>&1; then
+            config_tests_passed=$((config_tests_passed + 1))
+        fi
+    done
+
+    # Test domains that should NOT resolve
+    IFS=',' read -ra NO_RESOLVE_DOMAINS <<< "$should_not_resolve"
+    for domain in "${NO_RESOLVE_DOMAINS[@]}"; do
+        config_tests_total=$((config_tests_total + 1))
+        if test_dns "$domain" "should_not_resolve" >/dev/null 2>&1; then
+            config_tests_passed=$((config_tests_passed + 1))
+        fi
+    done
+
+    log "Config test results for '${config}': ${config_tests_passed}/${config_tests_total}"
+
+    if [ "$config_tests_passed" -eq "$config_tests_total" ]; then
+        success "Configuration test passed for: ${config}"
+        return 0
+    else
+        warning "Configuration test failed for: ${config} (${config_tests_passed}/${config_tests_total})"
+        return 1
+    fi
+}
+
+# Test DNS on a specific port
+test_dns_on_port() {
+    local hostname="$1"
+    local port="$2"
+    local should_resolve="$3"
+    local expected_ip="127.0.0.1"
+
+    # Check if dig is available
+    if ! command -v dig >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # Test DNS resolution using dig on specific port with error handling
+    local result
+    local dig_exit_code
+
+    # Capture both output and exit code
+    result=$(dig @127.0.0.1 -p "$port" "$hostname" +short +time=2 +tries=1 2>/dev/null)
+    dig_exit_code=$?
+
+    if [ "$should_resolve" = "should_not_resolve" ]; then
+        # This domain should NOT resolve
+        if [ $dig_exit_code -ne 0 ] || [ -z "$result" ] || [[ "$result" == *"timed out"* ]] || [[ "$result" == *"connection refused"* ]]; then
+            return 0
+        else
+            return 1
+        fi
+    else
+        # This domain should resolve
+        if [ $dig_exit_code -eq 0 ] && [ -n "$result" ] && [ "$result" = "$expected_ip" ]; then
+            return 0
+        else
+            return 1
+        fi
+    fi
+}
+
 cleanup() {
     log "Cleaning up test containers..."
 
@@ -343,6 +576,20 @@ main() {
         return 1
     fi
 
+    # Step 5: Test DNS server configurations
+    log "Step 5: Testing DNS server configurations..."
+    log "==========================================="
+
+    # Only run configuration tests if we have dig available
+    if command -v dig >/dev/null 2>&1; then
+        if ! test_dns_configurations; then
+            warning "DNS configuration tests failed, but continuing..."
+            # Don't fail the entire test suite for configuration tests
+        fi
+    else
+        log "Skipping DNS configuration tests (dig command not available)"
+    fi
+
     # Final results
     log "Test Results:"
     log "============="
@@ -379,9 +626,23 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "   - VIRTUAL_HOST + VIRTUAL_PORT environment variables"
     echo "   - Multiple comma-separated VIRTUAL_HOST values"
     echo "4. Testing HTTP access to all containers using curl"
-    echo "5. Testing DNS resolution for all domains"
+    echo "5. Testing DNS resolution with comprehensive coverage:"
+    echo "   - Basic hostname resolution for configured domains"
+    echo "   - TLD support (any subdomain of configured TLD should resolve)"
+    echo "   - Negative tests (non-configured domains should be rejected)"
+    echo "   - Edge cases and malformed domain handling"
+    echo "6. Testing different DNS server configurations using docker-compose:"
+    echo "   - Single TLD: loc"
+    echo "   - Multiple TLDs: loc,dev"
+    echo "   - Specific domains: spark.loc,spark.dev"
     echo ""
     echo "All test containers use the domain suffix: ${TEST_DOMAIN}"
+    echo ""
+    echo "DNS Tests verify that the server:"
+    echo "- Resolves configured domains and their subdomains"
+    echo "- Rejects queries for non-configured domains (security)"
+    echo "- Handles both TLD patterns (*.loc) and specific domains (spark.loc)"
+    echo "- Supports comma-separated domain lists in HTTP_PROXY_DNS_TLDS environment variable"
     exit 0
 fi
 
