@@ -261,7 +261,14 @@ func (cl *CompatibilityLayer) generateTraefikConfig(inspect types.ContainerJSON,
 		var rule string
 		if isWildcardHost(host.hostname) {
 			// Handle wildcard hosts
-			rule = fmt.Sprintf("HostRegexp(`%s`)", convertWildcardToRegex(host.hostname))
+			regexPattern := convertWildcardToRegex(host.hostname)
+			if regexPattern == "" {
+				cl.logger.Warn("Skipping invalid hostname (potential ReDoS attack)",
+					"container_id", utils.FormatDockerID(inspect.ID),
+					"hostname", host.hostname)
+				continue
+			}
+			rule = fmt.Sprintf("HostRegexp(`%s`)", regexPattern)
 		} else {
 			// Regular host
 			rule = fmt.Sprintf("Host(`%s`)", host.hostname)
@@ -446,6 +453,18 @@ func isWildcardHost(hostname string) bool {
 }
 
 func convertWildcardToRegex(hostname string) string {
+	// Validate hostname length to prevent ReDoS attacks
+	if len(hostname) > 253 {
+		return ""
+	}
+
+	// Validate complexity to prevent ReDoS attacks
+	// Limit number of wildcards to prevent exponential backtracking
+	wildcardCount := strings.Count(hostname, "*")
+	if wildcardCount > 5 {
+		return ""
+	}
+
 	if strings.HasPrefix(hostname, "~") {
 		// Already a regex, return as-is (remove the ~ prefix)
 		return strings.TrimPrefix(hostname, "~")
