@@ -24,11 +24,11 @@ readonly REJECT_DOMAINS="example.com,test.org"
 readonly REJECT_DOMAINS_SPARK="other.loc,example.com"
 
 # Sleep durations
-readonly SLEEP_STACK_START=10
-readonly SLEEP_DNS_RESTART=5
-readonly SLEEP_DNS_CONFIG=10
-readonly SLEEP_CONFIG_RESTORE=3
-readonly SLEEP_PROXY_CONFIG=15
+readonly SLEEP_STACK_START=5
+readonly SLEEP_DNS_RESTART=3
+readonly SLEEP_DNS_CONFIG=3
+readonly SLEEP_CONFIG_RESTORE=2
+readonly SLEEP_PROXY_CONFIG=5
 readonly SLEEP_CONTAINER_CHECK=2
 
 # Test configuration
