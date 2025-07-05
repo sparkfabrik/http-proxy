@@ -354,9 +354,16 @@ func (cl *CompatibilityLayer) writeTraefikConfig(containerID string, cfg *config
 		return fmt.Errorf("failed to marshal Traefik config: %w", err)
 	}
 
-	// Write config file
-	if err := os.WriteFile(configFile, configData, ConfigFilePermissions); err != nil {
-		return fmt.Errorf("failed to write Traefik config file: %w", err)
+	// Write atomically using temporary file
+	tempFile := configFile + ".tmp"
+	if err := os.WriteFile(tempFile, configData, ConfigFilePermissions); err != nil {
+		return fmt.Errorf("failed to write temporary config file: %w", err)
+	}
+
+	// Atomically rename temporary file to final config file
+	if err := os.Rename(tempFile, configFile); err != nil {
+		os.Remove(tempFile) // Clean up on failure
+		return fmt.Errorf("failed to rename config file: %w", err)
 	}
 
 	cl.logger.Info("Wrote Traefik configuration",
