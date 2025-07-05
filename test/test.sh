@@ -12,22 +12,24 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Logging function
-log() {
-    echo -e "${BLUE}[$(date '+%H:%M:%S')]${NC} $1"
-}
+# Test configuration constants
+readonly DNS_PORT="19322"
+readonly TARGET_IP="127.0.0.1"
+readonly DNS_TIMEOUT="2"
+readonly DNS_RETRIES="1"
+readonly TEST_DOMAINS_LOC="test.loc,example.loc"
+readonly TEST_DOMAINS_DEV="test.loc,example.dev"
+readonly TEST_DOMAINS_SPARK="spark.loc,api.spark.loc,spark.dev,api.spark.dev"
+readonly REJECT_DOMAINS="example.com,test.org"
+readonly REJECT_DOMAINS_SPARK="other.loc,example.com"
 
-success() {
-    echo -e "${GREEN}✓${NC} $1"
-}
-
-error() {
-    echo -e "${RED}✗${NC} $1"
-}
-
-warning() {
-    echo -e "${YELLOW}⚠${NC} $1"
-}
+# Sleep durations
+readonly SLEEP_STACK_START=10
+readonly SLEEP_DNS_RESTART=5
+readonly SLEEP_DNS_CONFIG=10
+readonly SLEEP_CONFIG_RESTORE=3
+readonly SLEEP_PROXY_CONFIG=15
+readonly SLEEP_CONTAINER_CHECK=2
 
 # Test configuration
 TEST_DOMAIN="spark.loc"
@@ -46,6 +48,31 @@ VIRTUAL_HOST_PORT_HOSTNAME="app3.${TEST_DOMAIN}"
 MULTI_VIRTUAL_HOST_HOSTNAME1="app4.${TEST_DOMAIN}"
 MULTI_VIRTUAL_HOST_HOSTNAME2="app5.${TEST_DOMAIN}"
 
+# Logging function
+log() {
+    echo -e "${BLUE}[$(date '+%H:%M:%S')]${NC} $1"
+}
+
+success() {
+    echo -e "${GREEN}✓${NC} $1"
+}
+
+error() {
+    echo -e "${RED}✗${NC} $1"
+}
+
+warning() {
+    echo -e "${YELLOW}⚠${NC} $1"
+}
+
+# Helper function to log and sleep
+wait_with_message() {
+    local duration="$1"
+    local message="$2"
+    log "Waiting ${duration}s ${message}..."
+    sleep "$duration"
+}
+
 # Wait function
 wait_for_container() {
     local container_name=$1
@@ -62,7 +89,7 @@ wait_for_container() {
             fi
         fi
 
-        sleep 2
+        wait_with_message "$SLEEP_CONTAINER_CHECK" "for container to initialize"
         attempt=$((attempt + 1))
     done
 
@@ -84,7 +111,7 @@ test_http_access() {
             return 0
         fi
 
-        sleep 3
+        wait_with_message "$SLEEP_CONFIG_RESTORE" "for HTTP service to be ready"
         attempt=$((attempt + 1))
     done
 
@@ -93,101 +120,37 @@ test_http_access() {
 }
 
 # Test DNS functionality
+# Test DNS functionality
 test_dns() {
     local hostname="$1"
-    local expected_ip="127.0.0.1"
-    local dns_port="19322"
-    local should_resolve="$2"  # Optional parameter: "should_resolve" or "should_not_resolve"
+    local should_resolve="${2:-should_resolve}"
 
-    # Default to should resolve if not specified
-    if [ -z "$should_resolve" ]; then
-        should_resolve="should_resolve"
-    fi
+    command -v dig >/dev/null 2>&1 || return 0
 
-    # Check if dig is available
-    if ! command -v dig >/dev/null 2>&1; then
-        log "dig command not available, skipping DNS test for ${hostname}"
-        return 0
-    fi
-
-    log "Testing DNS resolution for ${hostname}..."
-
-    # Test DNS resolution using dig with timeout and error handling
-    local result
-    local dig_exit_code
-
-    # Capture both output and exit code
-    result=$(dig @127.0.0.1 -p $dns_port "$hostname" +short +time=2 +tries=1 2>/dev/null)
-    dig_exit_code=$?
+    local result=$(dig @${TARGET_IP} -p ${DNS_PORT} "$hostname" +short +time=${DNS_TIMEOUT} +tries=${DNS_RETRIES} 2>/dev/null)
+    local exit_code=$?
 
     if [ "$should_resolve" = "should_not_resolve" ]; then
-        # This domain should NOT resolve
-        # For non-configured domains, the DNS server should either:
-        # 1. Return empty response (silently drop)
-        # 2. Return NXDOMAIN
-        # 3. Timeout (if the server drops the query)
-        if [ $dig_exit_code -ne 0 ] || [ -z "$result" ] || [[ "$result" == *"timed out"* ]] || [[ "$result" == *"connection refused"* ]]; then
-            success "DNS correctly rejected ${hostname} (not configured)"
-            return 0
-        else
-            error "DNS incorrectly resolved ${hostname} to ${result} (should have been rejected)"
-            return 1
-        fi
+        [ $exit_code -ne 0 ] || [ -z "$result" ]
     else
-        # This domain SHOULD resolve
-        if [ $dig_exit_code -ne 0 ]; then
-            error "DNS resolution failed for ${hostname} (exit code: ${dig_exit_code})"
-            return 1
-        fi
-
-        if [ -z "$result" ] || [[ "$result" == *"timed out"* ]] || [[ "$result" == *"connection refused"* ]]; then
-            error "DNS resolution failed for ${hostname} (no response or timeout)"
-            return 1
-        fi
-
-        # Clean up the result (remove any trailing dots or whitespace)
-        result=$(echo "$result" | tr -d '\n' | sed 's/\.$//')
-
-        if [ "$result" = "$expected_ip" ]; then
-            success "DNS resolution for ${hostname} works (resolved to ${result})"
-            return 0
-        else
-            error "DNS resolution for ${hostname} returned unexpected result: ${result} (expected ${expected_ip})"
-            return 1
-        fi
+        [ $exit_code -eq 0 ] && [ "$result" = "$TARGET_IP" ]
     fi
 }
 
 # Check if DNS server is running and accessible
+# Check if DNS server is accessible
 check_dns_server() {
-    local dns_port="19322"
-    local max_attempts=10
+    command -v dig >/dev/null 2>&1 || return 0
+
     local attempt=1
-
-    log "Checking if DNS server is accessible..."
-
-    while [ $attempt -le $max_attempts ]; do
-        # Try to query a simple domain - we don't care about the result, just that the server responds
-        if dig @127.0.0.1 -p $dns_port "test.spark.loc" +short +time=2 +tries=1 >/dev/null 2>&1; then
-            success "DNS server is accessible on port ${dns_port}"
+    while [ $attempt -le 10 ]; do
+        if dig @${TARGET_IP} -p ${DNS_PORT} "test.spark.loc" +short +time=1 +tries=1 >/dev/null 2>&1; then
             return 0
         fi
-
-        # Check if it's a connection refused (server not running) vs timeout (server running but not responding)
-        local test_result
-        test_result=$(dig @127.0.0.1 -p $dns_port "test.spark.loc" +short +time=1 +tries=1 2>&1)
-
-        if [[ "$test_result" == *"connection refused"* ]]; then
-            log "DNS server not yet available (connection refused), waiting... (attempt ${attempt}/${max_attempts})"
-        else
-            log "DNS server responding but query failed, waiting... (attempt ${attempt}/${max_attempts})"
-        fi
-
-        sleep 2
+        wait_with_message "$SLEEP_CONTAINER_CHECK" "for DNS server to be ready"
         attempt=$((attempt + 1))
     done
 
-    error "DNS server is not accessible after ${max_attempts} attempts"
     return 1
 }
 
@@ -206,7 +169,7 @@ test_all_dns() {
     local dns_tests_total=0
 
     # Test 1: Basic hostname resolution (configured domains should resolve)
-    log "Test 1: Testing configured domain resolution..."
+    log "Testing configured domain resolution..."
     for hostname in "$TRAEFIK_HOSTNAME" "$VIRTUAL_HOST_HOSTNAME" "$VIRTUAL_HOST_PORT_HOSTNAME" "$MULTI_VIRTUAL_HOST_HOSTNAME1" "$MULTI_VIRTUAL_HOST_HOSTNAME2"; do
         dns_tests_total=$((dns_tests_total + 1))
         if test_dns "$hostname" "should_resolve"; then
@@ -215,7 +178,7 @@ test_all_dns() {
     done
 
     # Test 2: TLD support - any subdomain of configured TLD should resolve
-    log "Test 2: Testing TLD support (any .spark.loc domain should resolve)..."
+    log "Testing TLD support (any .spark.loc domain should resolve)..."
 
     local tld_test_domains=(
         "test.spark.loc"
@@ -231,7 +194,7 @@ test_all_dns() {
     done
 
     # Test 3: Negative tests - domains that should NOT resolve
-    log "Test 3: Testing rejection of non-configured domains..."
+    log "Testing rejection of non-configured domains..."
 
     local negative_test_domains=(
         "example.com"
@@ -248,7 +211,7 @@ test_all_dns() {
     done
 
     # Test 4: Edge cases
-    log "Test 4: Testing edge cases..."
+    log "Testing edge cases..."
 
     # Test malformed domains (these should not resolve)
     local edge_case_domains=(
@@ -303,7 +266,7 @@ test_upstream_dns() {
 
     # Test 1: Query for a domain not in our configured domains but that should resolve via upstream
     # We'll use google.com as it should always resolve via upstream servers
-    log "Test 1: Testing forwarding of external domain (google.com)..."
+    log "Testing forwarding of external domain (google.com)..."
     upstream_tests_total=$((upstream_tests_total + 1))
 
     local external_result
@@ -341,7 +304,7 @@ test_upstream_dns() {
     fi
 
     # Test 2: Query for another well-known external domain
-    log "Test 2: Testing forwarding of another external domain (cloudflare.com)..."
+    log "Testing forwarding of another external domain (cloudflare.com)..."
     upstream_tests_total=$((upstream_tests_total + 1))
 
     local cf_result
@@ -379,7 +342,7 @@ test_upstream_dns() {
     fi
 
     # Test 3: Verify configured domains still resolve to our target IP
-    log "Test 3: Verifying configured domains still resolve to target IP..."
+    log "Verifying configured domains still resolve to target IP..."
     upstream_tests_total=$((upstream_tests_total + 1))
 
     if test_dns "test.spark.loc" "should_resolve"; then
@@ -412,17 +375,15 @@ test_dns_forwarding_configurations() {
     local config_tests_total=2
 
     # Test configuration 1: Forwarding enabled
-    log "Configuration Test 1: DNS forwarding enabled"
+    log "Testing DNS forwarding enabled"
     export HTTP_PROXY_DNS_FORWARD_ENABLED="true"
     export HTTP_PROXY_DNS_UPSTREAM_SERVERS="8.8.8.8:53,1.1.1.1:53"
     docker compose up -d dns --quiet-pull 2>/dev/null || true
-    sleep 5
+    wait_with_message "$SLEEP_DNS_RESTART" "for DNS service to restart with forwarding enabled"
 
     if check_dns_server; then
         # Test external domain resolution
         local external_result
-        local dig_cmd="dig @127.0.0.1 -p 19322 \"google.com\" +short +time=5 +tries=2"
-        log "Executing DNS forwarding test with command: ${dig_cmd}"
         external_result=$(dig @127.0.0.1 -p 19322 "google.com" +short +time=5 +tries=2 2>/dev/null)
 
         # Check if we got at least one valid IPv4 address (handle multiple IPs)
@@ -434,35 +395,24 @@ test_dns_forwarding_configurations() {
                 config_tests_passed=$((config_tests_passed + 1))
             else
                 warning "DNS forwarding enabled but external domain resolution failed - invalid IP format"
-                log "Debug: first IP result: '${first_ip}'"
-                log "Debug: full dig command result: '${external_result}'"
-                log "Debug: DNS server logs (last 10 lines):"
-                docker compose logs --tail=10 dns 2>/dev/null || log "Could not retrieve DNS server logs"
             fi
         else
             warning "DNS forwarding enabled but external domain resolution failed - no result"
-            log "Debug: dig command result: '${external_result}'"
-            log "Debug: DNS server logs (last 10 lines):"
-            docker compose logs --tail=10 dns 2>/dev/null || log "Could not retrieve DNS server logs"
         fi
     else
         warning "DNS server not accessible for forwarding enabled test"
-        log "Debug: DNS server logs (last 10 lines):"
-        docker compose logs --tail=10 dns 2>/dev/null || log "Could not retrieve DNS server logs"
     fi
 
     # Test configuration 2: Forwarding disabled
-    log "Configuration Test 2: DNS forwarding disabled"
+    log "Testing DNS forwarding disabled"
     export HTTP_PROXY_DNS_FORWARD_ENABLED="false"
     docker compose up -d dns --quiet-pull 2>/dev/null || true
-    sleep 5
+    wait_with_message "$SLEEP_DNS_RESTART" "for DNS service to restart with forwarding disabled"
 
     if check_dns_server; then
         # Test that external domains do NOT resolve
         local external_result
         local external_exit_code
-        local dig_cmd="dig @127.0.0.1 -p 19322 \"google.com\" +short +time=3 +tries=1"
-        log "Executing DNS forwarding disabled test with command: ${dig_cmd}"
         external_result=$(dig @127.0.0.1 -p 19322 "google.com" +short +time=3 +tries=1 2>/dev/null)
         external_exit_code=$?
 
@@ -472,15 +422,9 @@ test_dns_forwarding_configurations() {
             config_tests_passed=$((config_tests_passed + 1))
         else
             warning "DNS forwarding disabled but external domain still resolved: ${external_result}"
-            log "Debug: dig command exit code: ${external_exit_code}"
-            log "Debug: dig command result: '${external_result}'"
-            log "Debug: DNS server logs (last 10 lines):"
-            docker compose logs --tail=10 dns 2>/dev/null || log "Could not retrieve DNS server logs"
         fi
     else
         warning "DNS server not accessible for forwarding disabled test"
-        log "Debug: DNS server logs (last 10 lines):"
-        docker compose logs --tail=10 dns 2>/dev/null || log "Could not retrieve DNS server logs"
     fi
 
     cd "$original_dir"
@@ -489,7 +433,7 @@ test_dns_forwarding_configurations() {
     unset HTTP_PROXY_DNS_FORWARD_ENABLED
     unset HTTP_PROXY_DNS_UPSTREAM_SERVERS
     docker compose up -d dns --quiet-pull 2>/dev/null || true
-    sleep 3
+    wait_with_message "$SLEEP_CONFIG_RESTORE" "for DNS service to restore original configuration"
 
     log "DNS forwarding configuration tests: ${config_tests_passed}/${config_tests_total} passed"
 
@@ -510,232 +454,95 @@ test_dns_configurations() {
     local original_dir=$(pwd)
     cd "$(dirname "$0")/.."
 
-    local dns_config_tests_passed=0
-    local dns_config_tests_total=3
+    local passed=0
 
-    # Test configuration 1: Single TLD (loc)
-    log "Configuration Test 1: Single TLD (loc)"
-    if test_with_dns_config "loc" "test.loc,example.loc" "example.com,test.org"; then
-        dns_config_tests_passed=$((dns_config_tests_passed + 1))
-    fi
+    # Test configurations
+    log "Testing DNS config: Single TLD (loc)"
+    test_with_dns_config "loc" "$TEST_DOMAINS_LOC" "$REJECT_DOMAINS" && passed=$((passed + 1))
 
-    # Test configuration 2: Multiple TLDs (loc,dev)
-    log "Configuration Test 2: Multiple TLDs (loc,dev)"
-    if test_with_dns_config "loc,dev" "test.loc,example.dev" "example.com,test.org"; then
-        dns_config_tests_passed=$((dns_config_tests_passed + 1))
-    fi
+    log "Testing DNS config: Multiple TLDs (loc,dev)"
+    test_with_dns_config "loc,dev" "$TEST_DOMAINS_DEV" "$REJECT_DOMAINS" && passed=$((passed + 1))
 
-    # Test configuration 3: Specific domains (spark.loc,spark.dev)
-    log "Configuration Test 3: Specific domains (spark.loc,spark.dev)"
-    if test_with_dns_config "spark.loc,spark.dev" "spark.loc,api.spark.loc,spark.dev,api.spark.dev" "other.loc,example.com"; then
-        dns_config_tests_passed=$((dns_config_tests_passed + 1))
-    fi
+    log "Testing DNS config: Specific domains (spark.loc,spark.dev)"
+    test_with_dns_config "spark.loc,spark.dev" "$TEST_DOMAINS_SPARK" "$REJECT_DOMAINS_SPARK" && passed=$((passed + 1))
 
     cd "$original_dir"
 
-    # Restore original DNS configuration
+    # Restore original configuration
     unset HTTP_PROXY_DNS_TLDS
-    docker compose up -d dns --quiet-pull 2>/dev/null || true
-    sleep 3
+    docker compose up -d dns >/dev/null 2>&1 || true
+    wait_with_message "$SLEEP_CONFIG_RESTORE" "for DNS service to restore original configuration"
 
-    log "DNS configuration tests: ${dns_config_tests_passed}/${dns_config_tests_total} passed"
-
-    if [ "$dns_config_tests_passed" -eq "$dns_config_tests_total" ]; then
+    if [ "$passed" -eq 3 ]; then
         success "DNS configuration tests passed"
         return 0
     else
-        error "DNS configuration tests failed (${dns_config_tests_passed}/${dns_config_tests_total})"
+        error "DNS configuration tests failed"
         return 1
     fi
 }
 
 # Helper function to test with a specific DNS configuration
+# Test DNS with specific configuration
 test_with_dns_config() {
     local config="$1"
     local should_resolve="$2"
     local should_not_resolve="$3"
 
-    log "Testing with HTTP_PROXY_DNS_TLDS='${config}'"
+    log "Testing configuration: $config"
 
-    # Stop the entire stack to ensure clean restart
-    log "Stopping DNS service to apply new configuration..."
-    docker compose down 2>/dev/null || true
+    # Apply configuration
+    docker compose stop dns >/dev/null 2>&1 || true
+    docker compose rm -f dns >/dev/null 2>&1 || true
+    export HTTP_PROXY_DNS_TLDS="$config"
+    docker compose up -d dns --force-recreate >/dev/null 2>&1 || true
+    wait_with_message "$SLEEP_DNS_CONFIG" "for DNS service to apply new configuration"
 
-    # Create a temporary .env file with the new configuration
-    local temp_env_file=$(mktemp)
-    echo "HTTP_PROXY_DNS_TLDS=${config}" > "$temp_env_file"
-    echo "LOG_LEVEL=${LOG_LEVEL:-info}" >> "$temp_env_file"
-    echo "HTTP_PROXY_DNS_FORWARD_ENABLED=${HTTP_PROXY_DNS_FORWARD_ENABLED:-false}" >> "$temp_env_file"
-    echo "HTTP_PROXY_DNS_UPSTREAM_SERVERS=${HTTP_PROXY_DNS_UPSTREAM_SERVERS:-8.8.8.8:53,1.1.1.1:53}" >> "$temp_env_file"
-    echo "HTTP_PROXY_DNS_TARGET_IP=${HTTP_PROXY_DNS_TARGET_IP:-127.0.0.1}" >> "$temp_env_file"
-    echo "HTTP_PROXY_DNS_PORT=${HTTP_PROXY_DNS_PORT:-19322}" >> "$temp_env_file"
+    check_dns_server || return 1
 
-    log "Debug: Created temporary .env file: ${temp_env_file}"
-    log "Debug: Contents of temporary .env file:"
-    cat "$temp_env_file"
+    # Test domains
+    local passed=0 total=0
 
-    # Start DNS service with the temporary environment file
-    log "Starting DNS service with config: ${config}"
-    docker compose --env-file "$temp_env_file" up -d dns --force-recreate
-
-    # Show the logs immediately to debug what's happening
-    log "Debug: DNS service startup logs:"
-    docker compose logs dns
-
-    # Clean up the temporary file
-    rm -f "$temp_env_file"
-
-    # Wait longer for DNS service to be ready with new config
-    sleep 10
-
-    if ! check_dns_server; then
-        warning "DNS server not accessible for config '${config}', skipping"
-        return 1
-    fi
-
-    # Verify that the DNS server picked up the new configuration
-    log "Verifying DNS server configuration was applied..."
-    sleep 2  # Give logs time to appear
-    
-    # Show more comprehensive logs to debug the issue
-    log "Debug: Full DNS startup logs:"
-    docker compose logs dns | tail -20
-    
-    local dns_config_log=$(docker compose logs dns 2>/dev/null | grep "Handling domains/TLDs" | tail -1)
-    if [ -n "$dns_config_log" ]; then
-        log "DNS server configuration: ${dns_config_log}"
-    else
-        warning "Could not verify DNS configuration from logs"
-    fi
-
-    # Also check environment variables inside the container
-    log "Checking DNS server environment variables..."
-    log "Debug: All environment variables in DNS container:"
-    docker compose exec -T dns env | grep HTTP_PROXY || log "No HTTP_PROXY environment variables found"
-
-    local config_tests_passed=0
-    local config_tests_total=0
-
-    # Test domains that should resolve
-    IFS=',' read -ra RESOLVE_DOMAINS <<< "$should_resolve"
-    for domain in "${RESOLVE_DOMAINS[@]}"; do
-        config_tests_total=$((config_tests_total + 1))
-        log "Testing domain '${domain}' (should resolve) with config '${config}'"
-        local dig_cmd="dig @127.0.0.1 -p 19322 \"${domain}\" +short +time=2 +tries=1"
-        log "Debug: Executing command: ${dig_cmd}"
-        if test_dns "$domain" "should_resolve" >/dev/null 2>&1; then
-            config_tests_passed=$((config_tests_passed + 1))
-            success "Domain '${domain}' resolved correctly"
+    IFS=',' read -ra domains <<< "$should_resolve"
+    for domain in "${domains[@]}"; do
+        total=$((total + 1))
+        if test_dns "$domain" "should_resolve"; then
+            passed=$((passed + 1))
+            success "✓ $domain"
         else
-            warning "Domain '${domain}' failed to resolve (expected to resolve)"
-            log "Debug: DNS server logs (last 5 lines):"
-            docker compose logs --tail=5 dns 2>/dev/null || log "Could not retrieve DNS server logs"
+            error "✗ $domain (should resolve)"
         fi
     done
 
-    # Test domains that should NOT resolve
-    IFS=',' read -ra NO_RESOLVE_DOMAINS <<< "$should_not_resolve"
-    for domain in "${NO_RESOLVE_DOMAINS[@]}"; do
-        config_tests_total=$((config_tests_total + 1))
-        log "Testing domain '${domain}' (should NOT resolve) with config '${config}'"
-        local dig_cmd="dig @127.0.0.1 -p 19322 \"${domain}\" +short +time=2 +tries=1"
-        log "Debug: Executing command: ${dig_cmd}"
-        if test_dns "$domain" "should_not_resolve" >/dev/null 2>&1; then
-            config_tests_passed=$((config_tests_passed + 1))
-            success "Domain '${domain}' correctly rejected"
+    IFS=',' read -ra domains <<< "$should_not_resolve"
+    for domain in "${domains[@]}"; do
+        total=$((total + 1))
+        if test_dns "$domain" "should_not_resolve"; then
+            passed=$((passed + 1))
+            success "✓ $domain (correctly rejected)"
         else
-            warning "Domain '${domain}' incorrectly resolved (expected to be rejected)"
-            log "Debug: DNS server logs (last 5 lines):"
-            docker compose logs --tail=5 dns 2>/dev/null || log "Could not retrieve DNS server logs"
+            error "✗ $domain (should be rejected)"
         fi
     done
 
-    log "Config test results for '${config}': ${config_tests_passed}/${config_tests_total}"
-
-    if [ "$config_tests_passed" -eq "$config_tests_total" ]; then
-        success "Configuration test passed for: ${config}"
-        return 0
-    else
-        warning "Configuration test failed for: ${config} (${config_tests_passed}/${config_tests_total})"
-        log "Debug: Full DNS server logs for failed configuration '${config}':"
-        docker compose logs --tail=15 dns 2>/dev/null || log "Could not retrieve DNS server logs"
-        return 1
-    fi
+    [ "$passed" -eq "$total" ]
 }
 
-# Test DNS on a specific port
-test_dns_on_port() {
-    local hostname="$1"
-    local port="$2"
-    local should_resolve="$3"
-    local expected_ip="127.0.0.1"
-
-    # Check if dig is available
-    if ! command -v dig >/dev/null 2>&1; then
-        return 0
-    fi
-
-    # Test DNS resolution using dig on specific port with error handling
-    local result
-    local dig_exit_code
-
-    # Capture both output and exit code
-    result=$(dig @127.0.0.1 -p "$port" "$hostname" +short +time=2 +tries=1 2>/dev/null)
-    dig_exit_code=$?
-
-    if [ "$should_resolve" = "should_not_resolve" ]; then
-        # This domain should NOT resolve
-        if [ $dig_exit_code -ne 0 ] || [ -z "$result" ] || [[ "$result" == *"timed out"* ]] || [[ "$result" == *"connection refused"* ]]; then
-            return 0
-        else
-            return 1
-        fi
-    else
-        # This domain should resolve
-        if [ $dig_exit_code -eq 0 ] && [ -n "$result" ] && [ "$result" = "$expected_ip" ]; then
-            return 0
-        else
-            return 1
-        fi
-    fi
-}
-
+# Cleanup test containers
 cleanup() {
-    log "Cleaning up test containers..."
-
-    docker rm -f "$TRAEFIK_CONTAINER" 2>/dev/null || true
-    docker rm -f "$VIRTUAL_HOST_CONTAINER" 2>/dev/null || true
-    docker rm -f "$VIRTUAL_HOST_PORT_CONTAINER" 2>/dev/null || true
-    docker rm -f "$MULTI_VIRTUAL_HOST_CONTAINER" 2>/dev/null || true
-
-    success "Cleanup completed"
+    docker rm -f "$TRAEFIK_CONTAINER" "$VIRTUAL_HOST_CONTAINER" "$VIRTUAL_HOST_PORT_CONTAINER" "$MULTI_VIRTUAL_HOST_CONTAINER" 2>/dev/null || true
 }
 
 # Full stack cleanup and rebuild
 full_cleanup_and_rebuild() {
-    log "Full cleanup and rebuild of HTTP proxy stack..."
-    log "==============================================="
-
-    # Stop and remove all containers from the stack
-    log "Stopping and removing all stack containers..."
+    log "Setting up HTTP proxy stack..."
     cd "$(dirname "$0")/.."
     docker compose down --volumes --remove-orphans 2>/dev/null || true
-
-    # Remove any dangling containers that might interfere
-    docker rm -f "$TRAEFIK_CONTAINER" 2>/dev/null || true
-    docker rm -f "$VIRTUAL_HOST_CONTAINER" 2>/dev/null || true
-    docker rm -f "$VIRTUAL_HOST_PORT_CONTAINER" 2>/dev/null || true
-    docker rm -f "$MULTI_VIRTUAL_HOST_CONTAINER" 2>/dev/null || true
-
-    # Remove any dangling images from previous builds (optional, but ensures clean state)
-    log "Cleaning up dangling images..."
+    cleanup
     docker image prune -f >/dev/null 2>&1 || true
-
-    # Rebuild all images from scratch
-    log "Building all images from scratch..."
+    log "Building Docker images..."
     docker compose build --pull
-
-    success "Full cleanup and rebuild completed"
+    success "Build completed"
 }
 
 # Main test function
@@ -743,207 +550,91 @@ main() {
     log "Starting HTTP Proxy Integration Tests"
     log "======================================"
 
-    # Check if we should skip rebuild
+    # Setup
     if [ "$1" = "--no-rebuild" ]; then
-        log "Skipping full rebuild (--no-rebuild flag detected)"
-        # Just cleanup test containers
         cleanup
     else
-        # Full cleanup and rebuild to ensure clean state
         full_cleanup_and_rebuild
     fi
 
-    # Step 1: Start the HTTP proxy stack
-    log "Starting HTTP proxy stack..."
+    # Start stack and create test containers
     cd "$(dirname "$0")/.."
+    log "Starting HTTP proxy stack..."
     docker compose up -d
+    wait_with_message "$SLEEP_STACK_START" "for proxy services to initialize"
+    success "Stack started"
 
-    # Wait for services to be ready
-    log "Waiting for proxy services to start..."
-    sleep 10
-
-    # Step 2: Create test containers
+    # Create test containers
     log "Creating test containers..."
-
-    # Container 1: Traefik labels
-    log "Creating container with Traefik labels: ${TRAEFIK_CONTAINER}"
-    docker run -d \
-        --name "$TRAEFIK_CONTAINER" \
+    docker run -d --name "$TRAEFIK_CONTAINER" \
         --label "traefik.enable=true" \
         --label "traefik.http.routers.${TRAEFIK_CONTAINER}.rule=Host(\`app1.${TEST_DOMAIN}\`)" \
         --label "traefik.http.services.${TRAEFIK_CONTAINER}.loadbalancer.server.port=80" \
-        --network http-proxy_default \
-        nginx:alpine
+        --network http-proxy_default nginx:alpine
 
-    # Container 2: VIRTUAL_HOST only
-    log "Creating container with VIRTUAL_HOST: ${VIRTUAL_HOST_CONTAINER}"
-    docker run -d \
-        --name "$VIRTUAL_HOST_CONTAINER" \
-        --env "VIRTUAL_HOST=app2.${TEST_DOMAIN}" \
-        nginx:alpine
+    docker run -d --name "$VIRTUAL_HOST_CONTAINER" \
+        --env "VIRTUAL_HOST=app2.${TEST_DOMAIN}" nginx:alpine
 
-    # Container 3: VIRTUAL_HOST and VIRTUAL_PORT
-    log "Creating container with VIRTUAL_HOST and VIRTUAL_PORT: ${VIRTUAL_HOST_PORT_CONTAINER}"
-    docker run -d \
-        --name "$VIRTUAL_HOST_PORT_CONTAINER" \
-        --env "VIRTUAL_HOST=app3.${TEST_DOMAIN}" \
-        --env "VIRTUAL_PORT=80" \
-        nginx:alpine
+    docker run -d --name "$VIRTUAL_HOST_PORT_CONTAINER" \
+        --env "VIRTUAL_HOST=app3.${TEST_DOMAIN}" --env "VIRTUAL_PORT=80" nginx:alpine
 
-    # Container 4: Multiple comma-separated VIRTUAL_HOST values
-    log "Creating container with multiple VIRTUAL_HOST values: ${MULTI_VIRTUAL_HOST_CONTAINER}"
-    docker run -d \
-        --name "$MULTI_VIRTUAL_HOST_CONTAINER" \
+    docker run -d --name "$MULTI_VIRTUAL_HOST_CONTAINER" \
         --env "VIRTUAL_HOST=app4.${TEST_DOMAIN},app5.${TEST_DOMAIN}" \
-        --env "VIRTUAL_PORT=80" \
-        nginx:alpine
+        --env "VIRTUAL_PORT=80" nginx:alpine
 
-    # Wait for containers to be ready
+    # Wait for containers
     wait_for_container "$TRAEFIK_CONTAINER"
     wait_for_container "$VIRTUAL_HOST_CONTAINER"
     wait_for_container "$VIRTUAL_HOST_PORT_CONTAINER"
     wait_for_container "$MULTI_VIRTUAL_HOST_CONTAINER"
+    wait_with_message "$SLEEP_PROXY_CONFIG" "for proxy configuration to propagate"
 
-    # Give some time for the proxy to detect and configure routes
-    log "Waiting for proxy configuration to propagate..."
-    sleep 15
+    # Run tests
+    local passed=0 total=0
 
-    # Step 3: Test HTTP access
-    log "Testing HTTP access to all containers..."
-    log "======================================="
+    # HTTP Tests
+    log "Testing HTTP access..."
+    total=$((total + 1))
+    local http_passed=0
+    test_http_access "app1.${TEST_DOMAIN}" && http_passed=$((http_passed + 1))
+    test_http_access "app2.${TEST_DOMAIN}" && http_passed=$((http_passed + 1))
+    test_http_access "app3.${TEST_DOMAIN}" && http_passed=$((http_passed + 1))
+    test_http_access "app4.${TEST_DOMAIN}" && http_passed=$((http_passed + 1))
+    test_http_access "app5.${TEST_DOMAIN}" && http_passed=$((http_passed + 1))
+    [ "$http_passed" -eq 5 ] && passed=$((passed + 1))
 
-    local http_tests_passed=0
-    local http_tests_total=5
-
-    # Test Traefik labeled container
-    if test_http_access "app1.${TEST_DOMAIN}"; then
-        http_tests_passed=$((http_tests_passed + 1))
-    fi
-
-    # Test VIRTUAL_HOST container
-    if test_http_access "app2.${TEST_DOMAIN}"; then
-        http_tests_passed=$((http_tests_passed + 1))
-    fi
-
-    # Test VIRTUAL_HOST + VIRTUAL_PORT container
-    if test_http_access "app3.${TEST_DOMAIN}"; then
-        http_tests_passed=$((http_tests_passed + 1))
-    fi
-
-    # Test multi-VIRTUAL_HOST container (first hostname)
-    if test_http_access "app4.${TEST_DOMAIN}"; then
-        http_tests_passed=$((http_tests_passed + 1))
-    fi
-
-    # Test multi-VIRTUAL_HOST container (second hostname)
-    if test_http_access "app5.${TEST_DOMAIN}"; then
-        http_tests_passed=$((http_tests_passed + 1))
-    fi
-
-    # Show detailed curl responses for debugging
-    log "Detailed HTTP responses:"
-    log "========================"
-
-    for app in app1 app2 app3 app4 app5; do
-        log "Testing ${app}.${TEST_DOMAIN}:"
-        if curl -f -s -H "Host: ${app}.${TEST_DOMAIN}" http://localhost:${HTTP_PORT} | head -5; then
-            success "Response received from ${app}.${TEST_DOMAIN}"
-        else
-            error "No response from ${app}.${TEST_DOMAIN}"
-        fi
-        echo
-    done
-
-    # Show container logs for debugging
-    log "Container logs for debugging:"
-    log "============================="
-
-    echo "Dinghy Layer logs:"
-    docker compose logs --tail=10 dinghy_layer 2>/dev/null || true
-    echo
-
-    echo "Join Networks logs:"
-    docker compose logs --tail=10 join_networks 2>/dev/null || true
-    echo
-
-    echo "DNS Server logs:"
-    docker compose logs --tail=10 dns 2>/dev/null || true
-    echo
-
-    # Initialize overall test tracking
-    local total_test_suites_passed=0
-    local total_test_suites=0
-
-    # Step 4: Test DNS functionality
-    log "Step 4: Testing DNS functionality..."
-    log "===================================="
-    total_test_suites=$((total_test_suites + 1))
-    if test_all_dns; then
-        success "DNS tests passed"
-        total_test_suites_passed=$((total_test_suites_passed + 1))
-    else
-        error "DNS tests failed"
-    fi
-
-    # Step 5: Test upstream DNS functionality (if dig is available)
+    # DNS Tests (if dig available)
     if command -v dig >/dev/null 2>&1; then
-        log "Step 5: Testing upstream DNS functionality..."
-        log "============================================"
-        total_test_suites=$((total_test_suites + 1))
-        if test_upstream_dns; then
-            success "Upstream DNS tests passed"
-            total_test_suites_passed=$((total_test_suites_passed + 1))
-        else
-            error "Upstream DNS tests failed"
-        fi
+        log "Testing DNS functionality..."
+        total=$((total + 1))
+        test_all_dns && passed=$((passed + 1))
 
-        # Step 6: Test DNS forwarding configurations
-        log "Step 6: Testing DNS forwarding configurations..."
-        log "==============================================="
-        total_test_suites=$((total_test_suites + 1))
-        if test_dns_forwarding_configurations; then
-            success "DNS forwarding configuration tests passed"
-            total_test_suites_passed=$((total_test_suites_passed + 1))
-        else
-            error "DNS forwarding configuration tests failed"
-        fi
+        log "Testing upstream DNS..."
+        total=$((total + 1))
+        test_upstream_dns && passed=$((passed + 1))
 
-        # Step 7: Test DNS server configurations
-        log "Step 7: Testing DNS server configurations..."
-        log "==========================================="
-        total_test_suites=$((total_test_suites + 1))
-        if test_dns_configurations; then
-            success "DNS configuration tests passed"
-            total_test_suites_passed=$((total_test_suites_passed + 1))
-        else
-            error "DNS configuration tests failed"
-        fi
-    else
-        log "Skipping DNS-related tests (dig command not available)"
+        log "Testing DNS forwarding configurations..."
+        total=$((total + 1))
+        test_dns_forwarding_configurations && passed=$((passed + 1))
+
+        log "Testing DNS server configurations..."
+        total=$((total + 1))
+        test_dns_configurations && passed=$((passed + 1))
     fi
 
-    # Final results
+    # Results
     log "Test Results:"
     log "============="
-    log "HTTP Tests: ${http_tests_passed}/${http_tests_total} passed"
-    log "Test Suites: ${total_test_suites_passed}/${total_test_suites} passed"
+    log "HTTP Tests: ${http_passed}/5 passed"
+    log "Test Suites: ${passed}/${total} passed"
 
-    # Check if all tests passed
-    local all_tests_passed=true
-    if [ $http_tests_passed -ne $http_tests_total ]; then
-        all_tests_passed=false
-    fi
-    if [ $total_test_suites_passed -ne $total_test_suites ]; then
-        all_tests_passed=false
-    fi
+    cleanup
 
-    if [ "$all_tests_passed" = true ]; then
+    if [ "$passed" -eq "$total" ]; then
         success "All tests passed! HTTP proxy is working correctly."
-        log "Exit code: 0 (success)"
         return 0
     else
         error "Some tests failed. Check the logs above for details."
-        log "Exit code: 1 (failure)"
         return 1
     fi
 }
@@ -951,59 +642,20 @@ main() {
 # Handle script interruption
 trap cleanup EXIT
 
-# Check if help is requested
+# Help message
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "HTTP Proxy Integration Test Script"
-    echo ""
-    echo "Usage: $0 [options]"
+    echo "Usage: $0 [--no-rebuild|--help]"
     echo ""
     echo "Options:"
-    echo "  --no-rebuild    Skip full cleanup and rebuild (faster for development)"
+    echo "  --no-rebuild    Skip full cleanup and rebuild"
     echo "  --help, -h      Show this help message"
-    echo ""
-    echo "This script tests the HTTP proxy functionality by:"
-    echo "1. Full cleanup and rebuild of all Docker images (unless --no-rebuild)"
-    echo "2. Starting the HTTP proxy stack with docker compose"
-    echo "3. Creating test containers with different configurations:"
-    echo "   - Traefik labels"
-    echo "   - VIRTUAL_HOST environment variable"
-    echo "   - VIRTUAL_HOST + VIRTUAL_PORT environment variables"
-    echo "   - Multiple comma-separated VIRTUAL_HOST values"
-    echo "4. Testing HTTP access to all containers using curl"
-    echo "5. Testing DNS resolution with comprehensive coverage:"
-    echo "   - Basic hostname resolution for configured domains"
-    echo "   - TLD support (any subdomain of configured TLD should resolve)"
-    echo "   - Negative tests (non-configured domains should be rejected)"
-    echo "   - Edge cases and malformed domain handling"
-    echo "6. Testing upstream DNS server functionality:"
-    echo "   - External domain forwarding when enabled"
-    echo "   - Configured domain resolution to target IP"
-    echo "   - Forwarding disabled behavior verification"
-    echo "7. Testing different DNS server configurations using docker compose:"
-    echo "   - Single TLD: loc"
-    echo "   - Multiple TLDs: loc,dev"
-    echo "   - Specific domains: spark.loc,spark.dev"
-    echo ""
-    echo "All test containers use the domain suffix: ${TEST_DOMAIN}"
-    echo ""
-    echo "DNS Tests verify that the server:"
-    echo "- Resolves configured domains and their subdomains"
-    echo "- Rejects queries for non-configured domains (security)"
-    echo "- Handles both TLD patterns (*.loc) and specific domains (spark.loc)"
-    echo "- Supports comma-separated domain lists in HTTP_PROXY_DNS_TLDS environment variable"
     exit 0
 fi
 
-# Run the main test and capture exit code
+# Run tests and capture exit code
 main "$@"
 exit_code=$?
-
-# Log final result
-if [ $exit_code -eq 0 ]; then
-    log "🎉 All tests completed successfully!"
-else
-    log "❌ Tests failed with exit code: $exit_code"
-fi
 
 # Exit with the same code as main function
 exit $exit_code
