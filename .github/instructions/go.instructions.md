@@ -18,6 +18,7 @@ Follow idiomatic Go practices and community standards when writing Go code. Thes
 - Document exported types, functions, methods, and packages
 - Use Go modules for dependency management
 - When you run `go build` to test new features, remember to remove the binary at the end of your testing to avoid cluttering the directory with unnecessary files.
+- At the end of a new implementation, refactoring or feature, always run tests with `make test` to ensure everything works as expected. This will help catch any issues early and maintain code quality.
 
 ## Naming Conventions
 

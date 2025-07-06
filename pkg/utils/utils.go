@@ -194,65 +194,34 @@ func ShouldManageContainer(env []string, labels map[string]string) bool {
 	return false
 }
 
-// GetRunningContainersInNetwork returns all running containers connected to the specified network,
-// optionally excluding a container by name
-func GetRunningContainersInNetwork(ctx context.Context, dockerClient *client.Client, networkID, excludeContainerName string) ([]types.Container, error) {
-	// Get all containers with retry logic
-	containers, err := RetryContainerList(ctx, dockerClient, container.ListOptions{All: true})
+// HasManageableContainersInNetwork checks if a network has any manageable containers,
+// optionally excluding a specific container
+func HasManageableContainersInNetwork(ctx context.Context, dockerClient *client.Client, networkID, excludeContainerName string) (bool, error) {
+	// Inspect the network to get the container map
+	networkResource, err := dockerClient.NetworkInspect(ctx, networkID,
+		network.InspectOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to list containers: %w", err)
+		return false, fmt.Errorf("failed to inspect network: %w", err)
 	}
 
-	var networkContainers []types.Container
-	for _, cont := range containers {
-		// Skip non-running containers
-		if cont.State != "running" {
-			continue
-		}
-
+	for containerID, endpoint := range networkResource.Containers {
 		// Skip if this is the excluded container
-		if excludeContainerName != "" && len(cont.Names) > 0 {
-			containerName := strings.TrimPrefix(cont.Names[0], "/")
+		if excludeContainerName != "" {
+			containerName := strings.TrimPrefix(endpoint.Name, "/")
 			if containerName == excludeContainerName {
 				continue
 			}
 		}
 
-		// Check if this container is connected to the network
-		inspect, err := RetryContainerInspect(ctx, dockerClient, cont.ID)
+		// Inspect the container to get its details
+		inspect, err := RetryContainerInspect(ctx, dockerClient, containerID)
 		if err != nil {
 			continue // Skip containers we can't inspect
 		}
 
-		isConnected := false
-		for _, networkData := range inspect.NetworkSettings.Networks {
-			if networkData.NetworkID == networkID {
-				isConnected = true
-				break
-			}
-		}
-
-		if isConnected {
-			networkContainers = append(networkContainers, cont)
-		}
-	}
-
-	return networkContainers, nil
-}
-
-// HasManageableContainersInNetwork checks if a network has any manageable containers,
-// optionally excluding a specific container
-func HasManageableContainersInNetwork(ctx context.Context, dockerClient *client.Client, networkID, excludeContainerName string) (bool, error) {
-	containers, err := GetRunningContainersInNetwork(ctx, dockerClient, networkID, excludeContainerName)
-	if err != nil {
-		return false, err
-	}
-
-	for _, cont := range containers {
-		// Inspect the container to get env vars and labels
-		inspect, err := RetryContainerInspect(ctx, dockerClient, cont.ID)
-		if err != nil {
-			continue // Skip containers we can't inspect
+		// Only consider running containers
+		if !inspect.State.Running {
+			continue
 		}
 
 		if ShouldManageContainer(inspect.Config.Env, inspect.Config.Labels) {
