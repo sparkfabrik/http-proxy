@@ -28,6 +28,24 @@ type DNSServer struct {
 
 // forwardDNSQuery forwards DNS queries to upstream servers
 func (s *DNSServer) forwardDNSQuery(r *dns.Msg) (*dns.Msg, error) {
+	// Basic validation to prevent abuse
+	if len(r.Question) == 0 || len(r.Question) > 10 {
+		return nil, fmt.Errorf("invalid query: bad question count")
+	}
+
+	// Validate each question for security
+	for _, question := range r.Question {
+		// Validate domain name length (RFC 1034/1035)
+		if len(question.Name) > 253 {
+			return nil, fmt.Errorf("invalid query: domain name too long")
+		}
+
+		// Check for malicious patterns that could cause amplification
+		if strings.Count(question.Name, ".") > 127 {
+			return nil, fmt.Errorf("invalid query: too many subdomains")
+		}
+	}
+
 	c := dns.Client{Timeout: DNS_UPSTREAM_TIMEOUT}
 
 	for _, server := range s.upstreamServers {
