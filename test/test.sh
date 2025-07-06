@@ -120,7 +120,6 @@ test_http_access() {
 }
 
 # Test DNS functionality
-# Test DNS functionality
 test_dns() {
     local hostname="$1"
     local should_resolve="${2:-should_resolve}"

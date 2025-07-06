@@ -65,6 +65,7 @@ func (s *DNSServer) createRefusedResponse(r *dns.Msg) *dns.Msg {
 	msg := dns.Msg{}
 	msg.SetReply(r)
 	msg.Rcode = dns.RcodeRefused
+	msg.Authoritative = true
 	return &msg
 }
 
