@@ -1,13 +1,16 @@
 ---
-description: 'General coding guidelines and project-specific best practices'
-applyTo: '**'
+description: "General coding guidelines and project-specific best practices"
+applyTo: "**/*.{js,ts,py,php,go,java,c,cpp,cs,rb,rs}"
 ---
 
 # General Coding Guidelines
 
 ## Docker
 
-- docker compose command is "docker compose" (not "docker-compose")
+- Use `docker compose` command (not `docker-compose`)
+- Always use specific image tags, avoid `latest` in production
+- Use multi-stage builds to reduce image size
+- Include .dockerignore files
 
 ## Code Quality Standards
 
@@ -16,5 +19,18 @@ applyTo: '**'
 - Use meaningful and descriptive names
 - Keep functions small and focused on single responsibility
 - Write self-documenting code
-- When you think it is needed, for a new feature or significant change, consider adding the documentation to the #README.md file or in the #docs/ directory.
-- When we add new env variables, make sure they are documented in the `README.md` and added to the #example/compose.yml file.
+
+## Documentation Standards
+
+- Update README.md for new features or significant changes
+- Document new environment variables in README.md
+- Add new env variables to example/compose.yml
+- Include inline comments for complex business logic
+- Use JSDoc/TSDoc for function documentation
+
+## Security Guidelines
+
+- Never commit secrets or API keys
+- Use environment variables for configuration
+- Validate all user inputs
+- Follow principle of least privilege
