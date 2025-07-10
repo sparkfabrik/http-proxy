@@ -1,6 +1,6 @@
 ---
 description: "General coding guidelines and project-specific best practices"
-applyTo: "**/*.{js,ts,py,php,go,java,c,cpp,cs,rb,rs}"
+applyTo: "**"
 ---
 
 # General Coding Guidelines
