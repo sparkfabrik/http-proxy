@@ -12,8 +12,8 @@ CERT_DIR="${CONFIG_DIR}/certs"
 # Function to discover compose file in priority order
 discover_compose_file() {
   local candidates=(
-    "${CONFIG_DIR}/compose.yml"                        # 1. User override (highest priority)
-    "${SCRIPT_DIR}/compose.yml"                        # 2. Default (shipped with repo)
+    "${CONFIG_DIR}/compose.yml"
+    "${SCRIPT_DIR}/compose.yml"
   )
 
   for candidate in "${candidates[@]}"; do
@@ -106,37 +106,22 @@ configure_macos_dns() {
   [[ "${OSTYPE}" != "darwin"* ]] && return 0
 
   local dns_port="${HTTP_PROXY_DNS_PORT:-19322}"
-  local updated_any=false
-  local configured_domains=()
-
-  _warn_on_unmanaged_macos_dns_files
 
   # Configure each TLD
   configure_tld() {
     local tld="$1"
     local resolver_file="/etc/resolver/${tld}"
-    local display_name
-    [[ "${tld}" == *"."* ]] && display_name="${tld}" || display_name=".${tld}"
     local expected_content="nameserver 127.0.0.1\nport ${dns_port}\n"
 
-    # Skip if already configured correctly
-    [[ -f "${resolver_file}" ]] && [[ "$(cat "${resolver_file}")" == "$(printf '%b' "${expected_content}")" ]] && return
-
     # Create/update resolver file
-    sudo mkdir -p /etc/resolver
-    printf '%b' "${expected_content}" | sudo tee "${resolver_file}" >/dev/null
-    configured_domains+=("${display_name}")
-    updated_any=true
+    if sudo mkdir -p /etc/resolver && printf '%b' "${expected_content}" | sudo tee "${resolver_file}" >/dev/null; then
+      echo "✅ DNS configuration succeeded for .${tld} (${resolver_file})"
+    else
+      echo "❌ DNS configuration failed for .${tld} (${resolver_file})"
+    fi
   }
 
   process_tlds "configure_tld"
-
-  # Show results and flush DNS if needed
-  if [[ "${updated_any}" == "true" ]]; then
-    log_success "DNS resolver configured for ${configured_domains[*]}"
-    sudo dscacheutil -flushcache
-    sudo killall -HUP mDNSResponder >/dev/null 2>&1 || true
-  fi
 }
 
 # Configure Linux systemd-resolved for specific domains
@@ -156,19 +141,22 @@ configure_linux_dns() {
 
   local expected_content="[Resolve]\nDNS=127.0.0.1:${dns_port}\nDomains=${domains}\n"
 
-  # Skip if already configured correctly
-  [[ -f "${resolved_config}" ]] && [[ "$(cat "${resolved_config}")" == "$(printf '%b' "${expected_content}")" ]] && return 0
+  # Check if file needs to be created or updated
+  local needs_update=true
+  if [[ -f "${resolved_config}" ]] && [[ "$(cat "${resolved_config}")" == "$(printf '%b' "${expected_content}")" ]]; then
+    needs_update=false
+  fi
 
   # Create/update configuration
-  sudo mkdir -p /etc/systemd/resolved.conf.d
-  printf '%b' "${expected_content}" | sudo tee "${resolved_config}" >/dev/null
+  if sudo mkdir -p /etc/systemd/resolved.conf.d && printf '%b' "${expected_content}" | sudo tee "${resolved_config}" >/dev/null; then
+    echo "✅ DNS configuration succeeded (${resolved_config})"
 
-  # Restart systemd-resolved
-  if sudo systemctl restart systemd-resolved; then
-    log_success "systemd-resolved configured and restarted"
+    # Restart systemd-resolved only if file was changed
+    if [[ "${needs_update}" == "true" ]]; then
+      sudo systemctl restart systemd-resolved >/dev/null 2>&1 || true
+    fi
   else
-    log_success "systemd-resolved configuration ready"
-    log_warning "Failed to restart systemd-resolved"
+    echo "❌ DNS configuration failed (${resolved_config})"
   fi
 }
 
@@ -632,33 +620,7 @@ logs)
   fi
   ;;
 configure-dns)
-  echo "🔧 DNS Configuration for HTTP Proxy"
-  echo "===================================="
-  echo ""
-  echo "This command configures your system to automatically resolve proxy domains"
-  echo "to localhost, eliminating the need to manually edit /etc/hosts."
-  echo ""
-
-  if [[ "${OSTYPE}" == "darwin"* ]]; then
-    echo "On macOS, this will:"
-    echo "  • Create /etc/resolver files for each configured domain"
-    echo "  • Configure domains to use the proxy's DNS server (port ${HTTP_PROXY_DNS_PORT:-19322})"
-    echo "  • Flush the DNS cache"
-  else
-    echo "On Linux, this will:"
-    echo "  • Configure systemd-resolved with domain-specific DNS settings"
-    echo "  • Point configured domains to the proxy's DNS server (port ${HTTP_PROXY_DNS_PORT:-19322})"
-    echo "  • Restart systemd-resolved service"
-  fi
-
-  echo ""
-  log_info "Configuring system DNS for proxy domains..."
-  show_dns_env_vars
   configure_system_dns
-
-  echo ""
-  echo "ℹ️  After DNS configuration, domains like 'myapp.loc' will automatically"
-  echo "   resolve to localhost without manual /etc/hosts entries."
   ;;
 dashboard) open_dashboard ;;
 grafana) open_grafana ;;
