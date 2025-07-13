@@ -21,10 +21,10 @@ Perfect for local development environments, this proxy eliminates manual configu
 
 ```bash
 # Start the HTTP proxy
-spark-http-proxy start
+./bin/spark-http-proxy start
 
 # Generate trusted SSL certificates for your domains
-spark-http-proxy generate-mkcert "*.spark.loc"
+./bin/spark-http-proxy generate-mkcert "*.spark.loc"
 
 # Test with any container
 docker run -d -e VIRTUAL_HOST=test.spark.loc nginx
