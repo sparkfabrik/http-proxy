@@ -3,7 +3,7 @@
 set -e
 
 # Get the real path of the script (resolves symlinks)
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 # Paths
 CONFIG_DIR="${HOME}/.local/spark/http-proxy"
@@ -32,7 +32,7 @@ export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-http-proxy}
 export COMPOSE_FILE=${COMPOSE_FILE:-$(discover_compose_file)}
 
 # Logging functions
-log_info() { echo "ℹ️  $1"; }
+log_info() { echo "ℹ  $1"; }
 log_success() { echo "✅ $1"; }
 log_error() { echo "❌ $1"; }
 log_warning() { echo "⚠️  $1"; }
