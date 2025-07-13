@@ -46,13 +46,16 @@ get_service_port() {
 
 # Display DNS environment variables if any are set
 show_dns_env_vars() {
-  [[ -z "${HTTP_PROXY_DNS_TLDS:-}${HTTP_PROXY_DNS_TARGET_IP:-}${HTTP_PROXY_DNS_PORT:-}" ]] && return
+  local force_show="${1:-false}"
 
-  echo -e "\nDNS Proxy Configuration:"
-  [[ -n "${HTTP_PROXY_DNS_TLDS:-}" ]] && echo "  HTTP_PROXY_DNS_TLDS: ${HTTP_PROXY_DNS_TLDS}"
-  [[ -n "${HTTP_PROXY_DNS_TARGET_IP:-}" ]] && echo "  HTTP_PROXY_DNS_TARGET_IP: ${HTTP_PROXY_DNS_TARGET_IP}"
-  [[ -n "${HTTP_PROXY_DNS_PORT:-}" ]] && echo "  HTTP_PROXY_DNS_PORT: ${HTTP_PROXY_DNS_PORT}"
-  echo
+  # Show if any DNS env vars are set OR if force_show is true
+  if [[ "${force_show}" == "true" ]] || [[ -n "${HTTP_PROXY_DNS_TLDS:-}${HTTP_PROXY_DNS_TARGET_IP:-}${HTTP_PROXY_DNS_PORT:-}" ]]; then
+    echo -e "\nDNS Proxy Configuration:"
+    echo "  HTTP_PROXY_DNS_TLDS: ${HTTP_PROXY_DNS_TLDS:-loc} (default: loc)"
+    echo "  HTTP_PROXY_DNS_TARGET_IP: ${HTTP_PROXY_DNS_TARGET_IP:-127.0.0.1} (default: 127.0.0.1)"
+    echo "  HTTP_PROXY_DNS_PORT: ${HTTP_PROXY_DNS_PORT:-19322} (default: 19322)"
+    echo
+  fi
 }
 
 # Process TLD list and execute callback for each valid TLD
@@ -162,6 +165,9 @@ configure_linux_dns() {
 
 # Configure system DNS for the proxy domains
 configure_system_dns() {
+  # Show DNS configuration being used (force show all values including defaults)
+  show_dns_env_vars true
+
   if [[ "${OSTYPE}" == "darwin"* ]]; then
     configure_macos_dns
   else
