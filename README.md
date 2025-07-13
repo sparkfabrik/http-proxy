@@ -20,21 +20,32 @@ Perfect for local development environments, this proxy eliminates manual configu
 ## Quick Start
 
 ```bash
-# Clone and start immediately
-git clone <your-repo-url>
-cd http-proxy
-
 # Start the HTTP proxy
-./bin/spark-http-proxy start
+spark-http-proxy start
 
-# View status and dashboard links
-./bin/spark-http-proxy status
+# Generate trusted SSL certificates for your domains
+spark-http-proxy generate-mkcert "*.spark.loc"
 
-# Start with monitoring (optional)
-./bin/spark-http-proxy start-with-metrics
+# Test with any container
+docker run -d -e VIRTUAL_HOST=test.spark.loc nginx
 
-# Configure DNS resolution (optional but recommended)
-./bin/spark-http-proxy configure-dns
+# Access your app with HTTPS
+curl https://test.spark.loc
+```
+
+**That's it!** 🎉 Your container is now accessible at `https://test.spark.loc` with a trusted certificate.
+
+### Optional Commands
+
+```bash
+# View status and dashboard
+spark-http-proxy status
+
+# Start with monitoring (Prometheus + Grafana)
+spark-http-proxy start-with-metrics
+
+# Configure system DNS (eliminates need for manual /etc/hosts editing)
+spark-http-proxy configure-dns
 ```
 
 For more examples and advanced configurations, check the `examples/` directory.

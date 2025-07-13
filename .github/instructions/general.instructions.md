@@ -1,5 +1,5 @@
 ---
-applyTo: "*.*"
+applyTo: "**"
 ---
 
 When you want to create new documentation files, follow these steps:
