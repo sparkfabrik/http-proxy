@@ -593,8 +593,8 @@ start-with-metrics)
   grafana_port=$(get_service_port grafana 3000)
   prometheus_port=$(get_service_port prometheus 9090)
   echo "   🌐 Traefik Dashboard: http://localhost:${dashboard_port:-'not available'}"
-  echo "   � DNS resolving domains: *.${HTTP_PROXY_DNS_TLDS:-loc} → ${HTTP_PROXY_DNS_TARGET_IP:-127.0.0.1}"
-  echo "   �📊 Grafana Dashboard: http://localhost:${grafana_port:-'not available'} (admin/admin)"
+  echo "   🔍 DNS resolving domains: *.${HTTP_PROXY_DNS_TLDS:-loc} → ${HTTP_PROXY_DNS_TARGET_IP:-127.0.0.1}"
+  echo "   📊 Grafana Dashboard: http://localhost:${grafana_port:-'not available'} (admin/admin)"
   echo "   📈 Prometheus: http://localhost:${prometheus_port:-'not available'}"
   show_dns_env_vars
   configure_system_dns
