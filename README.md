@@ -15,7 +15,7 @@ Perfect for local development environments, this proxy eliminates manual configu
 - 🔐 **Automatic HTTPS Support** - Provides both HTTP and HTTPS routes with auto-generated certificates and mkcert integration for trusted local certificates
 - 📊 **Monitoring Ready** - Optional Prometheus metrics and Grafana dashboards for traffic monitoring and performance analysis
 
-> **Note**: This is a refactored and enhanced version of the [codekitchen/dinghy-http-proxy](https://github.com/codekitchen/dinghy-http-proxy) project. Spark HTTP Proxy is an HTTP Proxy and DNS server originally designed for [Dinghy](https://github.com/codekitchen/dinghy) but enhanced for broader use cases and improved maintainability.
+> **Note**: We thank the [codekitchen/dinghy-http-proxy](https://github.com/codekitchen/dinghy-http-proxy) project for the inspiration and for serving us well over the years. Spark HTTP Proxy includes a compatibility layer that supports the `VIRTUAL_HOST` and `VIRTUAL_PORT` environment variables from the original project, while providing enhanced functionality for broader use cases and improved maintainability.
 
 ## Quick Start
 
@@ -556,3 +556,42 @@ nslookup myapp.loc 127.0.0.1 19322
 # Test with curl (using custom DNS)
 curl --dns-servers 127.0.0.1:19322 http://myapp.loc
 ```
+
+📖 **[Detailed DNS Server Documentation](docs/dns-server.md)** - Complete technical documentation about DNS server configuration, resolution patterns, and system integration.
+
+## Metrics & Monitoring
+
+Monitor your HTTP proxy traffic with built-in Prometheus metrics and Grafana dashboards:
+
+```bash
+# Start with monitoring stack (Prometheus + Grafana)
+spark-http-proxy start-with-metrics
+```
+
+### Grafana Dashboard
+
+Access the pre-configured Grafana dashboard at `http://localhost:3000` (admin/admin):
+
+![Grafana Dashboard](docs/images/grafana.png)
+
+The dashboard provides insights into:
+
+- Request rates and response times
+- HTTP status codes distribution
+- Active connections and bandwidth usage
+- Container routing statistics
+
+### Traefik Dashboard
+
+Monitor routing rules and service health at `http://localhost:8080`:
+
+![Traefik Dashboard](docs/images/traefik-1.png)
+
+The Traefik dashboard shows:
+
+- Active routes and services
+- Real-time traffic flow
+- Health check status
+- Load balancer configuration
+
+Both dashboards are automatically configured and ready to use with no additional setup required.
