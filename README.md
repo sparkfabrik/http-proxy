@@ -19,7 +19,25 @@ Perfect for local development environments, this proxy eliminates manual configu
 
 ## Quick Start
 
-To get started quickly, check the complete examples in the `example/` directory. The examples include ready-to-use Docker Compose configurations that demonstrate various use cases and configurations.
+```bash
+# Clone and start immediately
+git clone <your-repo-url>
+cd http-proxy
+
+# Start the HTTP proxy
+./bin/spark-http-proxy start
+
+# View status and dashboard links
+./bin/spark-http-proxy status
+
+# Start with monitoring (optional)
+./bin/spark-http-proxy start-with-metrics
+
+# Configure DNS resolution (optional but recommended)
+./bin/spark-http-proxy configure-dns
+```
+
+For more examples and advanced configurations, check the `examples/` directory.
 
 ## Container Configuration
 
