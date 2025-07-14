@@ -371,7 +371,6 @@ show_usage() {
   echo "  ${0} configure-dns            # Configure DNS only"
   echo "  ${0} up --profile metrics     # Alternative metrics start"
   echo ""
-  echo "Config: ${COMPOSE_FILE}"
   echo ""
   echo "DNS Proxy Environment Variables:"
   echo "  HTTP_PROXY_DNS_TLDS          Top-level domains to proxy (.loc by default)"
@@ -402,6 +401,8 @@ show_usage() {
   echo "Autocomplete:"
   echo "  Quick setup: ${0} install-completion"
   echo "  Manual setup: source <(${0} completion)"
+  echo ""
+  echo "Docker compose file: ${COMPOSE_FILE}"
 }
 
 install_mkcert() {
