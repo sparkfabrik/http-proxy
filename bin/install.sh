@@ -9,7 +9,7 @@
 # 3. Setting up shell completion (optional)
 #
 # Usage:
-#   bash <(curl -fsSL https://raw.githubusercontent.com/sparkfabrik/http-proxy/main/install.sh)
+#   bash <(curl -fsSL https://raw.githubusercontent.com/sparkfabrik/http-proxy/main/bin/install.sh)
 #
 # Environment Variables:
 #   INSTALL_DIR       - Installation directory (default: ~/.local/spark/http-proxy)
@@ -29,7 +29,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 REPO_URL="https://github.com/sparkfabrik/http-proxy.git"
-REPO_BRANCH="feature/98_migrate_to_traefik"
+REPO_BRANCH="main"
 DEFAULT_INSTALL_DIR="${HOME}/.local/spark/http-proxy"
 DEFAULT_BIN_DIR="/usr/local/bin"
 BINARY_NAME="spark-http-proxy"
