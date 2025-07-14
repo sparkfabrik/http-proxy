@@ -3,9 +3,9 @@
 [![GitHub Container Registry](https://img.shields.io/badge/ghcr.io-sparkfabrik%2Fhttp--proxy-blue)](https://ghcr.io/sparkfabrik/http-proxy)
 [![CI Pipeline](https://github.com/sparkfabrik/http-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/sparkfabrik/http-proxy/actions/workflows/ci.yml)
 
-**Automatic HTTP routing for Docker containers** - A modern Traefik-based proxy that automatically discovers your containers and creates routing rules based on environment variables.
+**Automatic HTTP routing for Docker containers** — A Traefik-based proxy that gives your containers clean domain names like `myapp.local` instead of dealing with `localhost:8080` port chaos.
 
-Perfect for local development environments, this proxy eliminates manual configuration by detecting containers with `VIRTUAL_HOST` environment variables and instantly making them accessible via custom domains. **Only explicitly configured containers are managed**, ensuring security by default.
+Simply add `VIRTUAL_HOST=myapp.local` to any container or use native Traefik labels, and your applications become accessible with both HTTP and HTTPS automatically. No port management, no `/etc/hosts` editing, no hunting for the right port number. **Only explicitly configured containers are exposed**, keeping your development environment secure by default.
 
 ## Features
 
@@ -15,11 +15,40 @@ Perfect for local development environments, this proxy eliminates manual configu
 - 🔐 **Automatic HTTPS Support** - Provides both HTTP and HTTPS routes with auto-generated certificates and mkcert integration for trusted local certificates
 - 📊 **Monitoring Ready** - Optional Prometheus metrics and Grafana dashboards for traffic monitoring and performance analysis
 
-> **Note**: This is a refactored and enhanced version of the [codekitchen/dinghy-http-proxy](https://github.com/codekitchen/dinghy-http-proxy) project. Spark HTTP Proxy is an HTTP Proxy and DNS server originally designed for [Dinghy](https://github.com/codekitchen/dinghy) but enhanced for broader use cases and improved maintainability.
+> **Note**: We thank the [codekitchen/dinghy-http-proxy](https://github.com/codekitchen/dinghy-http-proxy) project for the inspiration and for serving us well over the years. Spark HTTP Proxy includes a compatibility layer that supports the `VIRTUAL_HOST` and `VIRTUAL_PORT` environment variables from the original project, while providing enhanced functionality for broader use cases and improved maintainability.
 
 ## Quick Start
 
-To get started quickly, check the complete examples in the `example/` directory. The examples include ready-to-use Docker Compose configurations that demonstrate various use cases and configurations.
+```bash
+# Start the HTTP proxy
+./bin/spark-http-proxy start
+
+# Generate trusted SSL certificates for your domains
+./bin/spark-http-proxy generate-mkcert "*.spark.loc"
+
+# Test with any container
+docker run -d -e VIRTUAL_HOST=test.spark.loc nginx
+
+# Access your app with HTTPS
+curl https://test.spark.loc
+```
+
+**That's it!** 🎉 Your container is now accessible at `https://test.spark.loc` with a trusted certificate.
+
+### Optional Commands
+
+```bash
+# View status and dashboard
+spark-http-proxy status
+
+# Start with monitoring (Prometheus + Grafana)
+spark-http-proxy start-with-metrics
+
+# Configure system DNS (eliminates need for manual /etc/hosts editing)
+spark-http-proxy configure-dns
+```
+
+For more examples and advanced configurations, check the `examples/` directory.
 
 ## Container Configuration
 
@@ -527,3 +556,42 @@ nslookup myapp.loc 127.0.0.1 19322
 # Test with curl (using custom DNS)
 curl --dns-servers 127.0.0.1:19322 http://myapp.loc
 ```
+
+📖 **[Detailed DNS Server Documentation](docs/dns-server.md)** - Complete technical documentation about DNS server configuration, resolution patterns, and system integration.
+
+## Metrics & Monitoring
+
+Monitor your HTTP proxy traffic with built-in Prometheus metrics and Grafana dashboards:
+
+```bash
+# Start with monitoring stack (Prometheus + Grafana)
+spark-http-proxy start-with-metrics
+```
+
+### Grafana Dashboard
+
+Access the pre-configured Grafana dashboard at `http://localhost:3000` (admin/admin):
+
+![Grafana Dashboard](docs/images/grafana.png)
+
+The dashboard provides insights into:
+
+- Request rates and response times
+- HTTP status codes distribution
+- Active connections and bandwidth usage
+- Container routing statistics
+
+### Traefik Dashboard
+
+Monitor routing rules and service health at `http://localhost:8080`:
+
+![Traefik Dashboard](docs/images/traefik-1.png)
+
+The Traefik dashboard shows:
+
+- Active routes and services
+- Real-time traffic flow
+- Health check status
+- Load balancer configuration
+
+Both dashboards are automatically configured and ready to use with no additional setup required.

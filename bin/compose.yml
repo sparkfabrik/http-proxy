@@ -8,6 +8,9 @@
 #   With Monitoring (Prometheus + Grafana):
 #     docker compose --profile metrics up -d
 #
+#   With specific image tag:
+#     HTTP_PROXY_DOCKER_IMAGE_TAG=v1.2.3 docker compose up -d
+#
 # Access:
 #   - Traefik Dashboard: http://localhost:30000
 #   - DNS Server: UDP port 19322
@@ -17,49 +20,48 @@
 #   - Prometheus (optional): http://localhost:9090
 
 services:
-  # Watches Docker events and generates Traefik configuration for VIRTUAL_HOST
   dinghy_layer:
-    image: ghcr.io/sparkfabrik/http-proxy-services:feature-98_migrate_to_traefik
-    environment:
-      - LOG_LEVEL=${LOG_LEVEL:-info}
+    image: ghcr.io/sparkfabrik/http-proxy-services:${HTTP_PROXY_DOCKER_IMAGE_TAG:-latest}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik_dynamic:/traefik/dynamic
     command: ["sh", "-c", "/usr/local/bin/dinghy-layer"]
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
     labels:
       - "traefik.enable=false"
     restart: unless-stopped
 
-  # Automatically joins containers to the http-proxy network
   join_networks:
-    image: ghcr.io/sparkfabrik/http-proxy-services:feature-98_migrate_to_traefik
+    image: ghcr.io/sparkfabrik/http-proxy-services:${HTTP_PROXY_DOCKER_IMAGE_TAG:-latest}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     command:
       ["sh", "-c", "/usr/local/bin/join-networks -container-name http-proxy"]
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
     labels:
       - "traefik.enable=false"
     restart: unless-stopped
 
   dns:
-    image: ghcr.io/sparkfabrik/http-proxy-services:feature-98_migrate_to_traefik
-    environment:
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - HTTP_PROXY_DNS_FORWARD_ENABLED=${HTTP_PROXY_DNS_FORWARD_ENABLED:-false}
-      - HTTP_PROXY_DNS_UPSTREAM_SERVERS=${HTTP_PROXY_DNS_UPSTREAM_SERVERS:-8.8.8.8:53,1.1.1.1:53}
-      - HTTP_PROXY_DNS_TLDS=${HTTP_PROXY_DNS_TLDS:-loc}  # Comma-separated list of TLDs or specific domains to handle
-      - HTTP_PROXY_DNS_TARGET_IP=${HTTP_PROXY_DNS_TARGET_IP:-127.0.0.1}  # IP address to resolve domains to
-      - HTTP_PROXY_DNS_PORT=${HTTP_PROXY_DNS_PORT:-19322}  # Port for DNS server to listen on
+    image: ghcr.io/sparkfabrik/http-proxy-services:${HTTP_PROXY_DOCKER_IMAGE_TAG:-latest}
     ports:
       - "19322:19322/udp"
     command: ["sh", "-c", "/usr/local/bin/dns-server"]
+    environment:
+      - HTTP_PROXY_DNS_TLDS=${HTTP_PROXY_DNS_TLDS:-loc}
+      - HTTP_PROXY_DNS_TARGET_IP=${HTTP_PROXY_DNS_TARGET_IP:-127.0.0.1}
+      - HTTP_PROXY_DNS_PORT=${HTTP_PROXY_DNS_PORT:-19322}
+      - HTTP_PROXY_DNS_FORWARD_ENABLED=${HTTP_PROXY_DNS_FORWARD_ENABLED:-false}
+      - HTTP_PROXY_DNS_UPSTREAM_SERVERS=${HTTP_PROXY_DNS_UPSTREAM_SERVERS:-8.8.8.8:53,1.1.1.1:53}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
     labels:
       - "traefik.enable=false"
     restart: unless-stopped
 
-  # Main HTTP reverse proxy
   traefik:
-    image: ghcr.io/sparkfabrik/http-proxy-traefik:feature-98_migrate_to_traefik
+    image: ghcr.io/sparkfabrik/http-proxy-traefik:${HTTP_PROXY_DOCKER_IMAGE_TAG:-latest}
     container_name: http-proxy
     ports:
       - "80:80"
@@ -68,13 +70,15 @@ services:
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - traefik_dynamic:/traefik/dynamic
-      - "${HOME}/.local/spark/http-proxy/certs:/traefik/certs:ro" # Auto-load user certificates
+      - "${HOME}/.local/spark/http-proxy/certs:/traefik/certs:ro"
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
     labels:
       - "traefik.enable=false"
     restart: unless-stopped
 
   prometheus:
-    image: ghcr.io/sparkfabrik/http-proxy-prometheus:feature-98_migrate_to_traefik
+    image: ghcr.io/sparkfabrik/http-proxy-prometheus:${HTTP_PROXY_DOCKER_IMAGE_TAG:-latest}
     container_name: http-proxy-prometheus
     ports:
       - "9090"
@@ -87,7 +91,7 @@ services:
       - metrics
 
   grafana:
-    image: ghcr.io/sparkfabrik/http-proxy-grafana:feature-98_migrate_to_traefik
+    image: ghcr.io/sparkfabrik/http-proxy-grafana:${HTTP_PROXY_DOCKER_IMAGE_TAG:-latest}
     container_name: http-proxy-grafana
     ports:
       - "30001:3000"
