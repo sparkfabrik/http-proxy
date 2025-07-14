@@ -14,7 +14,7 @@ RUN mkdir -p /traefik/dynamic /traefik/certs
 ENTRYPOINT ["/entrypoint.sh", "--configfile=/etc/traefik/traefik.yml"]
 
 # Expose ports
-EXPOSE 80 443 8080
+EXPOSE 80 443 8080 8082
 
 # Use the default traefik entrypoint
 CMD ["traefik"]
