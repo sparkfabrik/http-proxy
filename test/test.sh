@@ -126,7 +126,7 @@ test_dns() {
 
     command -v dig >/dev/null 2>&1 || return 0
 
-    local result=$(dig @${TARGET_IP} -p ${DNS_PORT} "$hostname" +short +time=${DNS_TIMEOUT} +tries=${DNS_RETRIES} 2>/dev/null)
+    local result=$(dig -4 @${TARGET_IP} -p ${DNS_PORT} "$hostname" +short +time=${DNS_TIMEOUT} +tries=${DNS_RETRIES} 2>/dev/null)
     local exit_code=$?
 
     if [ "$should_resolve" = "should_not_resolve" ]; then
