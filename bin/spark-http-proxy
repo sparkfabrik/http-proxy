@@ -283,11 +283,11 @@ show_config() {
   echo "  2. Default (shipped): ${SCRIPT_DIR}/compose.yml"
   echo ""
   if [[ "${COMPOSE_FILE}" == "${CONFIG_DIR}/compose.yml" ]]; then
-    echo "✅ Using user override configuration"
+    log_success "Using user override configuration"
   elif [[ "${COMPOSE_FILE}" == "${SCRIPT_DIR}/compose.yml" ]]; then
-    echo "✅ Using default configuration (shipped with script)"
+    log_success "Using default configuration (shipped with script)"
   else
-    echo "ℹ️  Using custom configuration: ${COMPOSE_FILE}"
+    log_info "Using custom configuration: ${COMPOSE_FILE}"
   fi
 }
 
