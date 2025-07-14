@@ -122,11 +122,18 @@ configure_macos_dns() {
     local resolver_file="/etc/resolver/${tld}"
     local expected_content="nameserver 127.0.0.1\nport ${dns_port}\n"
 
+    # Check if file is already up to date
+    if [[ -f "${resolver_file}" ]] && [[ "$(cat "${resolver_file}")" == "$(printf '%b' "${expected_content}")" ]]; then
+      log_success "DNS configuration is already up to date for .${tld} (${resolver_file})"
+      return 0
+    fi
+
     # Create/update resolver file
+    log_info "Creating ${resolver_file} file (sudo needed)"
     if sudo mkdir -p /etc/resolver && printf '%b' "${expected_content}" | sudo tee "${resolver_file}" >/dev/null; then
-      echo "✅ DNS configuration succeeded for .${tld} (${resolver_file})"
+      log_success "DNS configuration succeeded for .${tld} (${resolver_file})"
     else
-      echo "❌ DNS configuration failed for .${tld} (${resolver_file})"
+      log_error "DNS configuration failed for .${tld} (${resolver_file})"
     fi
   }
 
@@ -154,18 +161,17 @@ configure_linux_dns() {
   local needs_update=true
   if [[ -f "${resolved_config}" ]] && [[ "$(cat "${resolved_config}")" == "$(printf '%b' "${expected_content}")" ]]; then
     needs_update=false
+    log_success "DNS configuration is already up to date (${resolved_config})"
+    return 0
   fi
 
-  # Create/update configuration
+  # Create/update configuration and restart service
+  log_info "Creating ${resolved_config} file (sudo needed)"
   if sudo mkdir -p /etc/systemd/resolved.conf.d && printf '%b' "${expected_content}" | sudo tee "${resolved_config}" >/dev/null; then
-    echo "✅ DNS configuration succeeded (${resolved_config})"
-
-    # Restart systemd-resolved only if file was changed
-    if [[ "${needs_update}" == "true" ]]; then
-      sudo systemctl restart systemd-resolved >/dev/null 2>&1 || true
-    fi
+    log_success "DNS configuration succeeded (${resolved_config})"
+    sudo systemctl restart systemd-resolved >/dev/null 2>&1 || true
   else
-    echo "❌ DNS configuration failed (${resolved_config})"
+    log_error "DNS configuration failed (${resolved_config})"
   fi
 }
 
@@ -277,11 +283,11 @@ show_config() {
   echo "  2. Default (shipped): ${SCRIPT_DIR}/compose.yml"
   echo ""
   if [[ "${COMPOSE_FILE}" == "${CONFIG_DIR}/compose.yml" ]]; then
-    echo "✅ Using user override configuration"
+    log_success "Using user override configuration"
   elif [[ "${COMPOSE_FILE}" == "${SCRIPT_DIR}/compose.yml" ]]; then
-    echo "✅ Using default configuration (shipped with script)"
+    log_success "Using default configuration (shipped with script)"
   else
-    echo "ℹ️  Using custom configuration: ${COMPOSE_FILE}"
+    log_info "Using custom configuration: ${COMPOSE_FILE}"
   fi
 }
 
