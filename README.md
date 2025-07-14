@@ -20,11 +20,21 @@ Simply add `VIRTUAL_HOST=myapp.local` to any container or use native Traefik lab
 ## Quick Start
 
 ```bash
+# Install Spark HTTP Proxy
+mkdir -p ${HOME}/.local/spark/http-proxy
+git clone git@github.com:sparkfabrik/http-proxy.git ${HOME}/.local/spark/http-proxy/src
+sudo ln -s ${HOME}/.local/spark/http-proxy/src/bin/spark-http-proxy /usr/local/bin/spark-http-proxy
+sudo chmod +x /usr/local/bin/spark-http-proxy
+spark-http-proxy install-completion
+
+# Or alternatively if you like to live on the edge.
+bash <(curl -fsSL https://raw.githubusercontent.com/sparkfabrik/http-proxy/main/bin/install.sh)
+
 # Start the HTTP proxy
-./bin/spark-http-proxy start
+spark-http-proxy start
 
 # Generate trusted SSL certificates for your domains
-./bin/spark-http-proxy generate-mkcert "*.spark.loc"
+spark-http-proxy generate-mkcert "*.spark.loc"
 
 # Test with any container
 docker run -d -e VIRTUAL_HOST=test.spark.loc nginx
