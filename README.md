@@ -572,8 +572,6 @@ nslookup myapp.loc 127.0.0.1 19322
 curl --dns-servers 127.0.0.1:19322 http://myapp.loc
 ```
 
-📖 **[Detailed DNS Server Documentation](docs/dns-server.md)** - Complete technical documentation about DNS server configuration, resolution patterns, and system integration.
-
 ## Metrics & Monitoring
 
 Monitor your HTTP proxy traffic with built-in Prometheus metrics and Grafana dashboards:
