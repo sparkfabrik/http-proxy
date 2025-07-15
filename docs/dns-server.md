@@ -14,11 +14,13 @@ The HTTP proxy includes a **built-in DNS server** that automatically resolves co
 
 ### Environment Variables
 
-| Variable                   | Default     | Description                                                |
-| -------------------------- | ----------- | ---------------------------------------------------------- |
-| `HTTP_PROXY_DNS_TLDS`      | `loc`       | Comma-separated list of TLDs or specific domains to handle |
-| `HTTP_PROXY_DNS_TARGET_IP` | `127.0.0.1` | IP address to resolve all configured domains to            |
-| `HTTP_PROXY_DNS_PORT`      | `19322`     | UDP port for the DNS server to listen on                   |
+| Variable                          | Default                 | Description                                                   |
+| --------------------------------- | ----------------------- | ------------------------------------------------------------- |
+| `HTTP_PROXY_DNS_TLDS`             | `loc`                   | Comma-separated list of TLDs or specific domains to handle    |
+| `HTTP_PROXY_DNS_TARGET_IP`        | `127.0.0.1`             | IP address to resolve all configured domains to               |
+| `HTTP_PROXY_DNS_PORT`             | `19322`                 | UDP port for the DNS server to listen on                      |
+| `HTTP_PROXY_DNS_FORWARD_ENABLED`  | `false`                 | Enable forwarding of non-matching queries to upstream servers |
+| `HTTP_PROXY_DNS_UPSTREAM_SERVERS` | `8.8.8.8:53,1.1.1.1:53` | Upstream DNS servers for forwarding                           |
 
 ### Docker Compose Configuration
 
@@ -27,9 +29,11 @@ services:
   dns:
     image: ghcr.io/sparkfabrik/http-proxy-services:latest
     environment:
-      - HTTP_PROXY_HTTP_PROXY_DNS_TLDS=${DNS_TLDS:-loc}
+      - HTTP_PROXY_DNS_TLDS=${DNS_TLDS:-loc}
       - HTTP_PROXY_DNS_TARGET_IP=${DNS_TARGET_IP:-127.0.0.1}
       - HTTP_PROXY_DNS_PORT=${DNS_PORT:-19322}
+      - HTTP_PROXY_DNS_FORWARD_ENABLED=${DNS_FORWARD_ENABLED:-false}
+      - HTTP_PROXY_DNS_UPSTREAM_SERVERS=${DNS_UPSTREAM_SERVERS:-8.8.8.8:53,1.1.1.1:53}
     ports:
       - "19322:19322/udp"
 ```
@@ -104,6 +108,37 @@ HTTP_PROXY_HTTP_PROXY_DNS_TLDS=loc,myproject.dev
 ❌ anything.com → Not handled    # Different TLD
 ```
 
+## DNS Forwarding
+
+The DNS server can optionally forward non-matching queries to upstream DNS servers instead of rejecting them with `REFUSED`. **Note**: The default behavior of rejecting non-matching queries is generally preferred as it allows your system's DNS resolution to work correctly through fallback mechanisms.
+
+### Enable DNS Forwarding
+
+```bash
+# Enable forwarding in your environment
+HTTP_PROXY_DNS_FORWARD_ENABLED=true
+HTTP_PROXY_DNS_UPSTREAM_SERVERS=8.8.8.8:53,1.1.1.1:53
+
+# Or in docker-compose.yml
+services:
+  dns:
+    environment:
+      - HTTP_PROXY_DNS_FORWARD_ENABLED=true
+      - HTTP_PROXY_DNS_UPSTREAM_SERVERS=8.8.8.8:53,1.1.1.1:53
+```
+
+### Behavior with Forwarding
+
+| Query Type       | Forwarding Disabled (default)           | Forwarding Enabled              |
+| ---------------- | --------------------------------------- | ------------------------------- |
+| `myapp.loc`      | ✅ Resolves to `127.0.0.1`              | ✅ Resolves to `127.0.0.1`      |
+| `google.com`     | ❌ Returns `REFUSED` (correct behavior) | ✅ Forwards to upstream servers |
+| `api.github.com` | ❌ Returns `REFUSED` (correct behavior) | ✅ Forwards to upstream servers |
+
+**When to consider enabling forwarding:**
+
+- If you want all DNS queries to go through this server
+
 ## System Integration
 
 ### macOS - Domain-Specific Resolution (Recommended)
@@ -123,7 +158,7 @@ echo "nameserver 127.0.0.1" | sudo tee /etc/resolver/dev
 echo "port 19322" | sudo tee -a /etc/resolver/dev
 ```
 
-### Linux - systemd-resolved (Recommended)
+### Linux - systemd-resolved
 
 Configure systemd-resolved to use the DNS server for specific domains:
 
@@ -145,6 +180,11 @@ sudo systemctl restart systemd-resolved
 # Verify configuration
 systemd-resolve --status
 ```
+
+**⚠️ Known Limitation**: systemd-resolved may route external domain queries to the HTTP proxy DNS server due to DNS routing limitations. This results in `REFUSED` responses in logs but doesn't affect functionality - external domains resolve through fallback mechanisms. **Solutions:**
+
+- **Accept current behavior** (recommended): The `REFUSED` responses are correct and harmless
+- **See [systemd-resolved limitations documentation](linux-systemd-resolved-issues.md)** for details
 
 ## Testing and Verification
 

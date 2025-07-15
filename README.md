@@ -543,6 +543,11 @@ sudo systemctl restart systemd-resolved
 systemd-resolve --status
 ```
 
+**⚠️ Known Limitation**: systemd-resolved may route some external domain queries to the HTTP proxy DNS server, resulting in `REFUSED` responses in the logs. This doesn't affect functionality - external domains resolve through fallback mechanisms. **Solutions:**
+
+- **Accept current behavior** (recommended): The `REFUSED` responses are correct and harmless
+- **See [systemd-resolved limitations documentation](docs/linux-systemd-resolved-issues.md)** for details
+
 #### macOS
 
 ```bash
