@@ -1,36 +1,35 @@
 DOCKER_IMAGE_NAME ?= sparkfabrik/http-proxy:latest
 
+.PHONY: help docker-build docker-run docker-logs build test test-dns compose-up
+
 help: ## Show help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-docker-build: ## Build the Docker image
-	docker build -t $(DOCKER_IMAGE_NAME) .
+dev-up: ## Run the development environment (basic stack)
+	@echo "Starting development environment (basic stack)..."
+	@docker compose --profile metrics down -v
+	@docker compose up -d --build --remove-orphans
 
-docker-run: docker-build ## Run the Docker container
-	docker rm -vf http-proxy || true
-	docker run -d -v /var/run/docker.sock:/tmp/docker.sock:ro \
-        --name=http-proxy \
-        -p 80:80 \
-        -p 19322:19322/udp \
-        -e CONTAINER_NAME=http-proxy \
-        -e DNS_IP=127.0.0.1 \
-        -e DOMAIN_TLD=loc \
-		$(DOCKER_IMAGE_NAME)
+dev-up-metrics: ## Run the development environment with monitoring stack
+	@echo "Starting development environment with monitoring..."
+	@docker compose --profile metrics down -v
+	@docker compose --profile metrics up -d --build --remove-orphans
 
-docker-logs: ## Show logs of the Docker container
-	docker logs -f http-proxy
+dev-down: ## Stop the development environment
+	@echo "Stopping development environment..."
+	@docker compose --profile metrics down -v
 
-build: ## Build the go apps
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o join-networks ./cmd/join-networks
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o dns-server ./cmd/dns-server
+dev-logs-join-networks: ## Show logs for the joined networks
+	@echo "Showing logs for the joined networks..."
+	@docker-compose logs -f join_networks
 
-test-dns: ## Test DNS resolution (run in another terminal while dnsmasq is running)
-	@echo "Clear dns cache and restart mDNSResponder"
-	@sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder
-	@echo "Testing DNS resolution on port 19322:"
-	@echo "Testing hostmachine.loc:"
-	dig @127.0.0.1 -p 19322 hostmachine.loc
-	@echo "Testing any .loc domain:"
-	dig @127.0.0.1 -p 19322 test.loc
-	@echo "Testing specific domain with IP with dnscacheutil:"
-	dscacheutil -q host -a name test.loc
+test: ## Run integration tests
+	@echo "Running integration tests..."
+	@chmod +x test/test.sh
+	@./test/test.sh
+
+compose-up: ## Run Traefik with Docker
+	@docker rm -vf http-proxy || true
+	@docker-compose up -d --remove-orphans
+	@cd build/traefik/test && \
+		docker-compose up -d

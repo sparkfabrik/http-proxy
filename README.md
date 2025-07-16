@@ -3,351 +3,608 @@
 [![GitHub Container Registry](https://img.shields.io/badge/ghcr.io-sparkfabrik%2Fhttp--proxy-blue)](https://ghcr.io/sparkfabrik/http-proxy)
 [![CI Pipeline](https://github.com/sparkfabrik/http-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/sparkfabrik/http-proxy/actions/workflows/ci.yml)
 
-This is a refactored and enhanced version of the [codekitchen/dinghy-http-proxy](https://github.com/codekitchen/dinghy-http-proxy) project.
+**Automatic HTTP routing for Docker containers** — A Traefik-based proxy that gives your containers clean domain names like `myapp.local` instead of dealing with `localhost:8080` port chaos.
 
-Spark HTTP Proxy is an HTTP Proxy and DNS server originally designed for
-[Dinghy](https://github.com/codekitchen/dinghy) but enhanced for broader use cases and improved maintainability.
+Simply add `VIRTUAL_HOST=myapp.local` to any container or use native Traefik labels, and your applications become accessible with both HTTP and HTTPS automatically. No port management, no `/etc/hosts` editing, no hunting for the right port number. **Only explicitly configured containers are exposed**, keeping your development environment secure by default.
 
-The proxy is based on jwilder's excellent
-[nginx-proxy](https://github.com/jwilder/nginx-proxy) project, with
-modifications to make it more suitable for local development work.
+## Features
 
-A DNS resolver is also added. By default it will resolve all `*.docker` domains
-to the Docker VM, but this can be changed.
+- 🚀 **Automatic Container Discovery** - Zero-configuration HTTP routing for containers with `VIRTUAL_HOST` environment variables or Traefik labels
+- 🌐 **Built-in DNS Server** - Resolves custom domains (`.loc`, `.dev`, etc.) to localhost, eliminating manual `/etc/hosts` editing
+- 🌍 **Dynamic Network Management** - Automatically joins Docker networks containing manageable containers for seamless routing
+- 🔐 **Automatic HTTPS Support** - Provides both HTTP and HTTPS routes with auto-generated certificates and mkcert integration for trusted local certificates
+- 📊 **Monitoring Ready** - Optional Prometheus metrics and Grafana dashboards for traffic monitoring and performance analysis
 
-## What's New in This Refactor
+> **Note**: We thank the [codekitchen/dinghy-http-proxy](https://github.com/codekitchen/dinghy-http-proxy) project for the inspiration and for serving us well over the years. Spark HTTP Proxy includes a compatibility layer that supports the `VIRTUAL_HOST` and `VIRTUAL_PORT` environment variables from the original project, while providing enhanced functionality for broader use cases and improved maintainability.
 
-This version includes several improvements over the original dinghy-http-proxy:
-
-### Code Organization
-
-- **Go Project Structure**: Reorganized into standard Go project layout with `cmd/` and `pkg/` directories
-- **Multiple Applications**: Split into separate applications:
-  - `cmd/dns-server/` - DNS server with security hardening
-  - `cmd/join-networks/` - Network management with robust retry logic
-- **Shared Packages**: Created reusable packages in `pkg/`:
-  - `pkg/config/` - Centralized configuration management
-  - `pkg/logger/` - Shared logging utilities
-
-### Security Enhancements
-
-- **DNS Security**: DNS server now silently drops queries for non-configured TLD domains instead of responding with NXDOMAIN
-- **Input Validation**: Enhanced validation throughout the codebase
-- **Configuration Cleanup**: Removed unused environment variables for cleaner security posture
-
-### Network Management
-
-- **Robust Network Operations**: Advanced retry mechanisms with exponential backoff
-- **Connectivity Validation**: Automatic connectivity checks during network operations
-- **Rollback Capabilities**: Automatic rollback on operation failures to maintain consistent state
-- **Smart Network Discovery**: Intelligent detection of active bridge networks
-
-### Development & Maintenance
-
-- **Enhanced Error Handling**: Comprehensive error handling and logging throughout
-- **Graceful Shutdown**: Proper signal handling for clean shutdowns
-- **Dry-run Mode**: Testing capabilities without making actual changes
-- **Updated Dependencies**: Latest Go modules and security improvements
-
-## Project Structure
-
-This project follows the standard Go project layout:
-
-```
-├── cmd/                    # Main applications
-│   ├── dns-server/        # DNS server with security hardening
-│   │   └── main.go
-│   └── join-networks/     # Network management application
-│       └── main.go
-├── pkg/                   # Shared packages
-│   ├── config/           # Configuration management
-│   │   └── config.go
-│   └── logger/           # Logging utilities
-│       └── logger.go
-├── Dockerfile            # Multi-stage build for both applications
-├── Makefile             # Build automation
-├── go.mod               # Go module definition
-└── ...                  # Other project files
-```
-
-### Applications
-
-- **DNS Server** (`cmd/dns-server/`): Provides DNS resolution for configured TLD domains with security hardening
-- **Join Networks** (`cmd/join-networks/`): Manages Docker network connections with robust retry logic and connectivity validation
-
-### Shared Packages
-
-- **Config** (`pkg/config/`): Centralized configuration management with environment variable support
-- **Logger** (`pkg/logger/`): Shared logging utilities with consistent formatting
-
-## Configuration
-
-### Exposed Ports
-
-The proxy will by default use the first port exposed by your container as the
-HTTP port to proxy to. This can be overridden by setting the VIRTUAL_PORT
-environment variable on the container to the desired HTTP port.
-
-### Docker Compose Projects
-
-The proxy will auto-generate a hostname based on the docker tags that
-docker-compose adds to each container. This hostname is of the form
-`<service>.<project>.<tld>`. For instance, assuming the default `*.docker` TLD,
-a "web" service in a "myapp" docker-compose project will be automatically made
-available at http://web.myapp.docker/.
-
-### Explicitly Setting a Hostname
-
-As in the base nginx-proxy, you can configure a container's hostname by setting
-the `VIRTUAL_HOST` environment variable in the container.
-
-You can set the `VIRTUAL_HOST`
-environment variable either with the `-e` option to docker or
-the environment hash in docker-compose. For instance setting
-`VIRTUAL_HOST=myrailsapp.docker` will make the container's exposed port
-available at http://myrailsapp.docker/.
-
-This will work even if dinghy auto-generates a hostname based on the
-docker-compose tags.
-
-#### Multiple Hosts
-
-If you need to support multiple virtual hosts for a container, you can separate each entry with commas. For example, `foo.bar.com,baz.bar.com,bar.com` and each host will be setup the same.
-
-Additionally you can customize the port for each host by appending a port
-number: `foo.bar.com,baz.bar.com:3000`. Each name will point to its specified
-port and any name without a port will use the default.
-
-#### Wildcard Hosts
-
-You can also use wildcards at the beginning and the end of host name, like `*.bar.com` or `foo.bar.*`. Or even a regular expression, which can be very useful in conjunction with a wildcard DNS service like [xip.io](http://xip.io), using `~^foo\.bar\..*\.xip\.io` will match `foo.bar.127.0.0.1.xip.io`, `foo.bar.10.0.2.2.xip.io` and all other given IPs. More information about this topic can be found in the nginx documentation about [`server_names`](http://nginx.org/en/docs/http/server_names.html).
-
-### Enabling CORS
-
-You can set the `CORS_ENABLED`
-environment variable either with the `-e` option to docker or
-the environment hash in docker-compose. For instance setting
-`CORS_ENABLED=true` will allow the container's web proxy to accept cross domain
-requests.
-
-If you want to be more specific, you can also set `CORS_DOMAINS` (along with `CORS_ENABLED`) to specify the domains you want to whitelist. They need to be separated using comma.
-
-This is especially helpful when you have to deal with CORS with authenticated cross domain requests.
-
-More information on this topic on [MDN](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Headers).
-
-### Subdomain Support
-
-If you want your container to also be available at all subdomains to the given
-domain, prefix a dot `.` to the provided hostname. For instance setting
-`VIRTUAL_HOST=.myrailsapp.docker` will also make your app avaiable at
-`*.myrailsapp.docker`.
-
-This happens automatically for the auto-generated docker-compose hostnames.
-
-### SSL Support
-
-SSL is supported using single host certificates using naming conventions.
-
-To enable SSL, just put your certificates and privates keys in the `HOME/.dinghy/certs` directory
-for any virtual hosts in use. The certificate and keys should be named after the virtual host with a `.crt` and
-`.key` extension. For example, a container with `VIRTUAL_HOST=foo.bar.com.docker` should have a
-`foo.bar.com.docker.crt` and `foo.bar.com.docker.key` file in the certs directory.
-
-#### How SSL Support Works
-
-The SSL cipher configuration is based on [mozilla nginx intermediate profile](https://wiki.mozilla.org/Security/Server_Side_TLS#Nginx) which
-should provide compatibility with clients back to Firefox 1, Chrome 1, IE 7, Opera 5, Safari 1,
-Windows XP IE8, Android 2.3, Java 7. The configuration also enables HSTS, and SSL
-session caches.
-
-The default behavior for the proxy when port 80 and 443 are exposed is as follows:
-
-- If a container has a usable cert, port 80 will redirect to 443 for that container so that HTTPS
-  is always preferred when available.
-- If the container does not have a usable cert, port 80 will be used.
-
-To serve traffic in both SSL and non-SSL modes without redirecting to SSL, you can include the
-environment variable `HTTPS_METHOD=noredirect` (the default is `HTTPS_METHOD=redirect`). You can also
-disable the non-SSL site entirely with `HTTPS_METHOD=nohttp`.
-
-#### How to quickly generate self-signed certificates
-
-You can generate self-signed certificates using `openssl`.
+## Quick Start
 
 ```bash
-openssl req -x509 -newkey rsa:2048 -keyout foo.bar.com.docker.key \
--out foo.bar.com.docker.crt -days 365 -nodes \
--subj "/C=US/ST=Oregon/L=Portland/O=Company Name/OU=Org/CN=foo.bar.com.docker" \
--config <(cat /etc/ssl/openssl.cnf <(printf "[SAN]\nsubjectAltName=DNS:foo.bar.com.docker")) \
--reqexts SAN -extensions SAN
+# Install Spark HTTP Proxy
+mkdir -p ${HOME}/.local/spark/http-proxy
+git clone git@github.com:sparkfabrik/http-proxy.git ${HOME}/.local/spark/http-proxy/src
+sudo ln -s ${HOME}/.local/spark/http-proxy/src/bin/spark-http-proxy /usr/local/bin/spark-http-proxy
+sudo chmod +x /usr/local/bin/spark-http-proxy
+spark-http-proxy install-completion
+
+# Or alternatively if you like to live on the edge.
+bash <(curl -fsSL https://raw.githubusercontent.com/sparkfabrik/http-proxy/main/bin/install.sh)
+
+# Start the HTTP proxy
+spark-http-proxy start
+
+# Generate trusted SSL certificates for your domains
+spark-http-proxy generate-mkcert "*.spark.loc"
+
+# Test with any container
+docker run -d -e VIRTUAL_HOST=test.spark.loc nginx
+
+# Access your app with HTTPS
+curl https://test.spark.loc
 ```
 
-To prevent your browser to emit warning regarding self-signed certificates, you can install them on your system as trusted certificates.
+**That's it!** 🎉 Your container is now accessible at `https://test.spark.loc` with a trusted certificate.
 
-## Using Outside of Dinghy
+### Optional Commands
 
-Since this functionality is generally useful for local development work even
-outside of Dinghy, this proxy now supports running standalone.
+```bash
+# View status and dashboard
+spark-http-proxy status
 
-#### Environment variables
+# Start with monitoring (Prometheus + Grafana)
+spark-http-proxy start-with-metrics
 
-#### Environment Variables
-
-The proxy supports several environment variables for customization:
-
-**DNS Server Configuration:**
-
-- `DOMAIN_TLD` (default: `docker`) - The DNS server will only respond to domains with this TLD (e.g., `*.docker`)
-- `DNS_IP` (default: `127.0.0.1`) - IP address that DNS queries should resolve to
-- `LOG_LEVEL` (default: `info`) - Logging level (debug, info, warn, error)
-
-**Network Management:**
-
-- `CONTAINER_NAME` - Name of the container (used for network operations)
-
-**Security Features:**
-
-- The DNS server now silently drops queries for non-configured TLD domains for enhanced security
-- Network operations include automatic connectivity validation and rollback capabilities
-
-### OS X
-
-You'll need the IP of your VM:
-
-- For docker-machine, run `docker-machine ip <machine_name>` to get the IP.
-- For Docker for Mac, you can use `127.0.0.1` as the IP, since it forwards docker ports to the host machine.
-
-Then start the proxy:
-
-    docker run -d --restart=always \
-      -v /var/run/docker.sock:/tmp/docker.sock:ro \
-      -v ~/.dinghy/certs:/etc/nginx/certs \
-      -p 80:80 -p 443:443 -p 19322:19322/udp \
-      -e DNS_IP=<vm_ip> -e CONTAINER_NAME=http-proxy \
-      --name http-proxy \
-      sparkfabrik/http-proxy
-
-You will also need to configure OS X to use the DNS resolver. To do this, create
-a file `/etc/resolver/docker` (creating the `/etc/resolver` directory if it does
-not exist) with these contents:
-
-```
-nameserver <vm_ip>
-port 19322
+# Configure system DNS (eliminates need for manual /etc/hosts editing)
+spark-http-proxy configure-dns
 ```
 
-You only need to do this step once, or when the VM's IP changes.
+For more examples and advanced configurations, check the `examples/` directory.
 
-### Linux
+## Container Configuration
 
-For running Docker directly on a Linux host machine, the proxy can still be
-useful for easy access to your development environments. Similar to OS X, start
-the proxy:
+**Important**: Only containers with explicit configuration are automatically managed by the proxy. Containers without `VIRTUAL_HOST` environment variables or `traefik.*` labels are ignored to ensure security and prevent unintended exposure.
 
-    docker run -d --restart=always \
-      -v /var/run/docker.sock:/tmp/docker.sock:ro \
-      -v ~/.dinghy/certs:/etc/nginx/certs \
-      -p 80:80 -p 443:443 -p 19322:19322/udp \
-      -e CONTAINER_NAME=http-proxy \
-      --name http-proxy \
-      sparkfabrik/http-proxy
+Add these environment variables to any container you want to be automatically routed:
 
-The `DNS_IP` environment variable is not necessary when Docker is running
-directly on the host, as it defaults to `127.0.0.1`.
-
-Different Linux distributions will require different steps for configuring DNS
-resolution. The [Dory](https://github.com/FreedomBen/dory) project may be useful
-here, it knows how to configure common distros for `dinghy-http-proxy`.
-
-### Windows
-
-- For Docker for Windows, you can use `127.0.0.1` as the DNS IP.
-
-From Powershell:
-
-```
-docker run -d --restart=always `
-  -v /var/run/docker.sock:/tmp/docker.sock:ro `
-  -p 80:80 -p 443:443 -p 19322:19322/udp `
-  -e CONTAINER_NAME=http-proxy `
-  -e DNS_IP=127.0.0.1 `
-  --name http-proxy `
-  sparkfabrik/http-proxy
-```
-
-From docker-compose:
-
-```
-version: '2'
+```yaml
+# docker-compose.yml
 services:
-
-  http-proxy:
-    container_name: http-proxy
-    image: sparkfabrik/http-proxy
+  myapp:
+    image: nginx:alpine
     environment:
-      - DNS_IP=127.0.0.1
-      - CONTAINER_NAME=http-proxy
-    ports:
-      - "80:80"
-      - "443:443"
-      - "19322:19322/udp"
-    volumes:
-      - /var/run/docker.sock:/tmp/docker.sock:ro
+      - VIRTUAL_HOST=myapp.local # Required: your custom domain
+      - VIRTUAL_PORT=8080 # Optional: defaults to exposed port or 80
+    expose:
+      - "8080"
 ```
 
-You will have to add the hosts to `C:\Windows\System32\drivers\etc\hosts` manually. There are various Powershell scripts available to help manage this:
+### Supported Patterns
 
-- http://get-carbon.org/Set-HostsEntry.html
-- https://gist.github.com/markembling/173887
+- **Single domain**: `VIRTUAL_HOST=myapp.local`
+- **Multiple domains**: `VIRTUAL_HOST=app.local,api.local`
+- **Wildcards**: `VIRTUAL_HOST=*.myapp.local`
+- **Regex patterns**: `VIRTUAL_HOST=~^api\\..*\\.local$`
 
-## Development
+## Container Management
 
-### Building the Project
+The proxy uses **opt-in container discovery** (`exposedByDefault: false`). Only containers with explicit configuration are managed:
 
-The project uses a Makefile for build automation:
+- **Dinghy**: Containers with `VIRTUAL_HOST=domain.local` environment variable
+- **Traefik**: Containers with labels starting with `traefik.*`
+
+Unmanaged containers are ignored and never exposed.
+
+## Network Management
+
+The proxy automatically joins Docker networks that contain manageable containers, enabling seamless routing without manual network configuration. This process is handled by the `join-networks` service.
+
+📖 **[Detailed Network Joining Flow Documentation](docs/network-joining-flow.md)** - Complete technical documentation with flow diagrams explaining how automatic network discovery and joining works.
+
+## DNS Server
+
+The HTTP proxy includes a **built-in DNS server** that automatically resolves configured domains to localhost, eliminating the need to manually edit `/etc/hosts` or configure system DNS.
+
+### DNS Configuration
+
+The DNS server supports both **Top-Level Domains (TLDs)** and **specific domains**:
+
+```yaml
+# docker-compose.yml
+services:
+  dns:
+    environment:
+      # Configure which domains to handle (comma-separated)
+      - HTTP_PROXY_DNS_TLDS=loc,dev # Handle any *.loc and *.dev domains
+      - HTTP_PROXY_DNS_TLDS=spark.loc,api.dev # Handle only specific domains
+      - HTTP_PROXY_DNS_TLDS=loc # Handle any *.loc domains (default)
+
+      # Where to resolve domains (default: 127.0.0.1)
+      - HTTP_PROXY_DNS_TARGET_IP=127.0.0.1
+
+      # DNS server port (default: 19322)
+      - HTTP_PROXY_DNS_PORT=19322
+```
+
+### DNS Usage Patterns
+
+#### TLD Support (Recommended)
+
+Configure TLDs to handle any subdomain automatically:
 
 ```bash
-# Build both applications
-make build
-
-# Build individual applications
-make build-dns-server
-make build-join-networks
-
-# Build Docker image
-make docker-build
-
-# Clean build artifacts
-make clean
+# Environment: HTTP_PROXY_DNS_TLDS=loc
+✅ myapp.loc → 127.0.0.1
+✅ api.loc → 127.0.0.1
+✅ anything.loc → 127.0.0.1
+❌ myapp.dev → Not handled
 ```
 
-### Testing
+#### Multiple TLDs
 
-The applications support dry-run mode for testing:
+Support multiple development TLDs:
 
 ```bash
-# Test DNS server configuration
-./build/dns-server -dry-run
-
-# Test network operations without making changes
-./build/join-networks -container-name test-container -dry-run
+# Environment: HTTP_PROXY_DNS_TLDS=loc,dev,docker
+✅ myapp.loc → 127.0.0.1
+✅ api.dev → 127.0.0.1
+✅ service.docker → 127.0.0.1
 ```
 
-### Project Architecture
+#### Specific Domains
 
-- **Multi-stage Docker Build**: Efficient Docker image with separate binaries
-- **Shared Configuration**: Centralized environment variable management
-- **Robust Error Handling**: Comprehensive logging and error recovery
-- **Security Hardening**: DNS server only responds to configured domains
-- **Network Resilience**: Automatic retry logic with connectivity validation
+Handle only specific domains for precise control:
 
-### Contributing
+```bash
+# Environment: HTTP_PROXY_DNS_TLDS=spark.loc,api.dev
+✅ spark.loc → 127.0.0.1
+✅ api.dev → 127.0.0.1
+❌ other.loc → Not handled
+❌ different.dev → Not handled
+```
 
-When contributing to this project:
+## Certificate Management
 
-1. Follow Go best practices and the existing project structure
-2. Add tests for new functionality
-3. Update documentation for any configuration changes
-4. Use the shared `pkg/` packages for common functionality
-5. Ensure proper error handling and logging
+When certificates are generated or updated, **restart the proxy** to load the new certificates:
+
+```bash
+docker compose restart
+```
+
+## Advanced Configuration with Traefik Labels
+
+While `VIRTUAL_HOST` environment variables provide simple automatic routing, you can also use **Traefik labels** for more advanced configuration. Both methods work together seamlessly.
+
+### Basic Traefik Labels Example
+
+```yaml
+services:
+  myapp:
+    image: nginx:alpine
+    labels:
+      # Define the routing rule - which domain/path routes to this service
+      - "traefik.http.routers.myapp.rule=Host(`myapp.docker`)"
+
+      # Specify which entrypoint to use (http = port 80)
+      - "traefik.http.routers.myapp.entrypoints=http"
+
+      # Set the target port for load balancing
+      - "traefik.http.services.myapp.loadbalancer.server.port=80"
+```
+
+> **Note**: `traefik.enable=true` is **not required** since auto-discovery is always enabled in this proxy.
+
+### Traefik Labels Breakdown
+
+| Label            | Purpose                                      | Example                                                     |
+| ---------------- | -------------------------------------------- | ----------------------------------------------------------- |
+| **Router Rule**  | Defines which requests route to this service | `traefik.http.routers.myapp.rule=Host(\`myapp.docker\`)`    |
+| **Entrypoints**  | Which proxy port to listen on                | `traefik.http.routers.myapp.entrypoints=http`               |
+| **Service Port** | Target port on the container                 | `traefik.http.services.myapp.loadbalancer.server.port=8080` |
+
+### Understanding Traefik Core Concepts
+
+To effectively use Traefik labels, it helps to understand the key concepts:
+
+#### **Entrypoints** - The "Front Door"
+
+An **entrypoint** is where Traefik listens for incoming traffic. Think of it as the "front door" of your proxy.
+
+```yaml
+# In our Traefik configuration:
+entrypoints:
+  http: # ← This is just a custom name! You can call it anything
+    address: ":80" # Listen on port 80 for HTTP traffic
+  websecure: # ← Another custom name
+    address: ":443" # Listen on port 443 for HTTPS traffic (if configured)
+  api: # ← You could even call it "api" or "http" or "frontend"
+    address: ":8080" # Listen on port 8080
+```
+
+**Important**: `http` is just a **custom name** that we chose. You could name your entrypoints anything:
+
+- `http`, `https`, `frontend`, `api`, `public` - whatever makes sense to you!
+
+When you specify `traefik.http.routers.myapp.entrypoints=http`, you're telling Traefik:
+
+> _"Route requests that come through the entrypoint named 'http' (which happens to be port 80) to my application"_
+
+The entrypoint name must match between:
+
+1. **Traefik configuration** (where you define `web: address: ":80"`)
+2. **Container labels** (where you reference `entrypoints=web`)
+
+#### **Load Balancer** - The "Traffic Director"
+
+The **load balancer** determines how traffic gets distributed to your actual application containers.
+
+```yaml
+# This label creates a load balancer configuration:
+- "traefik.http.services.myapp.loadbalancer.server.port=8080"
+```
+
+This tells Traefik:
+
+> _"When routing to this service, send traffic to port 8080 on the container"_
+
+#### **The Complete Flow**
+
+Here's how a request flows through Traefik:
+
+```
+1. [Browser] → http://myapp.docker
+                    ↓
+2. [Entrypoint :80] ← "web" entrypoint receives the request
+                    ↓
+3. [Router] ← Checks rule: Host(`myapp.docker`) ✓ Match!
+                    ↓
+4. [Service] ← Routes to the configured service
+                    ↓
+5. [Load Balancer] ← Forwards to container port 8080
+                    ↓
+6. [Container] ← Your app receives the request
+```
+
+#### **Advanced Load Balancer Features**
+
+While we typically use simple port mapping, Traefik's load balancer supports much more:
+
+```yaml
+services:
+  # Multiple container instances (automatic load balancing)
+  web-app:
+    image: nginx:alpine
+    deploy:
+      replicas: 3 # 3 instances of the same app
+    labels:
+      - "traefik.http.routers.webapp.rule=Host(`webapp.docker`)"
+      - "traefik.http.routers.webapp.entrypoints=web"
+      # Traefik automatically balances between all 3 instances!
+
+  # Health check configuration
+  api-service:
+    image: myapi:latest
+    labels:
+      - "traefik.http.routers.api.rule=Host(`api.docker`)"
+      - "traefik.http.routers.api.entrypoints=web"
+      - "traefik.http.services.api.loadbalancer.server.port=3000"
+      # Configure health checks
+      - "traefik.http.services.api.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.api.loadbalancer.healthcheck.interval=30s"
+```
+
+#### **Why This Architecture Matters**
+
+This separation of concerns provides powerful flexibility:
+
+- **Entrypoints**: Control _where_ Traefik listens (ports, protocols)
+- **Routers**: Control _which_ requests go _where_ (domains, paths, headers)
+- **Services**: Control _how_ traffic reaches your apps (ports, health checks, load balancing)
+
+Example of advanced routing:
+
+```yaml
+services:
+  # Same app, different routing based on subdomain
+  app-v1:
+    image: myapp:v1
+    labels:
+      - "traefik.http.routers.app-v1.rule=Host(`v1.myapp.docker`)"
+      - "traefik.http.routers.app-v1.entrypoints=web"
+      - "traefik.http.services.app-v1.loadbalancer.server.port=8080"
+
+  app-v2:
+    image: myapp:v2
+    labels:
+      - "traefik.http.routers.app-v2.rule=Host(`v2.myapp.docker`)"
+      - "traefik.http.routers.app-v2.entrypoints=web"
+      - "traefik.http.services.app-v2.loadbalancer.server.port=8080"
+
+  # Route 90% traffic to v1, 10% to v2 (canary deployment)
+  app-main:
+    image: myapp:v1
+    labels:
+      - "traefik.http.routers.app-main.rule=Host(`myapp.docker`)"
+      - "traefik.http.routers.app-main.entrypoints=web"
+      - "traefik.http.services.app-main.loadbalancer.server.port=8080"
+      # Weight-based routing (advanced feature)
+      - "traefik.http.services.app-main.loadbalancer.server.weight=90"
+```
+
+## HTTPS Support
+
+The proxy automatically exposes both HTTP and HTTPS for all applications configured with `VIRTUAL_HOST`. Both protocols are available without any additional configuration.
+
+### Automatic HTTP and HTTPS Routes
+
+When you set `VIRTUAL_HOST=myapp.local`, you automatically get:
+
+- **HTTP**: `http://myapp.local` (port 80)
+- **HTTPS**: `https://myapp.local` (port 443)
+
+```yaml
+services:
+  myapp:
+    image: nginx:alpine
+    environment:
+      - VIRTUAL_HOST=myapp.local # Creates both HTTP and HTTPS routes automatically
+```
+
+### Self-Signed Certificates
+
+Traefik automatically generates self-signed certificates for HTTPS routes. For trusted certificates in development, you can use mkcert to generate wildcard certificates.
+
+### Trusted Local Certificates with mkcert
+
+For browser-trusted certificates without warnings, generate wildcard certificates using [mkcert](https://github.com/FiloSottile/mkcert) (install with `brew install mkcert` on macOS):
+
+```bash
+# Install the local CA
+mkcert -install
+
+# Create the certificates directory
+mkdir -p ~/.local/spark/http-proxy/certs
+
+# Generate wildcard certificate for .loc domains
+mkcert -cert-file ~/.local/spark/http-proxy/certs/wildcard.loc.pem \
+       -key-file ~/.local/spark/http-proxy/certs/wildcard.loc-key.pem \
+       "*.loc"
+
+# For complex multi-level domains, you can generate additional certificates:
+# mkcert -cert-file ~/.local/spark/http-proxy/certs/sparkfabrik.loc.pem \
+#        -key-file ~/.local/spark/http-proxy/certs/sparkfabrik.loc-key.pem \
+#        "*.sparkfabrik.loc"
+```
+
+#### Start the proxy
+
+The certificates will be automatically detected and loaded when you start the proxy:
+
+```bash
+docker compose up -d
+```
+
+The Traefik container's entrypoint script scans `~/.local/spark/http-proxy/certs/` for certificate files and automatically generates the TLS configuration in `/traefik/dynamic/auto-tls.yml`. You don't need to manually edit any configuration files!
+
+Now your `.loc` domains will use trusted certificates! 🎉
+
+✅ `https://myapp.loc` - Trusted
+✅ `https://api.loc` - Trusted
+✅ `https://project.loc` - Trusted
+
+**Note**: The `*.loc` certificate covers single-level subdomains. For multi-level domains like `app.project.sparkfabrik.loc`, generate additional certificates as shown in the commented example above.
+
+#### How Certificate Matching Works
+
+Traefik automatically matches certificates to incoming HTTPS requests using **SNI (Server Name Indication)**:
+
+1. **Certificate Detection**: The entrypoint script scans `/traefik/certs` and extracts domain information from each certificate's Subject Alternative Names (SAN)
+2. **Automatic Matching**: When a browser requests `https://myapp.loc`, Traefik:
+
+   - Receives the domain name via SNI
+   - Looks through available certificates for one that matches `myapp.loc`
+   - Finds the `*.loc` wildcard certificate and uses it
+   - Serves the HTTPS response with the trusted certificate
+
+3. **Wildcard Coverage**:
+
+   - `*.loc` covers: `myapp.loc`, `api.loc`, `database.loc`
+   - `*.loc` does NOT cover: `sub.myapp.loc`, `api.project.loc`
+   - For multi-level domains, generate specific certificates like `*.project.loc`
+
+4. **Fallback**: If no matching certificate is found, Traefik generates a self-signed certificate for that domain
+
+You can see which domains each certificate covers in the container logs when it starts up.
+
+### Using Traefik Labels Instead of VIRTUAL_HOST
+
+If you prefer to use Traefik labels instead of `VIRTUAL_HOST`, you can achieve the same HTTP and HTTPS routes manually:
+
+```yaml
+services:
+  myapp:
+    image: nginx:alpine
+    labels:
+      # HTTP router
+      - "traefik.http.routers.myapp.rule=Host(`myapp.local`)"
+      - "traefik.http.routers.myapp.entrypoints=http"
+      - "traefik.http.routers.myapp.service=myapp"
+
+      # HTTPS router
+      - "traefik.http.routers.myapp-tls.rule=Host(`myapp.local`)"
+      - "traefik.http.routers.myapp-tls.entrypoints=https"
+      - "traefik.http.routers.myapp-tls.tls=true"
+      - "traefik.http.routers.myapp-tls.service=myapp"
+
+      # Service configuration
+      - "traefik.http.services.myapp.loadbalancer.server.port=80"
+```
+
+This manual approach gives you the same result as `VIRTUAL_HOST=myapp.local` but with more control over the configuration.
+
+## Dinghy Layer Compatibility
+
+This HTTP proxy provides compatibility with the original [dinghy-http-proxy](https://github.com/codekitchen/dinghy-http-proxy) environment variables:
+
+### Supported Environment Variables
+
+| Variable       | Support     | Description                      |
+| -------------- | ----------- | -------------------------------- |
+| `VIRTUAL_HOST` | ✅ **Full** | Automatic HTTP and HTTPS routing |
+| `VIRTUAL_PORT` | ✅ **Full** | Backend port configuration       |
+
+### Migration Notes
+
+- **Security**: **`exposedByDefault: false`** ensures only containers with `VIRTUAL_HOST` or `traefik.*` labels are managed
+- **HTTPS**: Unlike the original dinghy-http-proxy, HTTPS is automatically enabled for all `VIRTUAL_HOST` entries
+- **Multiple domains**: Comma-separated domains in `VIRTUAL_HOST` work the same way
+- **Container selection**: Unmanaged containers are completely ignored, preventing accidental exposure
+
+## DNS Server
+
+The HTTP proxy includes a **built-in DNS server** that automatically resolves configured domains to localhost, eliminating the need to manually edit `/etc/hosts` or configure system DNS.
+
+### DNS Configuration
+
+The DNS server supports both **Top-Level Domains (TLDs)** and **specific domains**:
+
+```yaml
+# docker-compose.yml
+services:
+  dns:
+    environment:
+      # Configure which domains to handle (comma-separated)
+      - HTTP_PROXY_DNS_TLDS=loc,dev # Handle any *.loc and *.dev domains
+      - HTTP_PROXY_DNS_TLDS=spark.loc,api.dev # Handle only specific domains
+      - HTTP_PROXY_DNS_TLDS=loc # Handle any *.loc domains (default)
+
+      # Where to resolve domains (default: 127.0.0.1)
+      - HTTP_PROXY_DNS_TARGET_IP=127.0.0.1
+
+      # DNS server port (default: 19322)
+      - HTTP_PROXY_DNS_PORT=19322
+```
+
+### DNS Usage Patterns
+
+#### TLD Support (Recommended)
+
+Configure TLDs to handle any subdomain automatically:
+
+```bash
+# Environment: HTTP_PROXY_DNS_TLDS=loc
+✅ myapp.loc → 127.0.0.1
+✅ api.loc → 127.0.0.1
+✅ anything.loc → 127.0.0.1
+❌ myapp.dev → Not handled
+```
+
+#### Multiple TLDs
+
+Support multiple development TLDs:
+
+```bash
+# Environment: HTTP_PROXY_DNS_TLDS=loc,dev,docker
+✅ myapp.loc → 127.0.0.1
+✅ api.dev → 127.0.0.1
+✅ service.docker → 127.0.0.1
+```
+
+#### Specific Domains
+
+Handle only specific domains for precise control:
+
+```bash
+# Environment: HTTP_PROXY_DNS_TLDS=spark.loc,api.dev
+✅ spark.loc → 127.0.0.1
+✅ api.dev → 127.0.0.1
+❌ other.loc → Not handled
+❌ different.dev → Not handled
+```
+
+### System DNS Configuration
+
+To use the built-in DNS server, configure your system to use it for domain resolution:
+
+#### Linux (systemd-resolved)
+
+```bash
+# Configure systemd-resolved to use http-proxy DNS for .loc domains
+sudo mkdir -p /etc/systemd/resolved.conf.d
+sudo tee /etc/systemd/resolved.conf.d/http-proxy.conf > /dev/null <<EOF
+[Resolve]
+DNS=172.17.0.1:19322
+Domains=~loc
+EOF
+
+# Restart systemd-resolved to apply changes
+sudo systemctl restart systemd-resolved
+
+# Verify configuration
+systemd-resolve --status
+```
+
+**⚠️ Known Limitation**: systemd-resolved may route some external domain queries to the HTTP proxy DNS server, resulting in `REFUSED` responses in the logs. This doesn't affect functionality - external domains resolve through fallback mechanisms. **Solutions:**
+
+- **Accept current behavior** (recommended): The `REFUSED` responses are correct and harmless
+- **See [systemd-resolved limitations documentation](docs/linux-systemd-resolved-issues.md)** for details
+
+#### macOS
+
+```bash
+# Configure specific domains (recommended)
+sudo mkdir -p /etc/resolver
+echo "nameserver 127.0.0.1" | sudo tee /etc/resolver/loc
+echo "port 19322" | sudo tee -a /etc/resolver/loc
+```
+
+#### Manual Testing
+
+You can test DNS resolution manually without system configuration:
+
+```bash
+# Test with dig
+dig @127.0.0.1 -p 19322 myapp.loc
+
+# Test with nslookup
+nslookup myapp.loc 127.0.0.1 19322
+
+# Test with curl (using custom DNS)
+curl --dns-servers 127.0.0.1:19322 http://myapp.loc
+```
+
+## Metrics & Monitoring
+
+Monitor your HTTP proxy traffic with built-in Prometheus metrics and Grafana dashboards:
+
+```bash
+# Start with monitoring stack (Prometheus + Grafana)
+spark-http-proxy start-with-metrics
+```
+
+### Grafana Dashboard
+
+Access the pre-configured Grafana dashboard at `http://localhost:3000` (admin/admin):
+
+![Grafana Dashboard](docs/images/grafana.png)
+
+The dashboard provides insights into:
+
+- Request rates and response times
+- HTTP status codes distribution
+- Active connections and bandwidth usage
+- Container routing statistics
+
+### Traefik Dashboard
+
+Monitor routing rules and service health at `http://localhost:8080`:
+
+![Traefik Dashboard](docs/images/traefik-1.png)
+
+The Traefik dashboard shows:
+
+- Active routes and services
+- Real-time traffic flow
+- Health check status
+- Load balancer configuration
+
+Both dashboards are automatically configured and ready to use with no additional setup required.

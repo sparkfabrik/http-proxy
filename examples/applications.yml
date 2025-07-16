@@ -1,0 +1,82 @@
+# Example Applications for HTTP Proxy Stack
+# This file demonstrates different ways to configure applications to work with the http-proxy
+#
+# Prerequisites:
+#   1. Start the http-proxy stack first:
+#      ./bin/spark-http-proxy start
+#   2. Configure DNS (optional but recommended):
+#      ./bin/spark-http-proxy configure-dns
+#   3. Then start these examples:
+#      docker compose -f examples/applications.yml up -d
+#
+# DNS Configuration:
+#   The http-proxy includes a built-in DNS server that resolves .loc domains to localhost.
+#   You can configure different TLDs or specific domains using environment variables:
+#   - HTTP_PROXY_DNS_TLDS=docker,loc,dev (supports multiple TLDs)
+#   - HTTP_PROXY_DNS_TLDS=spark.loc,api.dev (supports specific domains)
+#   - HTTP_PROXY_DNS_TARGET_IP=127.0.0.1 (IP to resolve domains to)
+#
+# Access examples:
+#   - http://whoami-traefik.loc
+#   - http://whoami-virtual.loc
+#   - http://whoami-custom.loc
+#   - http://whoami-multi1.loc and http://whoami-multi2.loc
+#   - http://nginx.loc and http://www.nginx.loc
+
+services:
+  # Example 1: Using Traefik labels (recommended)
+  whoami-traefik:
+    image: traefik/whoami:latest
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whoami-traefik.rule=Host(`whoami-traefik.loc`)"
+      - "traefik.http.routers.whoami-traefik.entrypoints=http"
+      - "traefik.http.services.whoami-traefik.loadbalancer.server.port=80"
+
+  # Example 2: Using VIRTUAL_HOST (dinghy/dinghy-http-proxy compatible)
+  whoami-virtual:
+    image: traefik/whoami:latest
+    environment:
+      - VIRTUAL_HOST=whoami-virtual.loc
+
+  # Example 3: Using VIRTUAL_HOST with custom port
+  whoami-custom-port:
+    image: traefik/whoami:latest
+    environment:
+      - VIRTUAL_HOST=whoami-custom.loc
+      - VIRTUAL_PORT=80
+
+  # Example 4: Multi-domain VIRTUAL_HOST
+  whoami-multi:
+    image: traefik/whoami:latest
+    environment:
+      - VIRTUAL_HOST=whoami-multi1.loc,whoami-multi2.loc
+
+  # Example 5: Web application with multiple domains
+  nginx-example:
+    image: nginx:alpine
+    environment:
+      - VIRTUAL_HOST=nginx.loc,www.nginx.loc
+
+  # Example 6: VIRTUAL_HOST automatically creates both HTTP and HTTPS routes
+  whoami-automatic-https:
+    image: traefik/whoami:latest
+    environment:
+      - VIRTUAL_HOST=whoami-https.loc # Automatically available on both HTTP and HTTPS
+
+  # Example 7: API with Traefik CORS labels (if needed)
+  whoami-cors:
+    image: traefik/whoami:latest
+    environment:
+      - VIRTUAL_HOST=api.loc
+    labels:
+      # Example CORS configuration using Traefik labels
+      - "traefik.http.middlewares.api-cors.headers.accesscontrolalloworiginlist=*"
+      - "traefik.http.middlewares.api-cors.headers.accesscontrolallowmethods=GET,OPTIONS,PUT,POST,DELETE,PATCH"
+      - "traefik.http.routers.api-http.middlewares=api-cors"
+      - "traefik.http.routers.api-https.middlewares=api-cors"
+
+networks:
+  default:
+    name: http-proxy_default
+    external: true

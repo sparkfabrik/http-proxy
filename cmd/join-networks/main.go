@@ -4,131 +4,121 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
-	"time"
 
+	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
+	"github.com/sparkfabrik/http-proxy/pkg/logger"
+	"github.com/sparkfabrik/http-proxy/pkg/service"
+	"github.com/sparkfabrik/http-proxy/pkg/utils"
 )
 
 const (
 	bridgeDriverName    = "bridge"
 	defaultBridgeOption = "com.docker.network.bridge.default_bridge"
 	defaultBridgeName   = "bridge"
-	maxRetries          = 3
-	retryDelay          = 2 * time.Second
-	stabilizationDelay  = 1 * time.Second
 )
 
-// main sets up signal handling and runs the network join application
-func main() {
-	containerName := flag.String("container-name", "", "the name of this docker container")
-	dryRun := flag.Bool("dry-run", false, "show what would be done without making changes")
-	flag.Parse()
+// NetworkJoiner manages automatic Docker network connections for the HTTP proxy container.
+// It monitors Docker events and maintains optimal network connectivity by joining networks
+// that contain manageable containers and leaving networks that become empty.
+type NetworkJoiner struct {
+	dockerClient           *client.Client
+	logger                 *logger.Logger
+	httpProxyContainerName string
+}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+// NetworkJoinerConfig holds configuration parameters for the NetworkJoiner service.
+// HTTPProxyContainerName specifies which container to manage network connections for.
+type NetworkJoinerConfig struct {
+	HTTPProxyContainerName string
+	LogLevel               string
+}
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+// Validate checks if the configuration is valid
+func (c *NetworkJoinerConfig) Validate() error {
+	if strings.TrimSpace(c.HTTPProxyContainerName) == "" {
+		return fmt.Errorf("container-name cannot be empty")
+	}
 
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- run(ctx, *containerName, *dryRun)
-	}()
+	return utils.ValidateLogLevel(c.LogLevel)
+}
 
-	select {
-	case err := <-errChan:
-		if err != nil {
-			log.Fatalf("Error: %v", err)
-		}
-		log.Println("Application completed successfully")
-	case sig := <-sigChan:
-		log.Printf("Received signal %v, initiating graceful shutdown...", sig)
-		cancel()
-
-		select {
-		case err := <-errChan:
-			if err != nil && err != context.Canceled {
-				log.Printf("Error during shutdown: %v", err)
-			}
-		case <-time.After(10 * time.Second):
-			log.Println("Shutdown timeout exceeded, forcing exit")
-		}
-
-		log.Println("Application shut down gracefully")
+// NewNetworkJoiner creates a new NetworkJoiner with configuration
+func NewNetworkJoiner(cfg *NetworkJoinerConfig) *NetworkJoiner {
+	return &NetworkJoiner{
+		httpProxyContainerName: cfg.HTTPProxyContainerName,
 	}
 }
 
-// run executes the main application logic for joining/leaving networks
-func run(ctx context.Context, containerName string, dryRun bool) error {
-	if strings.TrimSpace(containerName) == "" {
-		return fmt.Errorf("container-name is required")
-	}
+// GetName returns the service name for the EventHandler interface
+func (nj *NetworkJoiner) GetName() string {
+	return "join-networks"
+}
 
-	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-	if err != nil {
-		return fmt.Errorf("failed to create docker client: %w", err)
-	}
-	defer dockerClient.Close()
+// SetDependencies sets the Docker client and logger from the service framework
+func (nj *NetworkJoiner) SetDependencies(dockerClient *client.Client, logger *logger.Logger) {
+	nj.dockerClient = dockerClient
+	nj.logger = logger
+}
 
-	containerID, err := getContainerID(ctx, dockerClient, containerName)
-	if err != nil {
-		return fmt.Errorf("failed to get container ID: %w", err)
-	}
+// HandleInitialScan scans all existing Docker bridge networks and connects the HTTP proxy
+// to any networks that contain manageable containers (containers with VIRTUAL_HOST or traefik labels).
+// This runs once at service startup to establish initial network connectivity.
+func (nj *NetworkJoiner) HandleInitialScan(ctx context.Context) error {
+	nj.logger.Debug("Performing initial network scan and join")
+	return nj.performInitialNetworkJoin(ctx, nj.httpProxyContainerName)
+}
 
-	preState, err := captureContainerNetworkState(ctx, dockerClient, containerID)
-	if err != nil {
-		return fmt.Errorf("failed to capture pre-operation state: %w", err)
-	}
-	log.Printf("Pre-operation state: %s", preState.summary())
-
-	currentNetworks, err := getJoinedNetworks(ctx, dockerClient, containerID)
-	if err != nil {
-		return fmt.Errorf("failed to get current networks: %w", err)
-	}
-
-	bridgeNetworks, err := getActiveBridgeNetworks(ctx, dockerClient, containerID)
-	if err != nil {
-		return fmt.Errorf("failed to get bridge networks: %w", err)
-	}
-
-	defaultBridgeID, err := getDefaultBridgeNetworkID(ctx, dockerClient)
-	if err != nil {
-		log.Printf("Warning: could not identify default bridge network: %v", err)
-	}
-
-	toJoin := getNetworksToJoin(currentNetworks, bridgeNetworks)
-	toLeave := getNetworksToLeave(currentNetworks, bridgeNetworks, defaultBridgeID)
-
-	log.Printf("Plan: Currently in %d networks, found %d bridge networks, %d to join, %d to leave",
-		len(currentNetworks), len(bridgeNetworks), len(toJoin), len(toLeave))
-
-	if dryRun {
-		log.Println("DRY RUN MODE - No changes will be made")
-		logPlannedOperations(ctx, dockerClient, toJoin, toLeave)
+// HandleEvent responds to Docker container lifecycle events to dynamically manage network connections.
+// - Container 'start' events: Re-scans networks to join any new networks with manageable containers
+// - Container 'die' events: Checks for empty networks (no manageable containers) and leaves them
+// - Other events: Ignored to avoid unnecessary processing
+func (nj *NetworkJoiner) HandleEvent(ctx context.Context, event events.Message) error {
+	action := string(event.Action)
+	switch action {
+	case "start":
+		return nj.handleContainerStart(ctx)
+	case "die":
+		return nj.handleContainerStop(ctx)
+	default:
+		nj.logger.Debug("Unhandled container action", "action", action)
 		return nil
 	}
-
-	if err := performNetworkOperationsWithRollback(ctx, dockerClient, containerName, containerID, toJoin, toLeave, preState); err != nil {
-		return fmt.Errorf("network operations failed: %w", err)
-	}
-
-	log.Println("Network operations completed successfully")
-	return nil
 }
 
-type NetworkState struct {
-	Networks     map[string]NetworkInfo
-	PortBindings nat.PortMap
-	HasExternal  bool
+// ContainerInfo consolidates essential container state from Docker API inspection.
+// Focuses on network connections to minimize API calls and provide network context.
+type ContainerInfo struct {
+	ID       string
+	Networks map[string]NetworkInfo
 }
 
+// NetworkOperation encapsulates a simple network management operation including
+// the target container and planned join/leave operations.
+type NetworkOperation struct {
+	HTTPProxyContainerName string
+	ContainerID            string
+	ToJoin                 []string
+	ToLeave                []string
+}
+
+// NetworkSet represents a set of network IDs for cleaner set operations
+type NetworkSet map[string]bool
+
+// Contains checks if a network ID is in the set
+func (ns NetworkSet) Contains(networkID string) bool {
+	return ns[networkID]
+}
+
+// Add adds a network ID to the set
+func (ns NetworkSet) Add(networkID string) {
+	ns[networkID] = true
+}
+
+// NetworkInfo contains details about a network connection
 type NetworkInfo struct {
 	ID      string
 	Name    string
@@ -136,261 +126,260 @@ type NetworkInfo struct {
 	IP      string
 }
 
-func (ns *NetworkState) summary() string {
-	return fmt.Sprintf("networks=%d, ports=%d, external=%t",
-		len(ns.Networks), len(ns.PortBindings), ns.HasExternal)
+// main parses command line arguments and runs the network join service
+func main() {
+	containerName := flag.String("container-name", "http-proxy", "the name of this docker container")
+	logLevel := flag.String("log-level", "info", "log level (debug, info, warn, error)")
+	flag.Parse()
+
+	// Create and validate configuration
+	cfg := &NetworkJoinerConfig{
+		HTTPProxyContainerName: *containerName,
+		LogLevel:               *logLevel,
+	}
+
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Create the handler
+	handler := NewNetworkJoiner(cfg)
+
+	// Run the service using the shared service framework
+	ctx := context.Background()
+	if err := service.RunWithSignalHandling(ctx, "join-networks", cfg.LogLevel, handler); err != nil {
+		fmt.Fprintf(os.Stderr, "Service failed: %v\n", err)
+		os.Exit(1)
+	}
 }
 
-// captureContainerNetworkState takes a snapshot of container's current network configuration
-func captureContainerNetworkState(ctx context.Context, dockerClient *client.Client, containerID string) (*NetworkState, error) {
-	containerJSON, err := dockerClient.ContainerInspect(ctx, containerID)
+// performInitialNetworkJoin orchestrates the network discovery and connection process.
+// It inspects the HTTP proxy container's current state, discovers all bridge networks with
+// manageable containers, calculates which networks to join/leave, and executes the operations.
+func (nj *NetworkJoiner) performInitialNetworkJoin(ctx context.Context, containerProxy string) error {
+	// Get current container state
+	containerInfo, err := nj.getContainerInfo(ctx, containerProxy)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("failed to get container info: %w", err)
 	}
 
-	state := &NetworkState{
-		Networks:     make(map[string]NetworkInfo),
-		PortBindings: containerJSON.NetworkSettings.Ports,
-		HasExternal:  false,
+	currentNetworks := make(NetworkSet)
+	for networkID := range containerInfo.Networks {
+		currentNetworks.Add(networkID)
 	}
+
+	bridgeNetworks, err := nj.getActiveBridgeNetworks(ctx, containerInfo.ID)
+	if err != nil {
+		return fmt.Errorf("failed to get bridge networks: %w", err)
+	}
+
+	defaultBridgeID, err := nj.getDefaultBridgeNetworkID(ctx)
+	if err != nil {
+		nj.logger.Warn("Could not identify default bridge network", "error", err)
+	}
+
+	toJoin := nj.getNetworksToJoin(currentNetworks, bridgeNetworks)
+	toLeave := nj.getNetworksToLeave(currentNetworks, bridgeNetworks, defaultBridgeID)
+
+	nj.logger.Info("Network operation plan",
+		"current_networks", len(currentNetworks),
+		"bridge_networks", len(bridgeNetworks),
+		"to_join", len(toJoin),
+		"to_leave", len(toLeave))
+
+	// Create operation struct
+	operation := &NetworkOperation{
+		HTTPProxyContainerName: containerProxy,
+		ContainerID:            containerInfo.ID,
+		ToJoin:                 toJoin,
+		ToLeave:                toLeave,
+	}
+
+	return nj.performNetworkOperations(ctx, operation)
+}
+
+// handleContainerStart responds to container start events by re-scanning all networks
+// to detect newly created networks or networks that now contain manageable containers.
+// This ensures the HTTP proxy can immediately route to new services without manual intervention.
+func (nj *NetworkJoiner) handleContainerStart(ctx context.Context) error {
+	// Re-scan and join any new bridge networks
+	nj.logger.Debug("Container started, checking for new networks to join")
+	return nj.performInitialNetworkJoin(ctx, nj.httpProxyContainerName)
+}
+
+// handleContainerStop responds to container stop events by identifying networks that
+// no longer contain any manageable containers and safely disconnecting from them.
+// This prevents the HTTP proxy from staying connected to unused networks, optimizing resource usage.
+func (nj *NetworkJoiner) handleContainerStop(ctx context.Context) error {
+	nj.logger.Debug("Container stopped, checking for empty networks to leave")
+
+	// Get current container info
+	containerInfo, err := nj.getContainerInfo(ctx, nj.httpProxyContainerName)
+	if err != nil {
+		return fmt.Errorf("failed to get container info: %w", err)
+	}
+
+	// Check each network the container is connected to
+	var networksToLeave []string
+	for networkID := range containerInfo.Networks {
+		// Skip default bridge network
+		defaultBridgeID, err := nj.getDefaultBridgeNetworkID(ctx)
+		if err == nil && networkID == defaultBridgeID {
+			continue
+		}
+
+		// Check if network has any manageable containers
+		hasActiveContainers, err := utils.HasManageableContainersInNetwork(ctx, nj.dockerClient, networkID, nj.httpProxyContainerName)
+		if err != nil {
+			nj.logger.Warn("Failed to check network for manageable containers",
+				"network_id", utils.FormatDockerID(networkID), "error", err)
+			continue
+		}
+
+		if !hasActiveContainers {
+			networksToLeave = append(networksToLeave, networkID)
+		}
+	}
+
+	if len(networksToLeave) > 0 {
+		nj.logger.Info("Found empty networks to leave", "count", len(networksToLeave))
+
+		// Leave empty networks
+		for _, networkID := range networksToLeave {
+			if err := nj.safeLeaveNetwork(ctx, nj.httpProxyContainerName, networkID); err != nil {
+				nj.logger.Error("Failed to leave empty network",
+					"network_id", utils.FormatDockerID(networkID), "error", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// getContainerInfo performs a comprehensive Docker API inspection of the specified container,
+// extracting network connections, port bindings, and connectivity status in a single API call.
+// This optimizes performance by avoiding multiple API calls and provides complete container state.
+func (nj *NetworkJoiner) getContainerInfo(ctx context.Context, containerName string) (*ContainerInfo, error) {
+	containerJSON, err := utils.RetryContainerInspect(ctx, nj.dockerClient, containerName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect container %s: %w", containerName, err)
+	}
+
+	networks := make(map[string]NetworkInfo)
 
 	for networkName, networkData := range containerJSON.NetworkSettings.Networks {
-		state.Networks[networkData.NetworkID] = NetworkInfo{
+		networks[networkData.NetworkID] = NetworkInfo{
 			ID:      networkData.NetworkID,
 			Name:    networkName,
 			Gateway: networkData.Gateway,
 			IP:      networkData.IPAddress,
 		}
-		if networkData.Gateway != "" {
-			state.HasExternal = true
+	}
+
+	return &ContainerInfo{
+		ID:       containerJSON.ID,
+		Networks: networks,
+	}, nil
+}
+
+// performNetworkOperations executes the planned network join/leave operations.
+// Operations are performed in sequence: leave unwanted networks first, then join new networks.
+// If any operation fails, the process exits to allow restart and recovery.
+func (nj *NetworkJoiner) performNetworkOperations(ctx context.Context, op *NetworkOperation) error {
+	// Execute leave operations first
+	if len(op.ToLeave) > 0 {
+		if err := nj.executeLeaveOperations(ctx, op); err != nil {
+			return err
 		}
 	}
 
-	return state, nil
+	// Execute join operations
+	if len(op.ToJoin) > 0 {
+		return nj.executeJoinOperations(ctx, op)
+	}
+
+	return nil
 }
 
-// performNetworkOperationsWithRollback executes network operations with automatic rollback on failure
-func performNetworkOperationsWithRollback(ctx context.Context, dockerClient *client.Client, containerName, containerID string,
-	toJoin, toLeave []string, originalState *NetworkState) error {
-
-	var operationsPerformed []func() error
-
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("PANIC during network operations, attempting rollback: %v", r)
-			rollbackOperations(operationsPerformed)
-		}
-	}()
-
-	for _, networkID := range toJoin {
-		select {
-		case <-ctx.Done():
-			log.Println("Shutdown signal received, stopping network operations")
-			return ctx.Err()
-		default:
-		}
-
-		if err := safeJoinNetwork(ctx, dockerClient, containerName, networkID); err != nil {
-			log.Printf("Failed to join network %s, rolling back...", networkID[:12])
-			rollbackOperations(operationsPerformed)
+// executeJoinOperations connects the HTTP proxy to each specified network.
+// If any operation fails, the process will exit and restart.
+func (nj *NetworkJoiner) executeJoinOperations(ctx context.Context, op *NetworkOperation) error {
+	for _, networkID := range op.ToJoin {
+		if err := utils.CheckContext(ctx); err != nil {
 			return err
 		}
 
-		operationsPerformed = append(operationsPerformed, func() error {
-			return safeLeaveNetwork(ctx, dockerClient, containerName, networkID)
-		})
-
-		time.Sleep(stabilizationDelay)
-
-		if err := quickConnectivityCheck(ctx, dockerClient, containerID); err != nil {
-			log.Printf("Connectivity lost after joining %s, rolling back...", networkID[:12])
-			rollbackOperations(operationsPerformed)
-			return fmt.Errorf("connectivity lost after joining network: %w", err)
+		if err := nj.safeJoinNetwork(ctx, op.HTTPProxyContainerName, networkID); err != nil {
+			nj.logger.Error("Failed to join network", "network_id", utils.FormatDockerID(networkID), "error", err)
+			return err
 		}
 	}
-
-	for _, networkID := range toLeave {
-		select {
-		case <-ctx.Done():
-			log.Println("Shutdown signal received, stopping network operations")
-			return ctx.Err()
-		default:
-		}
-
-		if err := ensureAlternativeConnectivity(ctx, dockerClient, containerID, networkID); err != nil {
-			log.Printf("Cannot leave network %s: would lose connectivity: %v", networkID[:12], err)
-			continue
-		}
-
-		if err := safeLeaveNetwork(ctx, dockerClient, containerName, networkID); err != nil {
-			log.Printf("Warning: failed to leave network %s: %v", networkID[:12], err)
-			continue
-		}
-
-		time.Sleep(stabilizationDelay)
-
-		if err := quickConnectivityCheck(ctx, dockerClient, containerID); err != nil {
-			log.Printf("Connectivity lost after leaving %s, attempting to rejoin...", networkID[:12])
-			if rejoinErr := safeJoinNetwork(ctx, dockerClient, containerName, networkID); rejoinErr != nil {
-				log.Printf("Failed to rejoin network %s: %v", networkID[:12], rejoinErr)
-			}
-			return fmt.Errorf("connectivity lost after leaving network: %w", err)
-		}
-	}
-
-	finalState, err := captureContainerNetworkState(ctx, dockerClient, containerID)
-	if err != nil {
-		return fmt.Errorf("failed to capture final state: %w", err)
-	}
-
-	log.Printf("Final state: %s", finalState.summary())
-
-	if !finalState.HasExternal && originalState.HasExternal {
-		return fmt.Errorf("lost external connectivity during operations")
-	}
-
 	return nil
 }
 
-// safeJoinNetwork connects a container to a network with retry logic
-func safeJoinNetwork(ctx context.Context, dockerClient *client.Client, containerName, networkID string) error {
-	netName := getNetworkName(ctx, dockerClient, networkID)
-	log.Printf("Joining network %s (%s)", netName, networkID[:12])
+// executeLeaveOperations disconnects the HTTP proxy from specified networks.
+// If any operation fails, the process will exit and restart.
+func (nj *NetworkJoiner) executeLeaveOperations(ctx context.Context, op *NetworkOperation) error {
+	for _, networkID := range op.ToLeave {
+		if err := utils.CheckContext(ctx); err != nil {
+			return err
+		}
 
-	return retryOperation(func() error {
-		return dockerClient.NetworkConnect(ctx, networkID, containerName, &network.EndpointSettings{})
-	}, fmt.Sprintf("join network %s", networkID[:12]))
-}
-
-// safeLeaveNetwork disconnects a container from a network with retry logic
-func safeLeaveNetwork(ctx context.Context, dockerClient *client.Client, containerName, networkID string) error {
-	netName := getNetworkName(ctx, dockerClient, networkID)
-	log.Printf("Leaving network %s (%s)", netName, networkID[:12])
-
-	return retryOperation(func() error {
-		return dockerClient.NetworkDisconnect(ctx, networkID, containerName, true)
-	}, fmt.Sprintf("leave network %s", networkID[:12]))
-}
-
-// retryOperation executes an operation with configurable retry attempts
-func retryOperation(operation func() error, description string) error {
-	var lastErr error
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		if err := operation(); err != nil {
-			lastErr = err
-			if attempt < maxRetries {
-				log.Printf("Attempt %d/%d failed for %s: %v, retrying in %v...",
-					attempt, maxRetries, description, err, retryDelay)
-
-				timer := time.NewTimer(retryDelay)
-				<-timer.C
-				timer.Stop()
-				continue
-			}
-		} else {
-			if attempt > 1 {
-				log.Printf("Operation %s succeeded on attempt %d", description, attempt)
-			}
-			return nil
+		if err := nj.safeLeaveNetwork(ctx, op.HTTPProxyContainerName, networkID); err != nil {
+			nj.logger.Error("Failed to leave network", "network_id", utils.FormatDockerID(networkID), "error", err)
+			return err
 		}
 	}
-
-	return fmt.Errorf("operation %s failed after %d attempts: %w", description, maxRetries, lastErr)
-}
-
-// quickConnectivityCheck verifies that the container maintains network connectivity
-func quickConnectivityCheck(ctx context.Context, dockerClient *client.Client, containerID string) error {
-	containerJSON, err := dockerClient.ContainerInspect(ctx, containerID)
-	if err != nil {
-		return fmt.Errorf("failed to inspect container: %w", err)
-	}
-
-	networkCount := len(containerJSON.NetworkSettings.Networks)
-	if networkCount == 0 {
-		return fmt.Errorf("container has no network connections")
-	}
-
-	for _, networkData := range containerJSON.NetworkSettings.Networks {
-		if networkData.Gateway != "" && networkData.IPAddress != "" {
-			return nil
-		}
-	}
-
-	return fmt.Errorf("no external connectivity found")
-}
-
-// ensureAlternativeConnectivity checks if leaving a network would break external connectivity
-func ensureAlternativeConnectivity(ctx context.Context, dockerClient *client.Client, containerID, networkToLeave string) error {
-	containerJSON, err := dockerClient.ContainerInspect(ctx, containerID)
-	if err != nil {
-		return err
-	}
-
-	externalConnections := 0
-	for _, networkData := range containerJSON.NetworkSettings.Networks {
-		if networkData.NetworkID != networkToLeave && networkData.Gateway != "" {
-			externalConnections++
-		}
-	}
-
-	if externalConnections == 0 {
-		return fmt.Errorf("leaving this network would remove last external connection")
-	}
-
 	return nil
 }
 
-// rollbackOperations executes cleanup operations in reverse order
-func rollbackOperations(operations []func() error) {
-	log.Printf("Rolling back %d operations...", len(operations))
+// safeJoinNetwork connects the HTTP proxy container to a specified network.
+func (nj *NetworkJoiner) safeJoinNetwork(ctx context.Context, containerName, networkID string) error {
+	netName := nj.getNetworkName(ctx, networkID)
+	nj.logger.Info("Joining network", "name", netName, "id", utils.FormatDockerID(networkID))
 
-	for i := len(operations) - 1; i >= 0; i-- {
-		if err := operations[i](); err != nil {
-			log.Printf("Rollback operation %d failed: %v", i, err)
-		}
+	err := utils.RetryNetworkConnect(ctx, nj.dockerClient, networkID, containerName, &network.EndpointSettings{})
+	if err != nil {
+		nj.logger.Error("Failed to join network", "name", netName, "id", utils.FormatDockerID(networkID), "error", err)
+		return fmt.Errorf("failed to join network %s: %w", utils.FormatDockerID(networkID), err)
 	}
+
+	nj.logger.Debug("Successfully joined network", "name", netName, "id", utils.FormatDockerID(networkID))
+	return nil
 }
 
-// getNetworkName retrieves the human-readable name for a network ID
-func getNetworkName(ctx context.Context, dockerClient *client.Client, networkID string) string {
-	if netResource, err := dockerClient.NetworkInspect(ctx, networkID, network.InspectOptions{}); err == nil {
+// safeLeaveNetwork disconnects the HTTP proxy container from a specified network.
+// The 'force' flag ensures disconnection even if the container is running.
+func (nj *NetworkJoiner) safeLeaveNetwork(ctx context.Context, containerName, networkID string) error {
+	netName := nj.getNetworkName(ctx, networkID)
+	nj.logger.Info("Leaving network", "name", netName, "id", utils.FormatDockerID(networkID))
+
+	err := nj.dockerClient.NetworkDisconnect(ctx, networkID, containerName, true)
+	if err != nil {
+		nj.logger.Error("Failed to leave network", "name", netName, "id", utils.FormatDockerID(networkID), "error", err)
+		return fmt.Errorf("failed to leave network %s: %w", utils.FormatDockerID(networkID), err)
+	}
+
+	nj.logger.Debug("Successfully left network", "name", netName, "id", utils.FormatDockerID(networkID))
+	return nil
+}
+
+// getNetworkName retrieves the human-readable name for a network ID for logging purposes.
+// Falls back to a formatted ID if the network name cannot be determined, ensuring
+// consistent logging even when networks are in transitional states.
+func (nj *NetworkJoiner) getNetworkName(ctx context.Context, networkID string) string {
+	if netResource, err := utils.RetryNetworkInspect(ctx, nj.dockerClient, networkID, network.InspectOptions{}); err == nil {
 		return netResource.Name
 	}
 	return "unknown"
 }
 
-// logPlannedOperations displays what network operations would be performed in dry-run mode
-func logPlannedOperations(ctx context.Context, dockerClient *client.Client, toJoin, toLeave []string) {
-	if len(toJoin) > 0 {
-		log.Println("Would JOIN networks:")
-		for _, networkID := range toJoin {
-			name := getNetworkName(ctx, dockerClient, networkID)
-			log.Printf("  - %s (%s)", name, networkID[:12])
-		}
-	}
-
-	if len(toLeave) > 0 {
-		log.Println("Would LEAVE networks:")
-		for _, networkID := range toLeave {
-			name := getNetworkName(ctx, dockerClient, networkID)
-			log.Printf("  - %s (%s)", name, networkID[:12])
-		}
-	}
-}
-
-// getContainerID retrieves the full container ID from a container name
-func getContainerID(ctx context.Context, dockerClient *client.Client, containerName string) (string, error) {
-	containerJSON, err := dockerClient.ContainerInspect(ctx, containerName)
-	if err != nil {
-		return "", fmt.Errorf("failed to inspect container %s: %w", containerName, err)
-	}
-	return containerJSON.ID, nil
-}
-
-// getDefaultBridgeNetworkID finds the ID of the default Docker bridge network
-func getDefaultBridgeNetworkID(ctx context.Context, dockerClient *client.Client) (string, error) {
-	networks, err := dockerClient.NetworkList(ctx, network.ListOptions{})
+// getDefaultBridgeNetworkID identifies the Docker default bridge network by name and driver.
+// The default bridge is excluded from automatic management because it contains system
+// containers and should not be used for custom application routing.
+func (nj *NetworkJoiner) getDefaultBridgeNetworkID(ctx context.Context) (string, error) {
+	networks, err := nj.dockerClient.NetworkList(ctx, network.ListOptions{})
 	if err != nil {
 		return "", err
 	}
@@ -403,27 +392,14 @@ func getDefaultBridgeNetworkID(ctx context.Context, dockerClient *client.Client)
 	return "", fmt.Errorf("default bridge network not found")
 }
 
-// getJoinedNetworks returns the networks that the container is currently connected to
-func getJoinedNetworks(ctx context.Context, dockerClient *client.Client, containerID string) (map[string]bool, error) {
-	networks := make(map[string]bool)
+// getActiveBridgeNetworks discovers all Docker bridge networks that contain manageable containers.
+// Scans each bridge network to identify containers with VIRTUAL_HOST environment variables
+// or Traefik labels, excluding the HTTP proxy container itself and any non-manageable containers.
+// Only considers containers that have dinghy env vars (VIRTUAL_HOST) or traefik labels
+func (nj *NetworkJoiner) getActiveBridgeNetworks(ctx context.Context, containerID string) (NetworkSet, error) {
+	networks := make(NetworkSet)
 
-	containerJSON, err := dockerClient.ContainerInspect(ctx, containerID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to inspect container %s: %w", containerID, err)
-	}
-
-	for _, net := range containerJSON.NetworkSettings.Networks {
-		networks[net.NetworkID] = true
-	}
-
-	return networks, nil
-}
-
-// getActiveBridgeNetworks returns bridge networks that should be joined based on activity criteria
-func getActiveBridgeNetworks(ctx context.Context, dockerClient *client.Client, containerID string) (map[string]bool, error) {
-	networks := make(map[string]bool)
-
-	allNetworks, err := dockerClient.NetworkList(ctx, network.ListOptions{})
+	allNetworks, err := nj.dockerClient.NetworkList(ctx, network.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list networks: %w", err)
 	}
@@ -433,49 +409,72 @@ func getActiveBridgeNetworks(ctx context.Context, dockerClient *client.Client, c
 			continue
 		}
 
-		net, err := dockerClient.NetworkInspect(ctx, netOverview.ID, network.InspectOptions{})
+		net, err := utils.RetryNetworkInspect(ctx, nj.dockerClient, netOverview.ID, network.InspectOptions{})
 		if err != nil {
-			log.Printf("Warning: failed to get info for network %s: %v", netOverview.ID, err)
+			nj.logger.Warn("Failed to get info for network", "network_id", netOverview.ID, "error", err)
 			continue
 		}
 
-		_, containsSelf := net.Containers[containerID]
 		isDefaultBridge := net.Options[defaultBridgeOption] == "true" || net.Name == defaultBridgeName
-		hasMultipleContainers := len(net.Containers) > 1
-		hasOtherContainers := len(net.Containers) == 1 && !containsSelf
 
-		if isDefaultBridge || hasMultipleContainers || hasOtherContainers {
-			networks[net.ID] = true
-			log.Printf("Including bridge network %s (%s) - Default: %t, MultipleContainers: %t, OtherContainers: %t",
-				net.Name, net.ID[:12], isDefaultBridge, hasMultipleContainers, hasOtherContainers)
+		// Always include default bridge
+		if isDefaultBridge {
+			networks.Add(net.ID)
+			nj.logger.Debug("Including default bridge network",
+				"name", net.Name,
+				"id", utils.FormatDockerID(net.ID))
+			continue
+		}
+
+		// For non-default networks, only include if they have manageable containers
+		hasManageableContainers, err := utils.HasManageableContainersInNetwork(ctx, nj.dockerClient, net.ID, containerID)
+		if err != nil {
+			nj.logger.Warn("Failed to check network for manageable containers",
+				"network_id", utils.FormatDockerID(net.ID), "error", err)
+			continue
+		}
+
+		if hasManageableContainers {
+			networks.Add(net.ID)
+			nj.logger.Info("Including bridge network with manageable containers",
+				"name", net.Name,
+				"id", utils.FormatDockerID(net.ID))
+		} else {
+			nj.logger.Debug("Skipping network without manageable containers",
+				"name", net.Name,
+				"id", utils.FormatDockerID(net.ID))
 		}
 	}
 
 	return networks, nil
 }
 
-// getNetworksToJoin returns networks that the container should join
-func getNetworksToJoin(currentNetworks, bridgeNetworks map[string]bool) []string {
+// getNetworksToJoin calculates which bridge networks the HTTP proxy should connect to
+// by comparing currently connected networks against networks containing manageable containers.
+// Returns networks that have manageable containers but are not yet connected to the proxy.
+func (nj *NetworkJoiner) getNetworksToJoin(currentNetworks, bridgeNetworks NetworkSet) []string {
 	var networkIDs []string
 	for networkID := range bridgeNetworks {
-		if !currentNetworks[networkID] {
+		if !currentNetworks.Contains(networkID) {
 			networkIDs = append(networkIDs, networkID)
 		}
 	}
 	return networkIDs
 }
 
-// getNetworksToLeave returns networks that the container should leave, protecting the default bridge
-func getNetworksToLeave(currentNetworks, bridgeNetworks map[string]bool, defaultBridgeID string) []string {
+// getNetworksToLeave identifies networks the HTTP proxy should disconnect from because
+// they no longer contain manageable containers. Excludes the default bridge network
+// to maintain basic Docker connectivity and only disconnects from networks without manageable containers.
+func (nj *NetworkJoiner) getNetworksToLeave(currentNetworks, bridgeNetworks NetworkSet, defaultBridgeID string) []string {
 	var networkIDs []string
 
 	for networkID := range currentNetworks {
 		if networkID == defaultBridgeID {
-			log.Printf("Protecting default bridge network %s from disconnection", networkID[:12])
+			nj.logger.Debug("Protecting default bridge network from disconnection", "network_id", utils.FormatDockerID(networkID))
 			continue
 		}
 
-		if !bridgeNetworks[networkID] {
+		if !bridgeNetworks.Contains(networkID) {
 			networkIDs = append(networkIDs, networkID)
 		}
 	}

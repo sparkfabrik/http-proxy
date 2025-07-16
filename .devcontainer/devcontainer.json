@@ -5,13 +5,18 @@
     },
     "workspaceFolder": "${localWorkspaceFolder}",
     "workspaceMount": "source=${localWorkspaceFolder},target=${localWorkspaceFolder},type=bind",
+    "initializeCommand": "mkdir -p ${localEnv:HOME}/.local/spark/http-proxy/certs",
     "mounts": [
         "source=${localEnv:HOME}/.config/gcloud,target=/home/vscode/.config/gcloud,type=bind",
+        "source=${localEnv:HOME}/.local/spark/http-proxy/certs,target=${localEnv:HOME}/.local/spark/http-proxy/certs,type=bind",
         "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
         "source=sparkci-bashhistory,target=/commandhistory,type=volume"
     ],
+    "containerEnv": {
+        "LOCAL_HOME": "${localEnv:HOME}"
+    },
     "runArgs": [
-        "--add-host=host.docker.internal:host-gateway",
+        "--add-host=host.docker.internal:host-gateway"
     ],
     "features": {
         "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {},
@@ -22,6 +27,8 @@
     "customizations": {
         "vscode": {
             "extensions": [
+                "editorconfig.editorconfig",
+                "davidanson.vscode-markdownlint",
                 "esbenp.prettier-vscode",
                 "GitHub.copilot",
                 "golang.go",
