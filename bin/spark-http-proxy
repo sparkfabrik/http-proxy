@@ -346,6 +346,7 @@ show_usage() {
   echo "  grafana              Open Grafana dashboard"
   echo "  prometheus           Open Prometheus"
   echo "  logs [service]       Show logs (optionally for specific service)"
+  echo "                       Available services: traefik, dinghy_layer, join_networks, dns, prometheus, grafana"
   echo ""
   echo "Configuration & Setup:"
   echo "  show-config          Show current configuration and file locations"
@@ -367,7 +368,10 @@ show_usage() {
   echo "  ${0} start-with-metrics       # HTTP proxy + monitoring"
   echo "  ${0} stop-metrics             # Remove monitoring, keep proxy"
   echo "  ${0} clean                    # Stop everything"
+  echo "  ${0} logs                     # Show logs for all services"
   echo "  ${0} logs traefik             # Show Traefik logs"
+  echo "  ${0} logs dns                 # Show DNS server logs"
+  echo "  ${0} logs -f prometheus       # Show Prometheus logs (with follow)"
   echo "  ${0} configure-dns            # Configure DNS only"
   echo "  ${0} up --profile metrics     # Alternative metrics start"
   echo ""
@@ -630,13 +634,24 @@ destroy)
   fi
   ;;
 logs)
-  if [[ -n "${2:-}" ]]; then
-    log_info "Showing logs for service: ${2}"
-    dc_cmd logs -f "${2}"
-  else
-    log_info "Showing logs for all services"
-    dc_cmd logs -f
+  args=("${@:2}")  # Get all arguments after 'logs'
+
+  # Check if -f or --follow is already present
+  has_follow=false
+  for arg in "${args[@]}"; do
+    if [[ "$arg" == "-f" || "$arg" == "--follow" ]]; then
+      has_follow=true
+      break
+    fi
+  done
+
+  # Add -f if not present
+  if [[ "$has_follow" == "false" ]]; then
+    args=("-f" "${args[@]}")
   fi
+
+  log_info "Showing logs..."
+  dc_cmd logs "${args[@]}"
   ;;
 configure-dns)
   configure_system_dns
