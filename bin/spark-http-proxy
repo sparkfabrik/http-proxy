@@ -462,10 +462,6 @@ generate_mkcert() {
   # Restart traefik to apply new certificates.
   log_info "Restarting Traefik to apply new certificates..."
   docker compose -f "${COMPOSE_FILE}" restart traefik
-
-  echo ""
-  log_info "💡 For wildcard certificates in Traefik, you may need to configure"
-  log_info "   dynamic configuration to use these certificates explicitly."
 }
 
 open_dashboard() {
