@@ -56,23 +56,6 @@ spark-http-proxy start-with-metrics
 
 # Configure system DNS (eliminates need for manual /etc/hosts editing)
 spark-http-proxy configure-dns
-
-# Show configuration and file locations
-spark-http-proxy show-config
-```
-
-### Sparkdock Compatibility
-
-For users migrating from sparkdock, the following aliases are available for compatibility:
-
-```bash
-# Original sparkdock commands → http-proxy equivalents
-spark-http-proxy http-proxy-config            # → show-config
-spark-http-proxy http-proxy-dashboard         # → dashboard  
-spark-http-proxy http-proxy-status            # → status
-spark-http-proxy start-http-proxy             # → start
-spark-http-proxy start-http-proxy-with-metrics # → start-with-metrics
-spark-http-proxy generate-ssl-cert domain     # → generate-mkcert domain
 ```
 
 For more examples and advanced configurations, check the `examples/` directory.

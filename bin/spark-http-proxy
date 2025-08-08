@@ -201,7 +201,7 @@ _${script_name//-/_}_completion() {
     prev="\${COMP_WORDS[COMP_CWORD-1]}"
 
     # Available commands
-    commands="help start status restart start-with-metrics stop-metrics clean destroy logs dashboard grafana prometheus configure-dns completion install-completion generate-mkcert up down pull build ps top exec show-config http-proxy-config http-proxy-dashboard http-proxy-status start-http-proxy start-http-proxy-with-metrics generate-ssl-cert"
+    commands="help start status restart start-with-metrics stop-metrics clean destroy logs dashboard grafana prometheus configure-dns completion install-completion generate-mkcert up down pull build ps top exec show-config"
 
     # Available services for logs command
     services="traefik dinghy_layer join_networks dns prometheus grafana"
@@ -212,10 +212,6 @@ _${script_name//-/_}_completion() {
             return 0
             ;;
         generate-mkcert)
-            # No completion for domain names
-            return 0
-            ;;
-        generate-ssl-cert)
             # No completion for domain names
             return 0
             ;;
@@ -360,14 +356,6 @@ show_usage() {
   echo "  install-completion   Install completion to shell profile"
   echo "  help                 Show this help message"
   echo ""
-  echo "Sparkdock Compatibility Aliases:"
-  echo "  http-proxy-config            Alias for 'show-config'"
-  echo "  http-proxy-dashboard         Alias for 'dashboard'"
-  echo "  http-proxy-status            Alias for 'status'"
-  echo "  start-http-proxy             Alias for 'start'"
-  echo "  start-http-proxy-with-metrics Alias for 'start-with-metrics'"
-  echo "  generate-ssl-cert            Alias for 'generate-mkcert'"
-  echo ""
   echo "Docker Compose Passthrough:"
   echo "  up, down, build...   Standard Docker Compose commands are also passed through."
   echo ""
@@ -409,13 +397,6 @@ show_usage() {
   echo "Example certificate generation:"
   echo "  ${0} generate-mkcert example.loc"
   echo "  ${0} generate-mkcert '*.spark.loc'"
-  echo "  ${0} generate-ssl-cert example.loc     # Sparkdock alias"
-  echo ""
-  echo "Sparkdock compatibility examples:"
-  echo "  ${0} http-proxy-config                 # Same as: ${0} show-config"
-  echo "  ${0} http-proxy-status                 # Same as: ${0} status"  
-  echo "  ${0} start-http-proxy                  # Same as: ${0} start"
-  echo "  ${0} start-http-proxy-with-metrics     # Same as: ${0} start-with-metrics"
   echo ""
   echo "Autocomplete:"
   echo "  Quick setup: ${0} install-completion"
@@ -662,66 +643,5 @@ prometheus) open_prometheus ;;
 completion) generate_completion ;;
 install-completion) install_completion ;;
 generate-mkcert) generate_mkcert "${2}" ;;
-# Sparkdock compatibility aliases
-http-proxy-config) 
-  show_config
-  ;;
-http-proxy-dashboard) open_dashboard ;;
-http-proxy-status)
-  # Same as status command but specifically for http-proxy
-  log_info "HTTP Proxy Status"
-  echo "=================================="
-
-  if is_running http-proxy; then
-    log_success "HTTP Proxy is running"
-    dashboard_port=$(get_service_port traefik 8080)
-    echo "   🌐 Traefik Dashboard: http://localhost:${dashboard_port:-'not available'}"
-    echo ""
-    dc_cmd ps
-    echo ""
-
-    if is_running prometheus; then
-      log_success "Monitoring services are running"
-      grafana_port=$(get_service_port grafana 3000)
-      prometheus_port=$(get_service_port prometheus 9090)
-      echo "   📊 Grafana: http://localhost:${grafana_port:-'not available'} (admin/admin)"
-      echo "   📈 Prometheus: http://localhost:${prometheus_port:-'not available'}"
-    else
-      log_warning "Monitoring services are not running"
-      echo "   💡 Start with: ${0} start-with-metrics"
-    fi
-  else
-    log_warning "HTTP Proxy is not running"
-    echo "   🚀 Start with: ${0} start"
-  fi
-  ;;
-start-http-proxy)
-  log_info "Starting HTTP Proxy (basic stack)..."
-  recreate_stack "false"
-  echo ""
-  log_success "HTTP Proxy running"
-  dashboard_port=$(get_service_port traefik 8080)
-  echo " 🌐 Traefik Dashboard: http://localhost:${dashboard_port:-'not available'}"
-  echo " 🕸️  DNS resolving domains: *.${HTTP_PROXY_DNS_TLDS:-loc} → ${HTTP_PROXY_DNS_TARGET_IP:-127.0.0.1}"
-  echo " 💡 To add monitoring: ${0} start-with-metrics"
-  show_dns_env_vars
-  configure_system_dns
-  ;;
-start-http-proxy-with-metrics)
-  log_info "Starting HTTP Proxy with monitoring..."
-  recreate_stack "true"
-  echo ""
-  log_success "HTTP Proxy + Monitoring running"
-  dashboard_port=$(get_service_port traefik 8080)
-  grafana_port=$(get_service_port grafana 3000)
-  prometheus_port=$(get_service_port prometheus 9090)
-  echo "   🌐 Traefik Dashboard: http://localhost:${dashboard_port:-'not available'}"
-  echo "   🔍 DNS resolving domains: *.${HTTP_PROXY_DNS_TLDS:-loc} → ${HTTP_PROXY_DNS_TARGET_IP:-127.0.0.1}"
-  echo "   📊 Grafana Dashboard: http://localhost:${grafana_port:-'not available'} (admin/admin)"
-  echo "   📈 Prometheus: http://localhost:${prometheus_port:-'not available'}"
-  show_dns_env_vars
-  configure_system_dns
-  ;;
-generate-ssl-cert) generate_mkcert "${2}" ;;
 *) dc_cmd "$@" ;;
 esac
