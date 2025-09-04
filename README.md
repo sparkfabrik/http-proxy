@@ -85,27 +85,111 @@ spark-http-proxy start
 # Generate trusted SSL certificates for your domains
 spark-http-proxy generate-mkcert "*.spark.loc"
 
-# Test with any container
+# Generate certificates for additional patterns if needed  
+spark-http-proxy generate-mkcert "*.local"     # For .local domains
+spark-http-proxy generate-mkcert "myapp.dev"   # For specific domains
+spark-http-proxy generate-mkcert "*.api.loc"   # For multi-level wildcards
+
+# The generate-mkcert command automatically:
+# - Installs mkcert if not already available  
+# - Creates the certificate directory (~/.local/spark/http-proxy/certs)
+# - Generates certificates with safe filenames for wildcard domains
+# - Restarts Traefik to load the new certificates immediately
+
+# Test with containers (multiple options)
+
+# Option 1: Simple docker run command
 docker run -d -e VIRTUAL_HOST=test.spark.loc nginx
 
-# Access your app with HTTPS
-curl https://test.spark.loc
+# Option 2: Using docker-compose for more complex setups
+cat > demo-app.yml << EOF
+services:
+  web:
+    image: nginx:alpine
+    environment:
+      - VIRTUAL_HOST=myapp.spark.loc
+      - VIRTUAL_PORT=80  # Optional: defaults to exposed port
+  
+  api:
+    image: traefik/whoami:latest
+    environment:
+      - VIRTUAL_HOST=api.spark.loc,api-alt.spark.loc  # Multiple domains
+  
+  database-admin:
+    image: adminer:latest
+    environment:
+      - VIRTUAL_HOST=db.spark.loc
+      - VIRTUAL_PORT=8080
+
+# Connect to the proxy network so containers can be discovered  
+networks:
+  default:
+    name: http-proxy_default
+    external: true
+EOF
+
+docker compose -f demo-app.yml up -d
+
+# Access your apps with HTTPS
+curl https://test.spark.loc          # Single container
+curl https://myapp.spark.loc         # Web app
+curl https://api.spark.loc           # API service  
+curl https://api-alt.spark.loc       # Same API with different domain
+curl https://db.spark.loc            # Database admin interface
 ```
 
-**That's it!** 🎉 Your container is now accessible at `https://test.spark.loc` with a trusted certificate.
+**That's it!** 🎉 All your containers are now accessible with trusted HTTPS certificates:
 
-### Optional Commands
+- ✅ `https://test.spark.loc` - Simple nginx container
+- ✅ `https://myapp.spark.loc` - Web application  
+- ✅ `https://api.spark.loc` - API service
+- ✅ `https://db.spark.loc` - Database admin interface
+
+### Container Configuration Patterns
+
+The examples above demonstrate different ways to configure containers:
+
+**Environment Variables (recommended for simple setups):**
+- `VIRTUAL_HOST=myapp.loc` - Single domain
+- `VIRTUAL_HOST=app.loc,api.loc` - Multiple domains  
+- `VIRTUAL_HOST=*.myapp.loc` - Wildcard domains
+- `VIRTUAL_HOST=~^api\\..*\\.loc$` - Regex patterns for advanced matching
+- `VIRTUAL_PORT=8080` - Custom port (defaults to exposed port or 80)
+
+**Automatic Features:**
+- **HTTP + HTTPS**: Both protocols are automatically available for all `VIRTUAL_HOST` domains
+- **Network Discovery**: Containers are automatically discovered across Docker networks
+- **Certificate Matching**: Wildcard certificates (like `*.spark.loc`) automatically work for all subdomains
+- **Security**: Only containers with `VIRTUAL_HOST` or `traefik.*` labels are exposed
+
+### Cleanup Demo
+
+When you're done testing, clean up the demo containers:
 
 ```bash
-# View status and dashboard
-spark-http-proxy status
+# Remove demo containers
+docker compose -f demo-app.yml down
+docker stop $(docker ps -q --filter "label=com.docker.compose.project=http-proxy")
+rm demo-app.yml
 
-# Start with monitoring (Prometheus + Grafana)
-spark-http-proxy start-with-metrics
+# Optionally stop the proxy
+spark-http-proxy stop
+```
 
+### DNS and Monitoring (Recommended)
+
+```bash
 # Configure system DNS (eliminates need for manual /etc/hosts editing)
 spark-http-proxy configure-dns
+
+# View status and dashboard  
+spark-http-proxy status
+
+# Start with monitoring (Prometheus + Grafana) 
+spark-http-proxy start-with-metrics
 ```
+
+**💡 Pro tip**: Use `spark-http-proxy configure-dns` to automatically resolve `.loc` domains without editing `/etc/hosts`. This makes the container examples above work immediately without any manual DNS configuration!
 
 For more examples and advanced configurations, check the `examples/` directory.
 
@@ -113,7 +197,9 @@ For more examples and advanced configurations, check the `examples/` directory.
 
 **Important**: Only containers with explicit configuration are automatically managed by the proxy. Containers without `VIRTUAL_HOST` environment variables or `traefik.*` labels are ignored to ensure security and prevent unintended exposure.
 
-Add these environment variables to any container you want to be automatically routed:
+### Advanced Configuration Examples
+
+For more complex scenarios beyond the Quick Start examples:
 
 ```yaml
 # docker-compose.yml
