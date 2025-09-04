@@ -22,7 +22,6 @@ Simply add `VIRTUAL_HOST=myapp.local` to any container or use native Traefik lab
     - [TLD Support (Recommended)](#tld-support-recommended)
     - [Multiple TLDs](#multiple-tlds)
     - [Specific Domains](#specific-domains)
-- [Certificate Management](#certificate-management)
 - [Advanced Configuration with Traefik Labels](#advanced-configuration-with-traefik-labels)
   - [Basic Traefik Labels Example](#basic-traefik-labels-example)
   - [Traefik Labels Breakdown](#traefik-labels-breakdown)
@@ -210,16 +209,6 @@ Handle only specific domains for precise control:
 ✅ api.dev → 127.0.0.1
 ❌ other.loc → Not handled
 ❌ different.dev → Not handled
-```
-
-## Certificate Management
-
-When certificates are generated using the `spark-http-proxy generate-mkcert` command, **Traefik is automatically restarted** to load the new certificates.
-
-For manually generated certificates, **restart the proxy** to load the new certificates:
-
-```bash
-docker compose restart
 ```
 
 ## Advanced Configuration with Traefik Labels
