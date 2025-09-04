@@ -82,29 +82,42 @@ bash <(curl -fsSL https://raw.githubusercontent.com/sparkfabrik/http-proxy/main/
 # Start the HTTP proxy
 spark-http-proxy start
 
-# Generate trusted SSL certificates for your domains
+# Generate trusted SSL certificates
+# Option 1: Wildcard certificate (covers nginx.spark.loc, api.spark.loc, etc.)
 spark-http-proxy generate-mkcert "*.spark.loc"
 
-# Test with any container
-docker run -d -e VIRTUAL_HOST=test.spark.loc nginx
+# Option 2: Specific certificate (covers only nginx.spark.loc)
+spark-http-proxy generate-mkcert "nginx.spark.loc"
+
+# Run an nginx container
+docker run -d -e VIRTUAL_HOST=nginx.spark.loc nginx
 
 # Access your app with HTTPS
-curl https://test.spark.loc
+curl https://nginx.spark.loc
 ```
 
-**That's it!** 🎉 Your container is now accessible at `https://test.spark.loc` with a trusted certificate.
+**That's it!** 🎉 Your nginx container is now accessible at `https://nginx.spark.loc` with a trusted certificate.
+
+### Certificate Generation
+
+When generating certificates, you can choose between specific domains or wildcards:
+
+- **Specific certificate**: `spark-http-proxy generate-mkcert "nginx.spark.loc"` - covers only `nginx.spark.loc`
+- **Wildcard certificate**: `spark-http-proxy generate-mkcert "*.spark.loc"` - covers `nginx.spark.loc`, `api.spark.loc`, etc.
+
+**⚠️ Important**: Wildcard certificates have nesting limitations. A certificate for `*.spark.loc` will NOT work for nested domains like `test.foo.spark.loc`. To match nested domains, you need to generate a more specific wildcard like `*.foo.spark.loc`.
 
 ### Optional Commands
 
 ```bash
+# Configure system DNS (eliminates need for manual /etc/hosts editing)
+spark-http-proxy configure-dns
+
 # View status and dashboard
 spark-http-proxy status
 
 # Start with monitoring (Prometheus + Grafana)
 spark-http-proxy start-with-metrics
-
-# Configure system DNS (eliminates need for manual /etc/hosts editing)
-spark-http-proxy configure-dns
 ```
 
 For more examples and advanced configurations, check the `examples/` directory.
@@ -113,7 +126,9 @@ For more examples and advanced configurations, check the `examples/` directory.
 
 **Important**: Only containers with explicit configuration are automatically managed by the proxy. Containers without `VIRTUAL_HOST` environment variables or `traefik.*` labels are ignored to ensure security and prevent unintended exposure.
 
-Add these environment variables to any container you want to be automatically routed:
+### Advanced Configuration Examples
+
+For more complex scenarios beyond the Quick Start examples:
 
 ```yaml
 # docker-compose.yml
