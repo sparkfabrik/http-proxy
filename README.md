@@ -7,6 +7,55 @@
 
 Simply add `VIRTUAL_HOST=myapp.local` to any container or use native Traefik labels, and your applications become accessible with both HTTP and HTTPS automatically. No port management, no `/etc/hosts` editing, no hunting for the right port number. **Only explicitly configured containers are exposed**, keeping your development environment secure by default.
 
+## Table of Contents
+
+- [Features](#features)
+- [Quick Start](#quick-start)
+  - [Optional Commands](#optional-commands)
+- [Container Configuration](#container-configuration)
+  - [Supported Patterns](#supported-patterns)
+- [Container Management](#container-management)
+- [Network Management](#network-management)
+- [DNS Server](#dns-server)
+  - [DNS Configuration](#dns-configuration)
+  - [DNS Usage Patterns](#dns-usage-patterns)
+    - [TLD Support (Recommended)](#tld-support-recommended)
+    - [Multiple TLDs](#multiple-tlds)
+    - [Specific Domains](#specific-domains)
+- [Advanced Configuration with Traefik Labels](#advanced-configuration-with-traefik-labels)
+  - [Basic Traefik Labels Example](#basic-traefik-labels-example)
+  - [Traefik Labels Breakdown](#traefik-labels-breakdown)
+  - [Understanding Traefik Core Concepts](#understanding-traefik-core-concepts)
+    - [Entrypoints - The "Front Door"](#entrypoints---the-front-door)
+    - [Load Balancer - The "Traffic Director"](#load-balancer---the-traffic-director)
+    - [The Complete Flow](#the-complete-flow)
+    - [Advanced Load Balancer Features](#advanced-load-balancer-features)
+    - [Why This Architecture Matters](#why-this-architecture-matters)
+- [HTTPS Support](#https-support)
+  - [Automatic HTTP and HTTPS Routes](#automatic-http-and-https-routes)
+  - [Self-Signed Certificates](#self-signed-certificates)
+  - [Trusted Local Certificates with mkcert](#trusted-local-certificates-with-mkcert)
+    - [Manual Certificate Generation (Alternative)](#manual-certificate-generation-alternative)
+    - [Start the proxy](#start-the-proxy)
+    - [How Certificate Matching Works](#how-certificate-matching-works)
+  - [Using Traefik Labels Instead of VIRTUAL_HOST](#using-traefik-labels-instead-of-virtual_host)
+- [Dinghy Layer Compatibility](#dinghy-layer-compatibility)
+  - [Supported Environment Variables](#supported-environment-variables)
+  - [Migration Notes](#migration-notes)
+- [DNS Server](#dns-server-1)
+  - [DNS Configuration](#dns-configuration-1)
+  - [DNS Usage Patterns](#dns-usage-patterns-1)
+    - [TLD Support (Recommended)](#tld-support-recommended-1)
+    - [Multiple TLDs](#multiple-tlds-1)
+    - [Specific Domains](#specific-domains-1)
+  - [System DNS Configuration](#system-dns-configuration)
+    - [Linux (systemd-resolved)](#linux-systemd-resolved)
+    - [macOS](#macos)
+    - [Manual Testing](#manual-testing)
+- [Metrics & Monitoring](#metrics--monitoring)
+  - [Grafana Dashboard](#grafana-dashboard)
+  - [Traefik Dashboard](#traefik-dashboard)
+
 ## Features
 
 - 🚀 **Automatic Container Discovery** - Zero-configuration HTTP routing for containers with `VIRTUAL_HOST` environment variables or Traefik labels
@@ -160,16 +209,6 @@ Handle only specific domains for precise control:
 ✅ api.dev → 127.0.0.1
 ❌ other.loc → Not handled
 ❌ different.dev → Not handled
-```
-
-## Certificate Management
-
-When certificates are generated using the `spark-http-proxy generate-mkcert` command, **Traefik is automatically restarted** to load the new certificates.
-
-For manually generated certificates, **restart the proxy** to load the new certificates:
-
-```bash
-docker compose restart
 ```
 
 ## Advanced Configuration with Traefik Labels
