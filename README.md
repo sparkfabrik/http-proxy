@@ -164,7 +164,9 @@ Handle only specific domains for precise control:
 
 ## Certificate Management
 
-When certificates are generated or updated, **restart the proxy** to load the new certificates:
+When certificates are generated using the `spark-http-proxy generate-mkcert` command, **Traefik is automatically restarted** to load the new certificates.
+
+For manually generated certificates, **restart the proxy** to load the new certificates:
 
 ```bash
 docker compose restart
@@ -355,7 +357,28 @@ Traefik automatically generates self-signed certificates for HTTPS routes. For t
 
 ### Trusted Local Certificates with mkcert
 
-For browser-trusted certificates without warnings, generate wildcard certificates using [mkcert](https://github.com/FiloSottile/mkcert) (install with `brew install mkcert` on macOS):
+For browser-trusted certificates without warnings, use the `spark-http-proxy generate-mkcert` command. This command automatically handles the entire certificate generation process:
+
+```bash
+# Generate wildcard certificate for .loc domains
+spark-http-proxy generate-mkcert "*.loc"
+
+# Generate certificates for specific domains
+spark-http-proxy generate-mkcert "myapp.local"
+
+# For complex multi-level domains, generate additional certificates:
+spark-http-proxy generate-mkcert "*.project.loc"
+```
+
+The `generate-mkcert` command automatically:
+- **Installs mkcert** if not already available (using Homebrew on macOS)
+- **Creates the certificate directory** (`~/.local/spark/http-proxy/certs`)
+- **Generates certificates** with safe filenames for wildcard domains
+- **Restarts Traefik** to load the new certificates immediately
+
+#### Manual Certificate Generation (Alternative)
+
+If you prefer to generate certificates manually using [mkcert](https://github.com/FiloSottile/mkcert) directly:
 
 ```bash
 # Install the local CA
@@ -368,12 +391,9 @@ mkdir -p ~/.local/spark/http-proxy/certs
 mkcert -cert-file ~/.local/spark/http-proxy/certs/wildcard.loc.pem \
        -key-file ~/.local/spark/http-proxy/certs/wildcard.loc-key.pem \
        "*.loc"
-
-# For complex multi-level domains, you can generate additional certificates:
-# mkcert -cert-file ~/.local/spark/http-proxy/certs/sparkfabrik.loc.pem \
-#        -key-file ~/.local/spark/http-proxy/certs/sparkfabrik.loc-key.pem \
-#        "*.sparkfabrik.loc"
 ```
+
+**Note**: When using manual generation, you'll need to restart the proxy to load new certificates: `docker compose restart`
 
 #### Start the proxy
 
