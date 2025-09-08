@@ -407,6 +407,8 @@ show_usage() {
 
 install_mkcert() {
   if command -v mkcert >/dev/null 2>&1; then
+    log_info "Running mkcert -install to ensure root CA is installed..."
+    mkcert -install
     return 0
   fi
 
