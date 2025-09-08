@@ -1,4 +1,4 @@
-FROM traefik:v3.4
+FROM traefik:v3.5.1
 
 # Copy static configuration and entrypoint script
 COPY traefik.yml /etc/traefik/traefik.yml
