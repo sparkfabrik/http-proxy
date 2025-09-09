@@ -289,6 +289,7 @@ func (cl *CompatibilityLayer) generateTraefikConfig(inspect types.ContainerJSON,
 			Service:     serviceName,
 			EntryPoints: []string{"https"},
 			TLS:         &config.RouterTLSConfig{},
+			Middlewares: []string{"disable-hsts"},
 		}
 		traefikConfig.HTTP.Routers[httpsRouterName] = httpsRouter
 	}
