@@ -411,13 +411,13 @@ Traefik automatically generates self-signed certificates for HTTPS routes. For t
 
 ### HSTS Headers Disabled for Development
 
-**HTTP Strict Transport Security (HSTS) headers are automatically disabled** for all HTTPS routes to prevent browser caching issues during development. This ensures that:
+**HTTP Strict Transport Security (HSTS) headers are automatically disabled** for all HTTPS traffic at the entrypoint level to prevent browser caching issues during development. This ensures that:
 
 - Browsers won't remember HTTPS requirements if certificates are changed or revoked
 - Switching between different development setups remains seamless  
 - Certificate issues don't persist in browser cache and block access
 
-This is essential for development environments where certificates may frequently change, expire, or be regenerated.
+This is implemented using Traefik's `disable-hsts` middleware applied to the HTTPS entrypoint, ensuring **all HTTPS traffic** (both dinghy-layer and native Traefik routes) benefits from this development-friendly configuration. This is essential for development environments where certificates may frequently change, expire, or be regenerated.
 
 ### Trusted Local Certificates with mkcert
 
