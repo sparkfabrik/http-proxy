@@ -11,7 +11,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
     labels:
       - "traefik.enable=false"
-    restart: always
+    restart: unless-stopped
 
   join_networks:
     build:
@@ -25,7 +25,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
     labels:
       - "traefik.enable=false"
-    restart: always
+    restart: unless-stopped
 
   dns:
     build:
@@ -43,7 +43,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
     labels:
       - "traefik.enable=false"
-    restart: always
+    restart: unless-stopped
 
   traefik:
     build:
@@ -62,7 +62,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
     labels:
       - "traefik.enable=false"
-    restart: always
+    restart: unless-stopped
 
   # Optional Prometheus service (enabled with --profile metrics)
   prometheus:
@@ -76,7 +76,7 @@ services:
       - prometheus_data:/prometheus
     labels:
       - "traefik.enable=false"
-    restart: always
+    restart: unless-stopped
     profiles:
       - metrics
 
@@ -98,7 +98,7 @@ services:
       - "traefik.enable=false"
     depends_on:
       - prometheus
-    restart: always
+    restart: unless-stopped
     profiles:
       - metrics
 
