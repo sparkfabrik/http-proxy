@@ -3,9 +3,6 @@ ARG TARGETARCH
 WORKDIR /go/src/github.com/sparkfabrik/http-proxy
 COPY go.mod .
 COPY go.sum .
-# Ensure ca-certificates are available for go mod download
-RUN apt-get update && apt-get install -y ca-certificates && update-ca-certificates && rm -rf /var/lib/apt/lists/*
-ENV GOINSECURE=github.com,proxy.golang.org,golang.org GOSUMDB=off
 RUN go mod download
 COPY cmd/ ./cmd/
 COPY pkg/ ./pkg/
