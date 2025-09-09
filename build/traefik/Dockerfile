@@ -14,7 +14,7 @@ RUN chmod +x /entrypoint.sh
 RUN mkdir -p /traefik/dynamic /traefik/certs
 
 # Save git version information to a file
-RUN echo "${GIT_VERSION}" > /traefik/git-version.txt
+RUN echo "${GIT_VERSION}" > /.version
 
 # Use custom entrypoint that processes certificates and starts Traefik
 ENTRYPOINT ["/entrypoint.sh", "--configfile=/etc/traefik/traefik.yml"]

@@ -563,7 +563,7 @@ show_version() {
     echo "------------------"
     # Try to get build git version from container
     local container_git_version
-    container_git_version=$(docker exec http-proxy cat /traefik/git-version.txt 2>/dev/null || echo "unknown")
+    container_git_version=$(docker exec http-proxy cat /.version 2>/dev/null || echo "unknown")
     echo "  Container build version: ${container_git_version}"
   else
     log_warning "HTTP Proxy is not running. Starting temporarily to get version..."

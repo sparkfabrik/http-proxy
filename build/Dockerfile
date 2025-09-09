@@ -22,6 +22,6 @@ COPY --from=builder /go/src/github.com/sparkfabrik/http-proxy/join-networks /usr
 COPY --from=builder /go/src/github.com/sparkfabrik/http-proxy/dinghy-layer /usr/local/bin/dinghy-layer
 
 # Save git version information to a file
-RUN mkdir -p /http-proxy && echo "${GIT_VERSION}" > /http-proxy/git-version.txt
+RUN echo "${GIT_VERSION}" > /.version
 
 EXPOSE 19322/udp
