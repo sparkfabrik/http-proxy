@@ -30,7 +30,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
     labels:
       - "traefik.enable=false"
-    restart: unless-stopped
+    restart: always
 
   join_networks:
     image: ghcr.io/sparkfabrik/http-proxy-services:${HTTP_PROXY_DOCKER_IMAGE_TAG:-latest}
@@ -42,7 +42,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
     labels:
       - "traefik.enable=false"
-    restart: unless-stopped
+    restart: always
 
   dns:
     image: ghcr.io/sparkfabrik/http-proxy-services:${HTTP_PROXY_DOCKER_IMAGE_TAG:-latest}
@@ -58,7 +58,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
     labels:
       - "traefik.enable=false"
-    restart: unless-stopped
+    restart: always
 
   traefik:
     image: ghcr.io/sparkfabrik/http-proxy-traefik:${HTTP_PROXY_DOCKER_IMAGE_TAG:-latest}
@@ -75,7 +75,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
     labels:
       - "traefik.enable=false"
-    restart: unless-stopped
+    restart: always
 
   prometheus:
     image: ghcr.io/sparkfabrik/http-proxy-prometheus:${HTTP_PROXY_DOCKER_IMAGE_TAG:-latest}
@@ -86,7 +86,7 @@ services:
       - prometheus_data:/prometheus
     labels:
       - "traefik.enable=false"
-    restart: unless-stopped
+    restart: always
     profiles:
       - metrics
 
@@ -105,7 +105,7 @@ services:
       - "traefik.enable=false"
     depends_on:
       - prometheus
-    restart: unless-stopped
+    restart: always
     profiles:
       - metrics
 
