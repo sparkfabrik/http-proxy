@@ -551,34 +551,26 @@ show_version() {
   echo "Traefik version information:"
   echo "----------------------------"
   
-  # Get Traefik version by executing traefik version in the container
-  if is_running http-proxy; then
-    docker exec http-proxy traefik version 2>/dev/null || {
-      log_error "Failed to get Traefik version. Is the proxy running?"
-      echo "Try running: ${0} start"
-    }
-    
-    echo ""
-    echo "Build information:"
-    echo "------------------"
-    # Try to get build git version from container
-    local container_git_version
-    container_git_version=$(docker exec http-proxy cat /.version 2>/dev/null || echo "unknown")
-    echo "  Container build version: ${container_git_version}"
-  else
-    log_warning "HTTP Proxy is not running. Starting temporarily to get version..."
-    # Try to run a temporary container to get version
-    local temp_result
-    temp_result=$(docker run --rm traefik:v3.5.1 traefik version 2>/dev/null) || {
-      log_error "Failed to get Traefik version"
-      return 1
-    }
-    echo "${temp_result}"
-    echo ""
-    echo "Build information:"
-    echo "------------------"
-    echo "  Container build version: unknown (container not running)"
+  # Check if containers are running
+  if ! is_running http-proxy; then
+    log_error "Stack is stopped. Please start the stack first with: ${0} start"
+    exit 1
   fi
+
+  # Get Traefik version by executing traefik version in the container
+  docker exec http-proxy traefik version 2>/dev/null || {
+    log_error "Failed to get Traefik version. Is the proxy running?"
+    echo "Try running: ${0} start"
+    return 1
+  }
+  
+  echo ""
+  echo "Build information:"
+  echo "------------------"
+  # Try to get build git version from container
+  local container_git_version
+  container_git_version=$(docker exec http-proxy cat /.version 2>/dev/null || echo "unknown")
+  echo "  Container build version: ${container_git_version}"
 }
 
 case "$1" in
