@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: build/Dockerfile
+      args:
+        GIT_VERSION: ${GIT_VERSION:-unknown}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik_dynamic:/traefik/dynamic
@@ -17,6 +19,8 @@ services:
     build:
       context: .
       dockerfile: build/Dockerfile
+      args:
+        GIT_VERSION: ${GIT_VERSION:-unknown}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     command:
@@ -31,6 +35,8 @@ services:
     build:
       context: .
       dockerfile: build/Dockerfile
+      args:
+        GIT_VERSION: ${GIT_VERSION:-unknown}
     ports:
       - "19322:19322/udp"
     command: ["sh", "-c", "/usr/local/bin/dns-server"]
