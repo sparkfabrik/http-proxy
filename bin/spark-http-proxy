@@ -333,7 +333,7 @@ show_usage() {
   echo "Usage: ${0} <command> [options]"
   echo ""
   echo "Information Commands:"
-  echo "  version              Show version information for spark-http-proxy and Traefik"
+  echo "  version              Show version information for all services"
   echo "  help                 Show this help message"
   echo ""
   echo "Lifecycle Commands:"
@@ -537,7 +537,7 @@ recreate_stack() {
 show_version() {
   echo "spark-http-proxy version information:"
   echo ""
-  
+
   # Get local git version
   local local_git_version=""
   if git -C "${SCRIPT_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
@@ -547,31 +547,31 @@ show_version() {
     echo "  Local git version: unknown (not in git repository)"
     local_git_version="unknown"
   fi
-  
+
   echo ""
   echo "Container versions:"
   echo "-------------------"
-  
+
   # Define containers to check
   local containers=("http-proxy:traefik" "http-proxy-dinghy_layer-1:dinghy_layer" "http-proxy-join_networks-1:join_networks" "http-proxy-dns-1:dns")
   local version_mismatch=false
-  
+
   for container_info in "${containers[@]}"; do
     local container_name="${container_info%%:*}"
     local service_name="${container_info##*:}"
-    
+
     # Check if container exists and get its git version
     if docker ps -a --format "{{.Names}}" | grep -q "^${container_name}$"; then
       local container_git_version
       container_git_version=$(docker exec "${container_name}" cat /.version 2>/dev/null || echo "unknown")
-      
+
       # Check if container is running
       if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
         echo "  ${service_name}: ${container_git_version} (running)"
       else
         echo "  ${service_name}: ${container_git_version} (stopped)"
       fi
-      
+
       # Check for version mismatch
       if [[ "${local_git_version}" != "unknown" && "${container_git_version}" != "unknown" && "${local_git_version}" != "${container_git_version}" ]]; then
         version_mismatch=true
@@ -580,11 +580,11 @@ show_version() {
       echo "  ${service_name}: not built"
     fi
   done
-  
+
   echo ""
   echo "Traefik version information:"
   echo "----------------------------"
-  
+
   # Get Traefik version if container is running
   if docker ps --format "{{.Names}}" | grep -q "^http-proxy$"; then
     docker exec http-proxy traefik version 2>/dev/null || {
@@ -593,7 +593,7 @@ show_version() {
   else
     echo "  Traefik container is not running"
   fi
-  
+
   # Warn about version mismatches
   if [[ "${version_mismatch}" == "true" ]]; then
     echo ""
