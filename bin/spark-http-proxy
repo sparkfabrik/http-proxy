@@ -201,7 +201,7 @@ _${script_name//-/_}_completion() {
     prev="\${COMP_WORDS[COMP_CWORD-1]}"
 
     # Available commands
-    commands="help start status restart start-with-metrics stop-metrics clean destroy logs dashboard grafana prometheus configure-dns completion install-completion generate-mkcert up down pull build ps top exec show-config"
+    commands="version help start status restart start-with-metrics stop-metrics clean destroy logs dashboard grafana prometheus configure-dns completion install-completion generate-mkcert up down pull build ps top exec show-config"
 
     # Available services for logs command
     services="traefik dinghy_layer join_networks dns prometheus grafana"
@@ -332,6 +332,10 @@ mkdir -p "${CONFIG_DIR}" "${CERT_DIR}"
 show_usage() {
   echo "Usage: ${0} <command> [options]"
   echo ""
+  echo "Information Commands:"
+  echo "  version              Show version information for all services"
+  echo "  help                 Show this help message"
+  echo ""
   echo "Lifecycle Commands:"
   echo "  start                Start HTTP proxy (basic stack)"
   echo "  start-with-metrics   Start HTTP proxy with monitoring stack"
@@ -354,12 +358,12 @@ show_usage() {
   echo "                       (macOS: /etc/resolver, Linux: systemd-resolved)"
   echo "  completion           Generate shell completion script"
   echo "  install-completion   Install completion to shell profile"
-  echo "  help                 Show this help message"
   echo ""
   echo "Docker Compose Passthrough:"
   echo "  up, down, build...   Standard Docker Compose commands are also passed through."
   echo ""
   echo "Examples:"
+  echo "  ${0} version                  # Show version information"
   echo "  ${0} help                     # Show this help"
   echo "  ${0} show-config              # Show configuration file locations"
   echo "  ${0} install-completion       # Install autocomplete"
@@ -530,9 +534,85 @@ recreate_stack() {
   fi
 }
 
+show_version() {
+  echo "spark-http-proxy version information:"
+  echo ""
+
+  # Get local git version
+  local local_git_version=""
+  if git -C "${SCRIPT_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
+    local_git_version=$(git -C "${SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    # Check for uncommitted changes
+    if [[ -n "$(git -C "${SCRIPT_DIR}" status --porcelain 2>/dev/null)" ]]; then
+      local_git_version="${local_git_version}-dirty"
+    fi
+    echo "  Local git version: ${local_git_version}"
+  else
+    echo "  Local git version: unknown (not in git repository)"
+    local_git_version="unknown"
+  fi
+
+  echo ""
+  echo "Container versions:"
+  echo "-------------------"
+
+  # Define containers to check
+  local containers=("http-proxy:traefik" "http-proxy-dinghy_layer-1:dinghy_layer" "http-proxy-join_networks-1:join_networks" "http-proxy-dns-1:dns")
+  local version_mismatch=false
+
+  for container_info in "${containers[@]}"; do
+    local container_name="${container_info%%:*}"
+    local service_name="${container_info##*:}"
+
+    # Check if container exists and get its git version
+    if docker ps -a --format "{{.Names}}" | grep -q "^${container_name}$"; then
+      local container_git_version
+      container_git_version=$(docker exec "${container_name}" cat /.version 2>/dev/null || echo "unknown")
+
+      # Check if container is running
+      if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
+        echo "  ${service_name}: ${container_git_version} (running)"
+      else
+        echo "  ${service_name}: ${container_git_version} (stopped)"
+      fi
+
+      # Check for version mismatch
+      if [[ "${local_git_version}" != "unknown" && "${container_git_version}" != "unknown" && "${local_git_version}" != "${container_git_version}" ]]; then
+        version_mismatch=true
+      fi
+    else
+      echo "  ${service_name}: not built"
+    fi
+  done
+
+  echo ""
+  echo "Traefik version information:"
+  echo "----------------------------"
+
+  # Get Traefik version if container is running
+  if docker ps --format "{{.Names}}" | grep -q "^http-proxy$"; then
+    docker exec http-proxy traefik version 2>/dev/null || {
+      echo "  Failed to get Traefik version from running container"
+    }
+  else
+    echo "  Traefik container is not running"
+  fi
+
+  # Warn about version mismatches
+  if [[ "${version_mismatch}" == "true" ]]; then
+    echo ""
+    echo "⚠️  Warning: Local git version differs from container versions."
+    echo "   Consider running '${0} start' to rebuild with latest changes."
+  fi
+}
+
 case "$1" in
 "" | "-h" | "--help" | "help")
   show_usage
+  exit 0
+  ;;
+version)
+  show_version
   exit 0
   ;;
 show-config)

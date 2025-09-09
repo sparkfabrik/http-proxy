@@ -1,5 +1,8 @@
 FROM traefik:v3.5.1
 
+# Accept git version as build argument
+ARG GIT_VERSION=unknown
+
 # Copy static configuration and entrypoint script
 COPY traefik.yml /etc/traefik/traefik.yml
 COPY entrypoint.sh /entrypoint.sh
@@ -10,6 +13,10 @@ RUN chmod +x /entrypoint.sh
 # Create directories for dynamic configuration and user certificates
 RUN mkdir -p /traefik/dynamic /traefik/certs
 
+# Save git version information to a file
+RUN echo "${GIT_VERSION}" > /.version
+
+# Copy middlewares.
 COPY middlewares/ /traefik/dynamic/
 
 # Use custom entrypoint that processes certificates and starts Traefik

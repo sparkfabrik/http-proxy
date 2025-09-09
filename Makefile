@@ -1,5 +1,9 @@
 DOCKER_IMAGE_NAME ?= sparkfabrik/http-proxy:latest
 
+# Get git version for build
+GIT_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+export GIT_VERSION
+
 .PHONY: help docker-build docker-run docker-logs build test test-dns compose-up
 
 help: ## Show help message
