@@ -1,0 +1,8 @@
+http:
+  middlewares:
+    disable-hsts:
+      headers:
+        customResponseHeaders:
+          Strict-Transport-Security: ""
+        sslForceHost: false
+        sslRedirect: false

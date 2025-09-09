@@ -46,7 +46,9 @@ entryPoints:
 
   https:
     address: ":443"
-    # Transport configuration for generous timeouts (same as HTTP)
+    http:
+      middlewares:
+        - disable-hsts@file
     transport:
       respondingTimeouts:
         readTimeout: "86400s"
@@ -68,16 +70,6 @@ providers:
     # Watch the dynamic directory for changes from dinghy-layer and certificates
     directory: "/traefik/dynamic"
     watch: true
-
-# Global HTTP configuration to disable HSTS
-http:
-  middlewares:
-    disable-hsts:
-      headers:
-        customResponseHeaders:
-          Strict-Transport-Security: ""
-        sslForceHost: false
-        sslRedirect: false
 
 # Servers transport configuration for backend connections
 serversTransport:

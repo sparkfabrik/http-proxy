@@ -10,6 +10,8 @@ RUN chmod +x /entrypoint.sh
 # Create directories for dynamic configuration and user certificates
 RUN mkdir -p /traefik/dynamic /traefik/certs
 
+COPY middlewares/ /traefik/dynamic/
+
 # Use custom entrypoint that processes certificates and starts Traefik
 ENTRYPOINT ["/entrypoint.sh", "--configfile=/etc/traefik/traefik.yml"]
 
