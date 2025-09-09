@@ -49,6 +49,8 @@ services:
     build:
       context: ./build/traefik
       dockerfile: Dockerfile
+      args:
+        GIT_VERSION: ${GIT_VERSION:-unknown}
     container_name: http-proxy
     ports:
       - "80:80"

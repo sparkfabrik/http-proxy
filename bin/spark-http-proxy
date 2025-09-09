@@ -201,7 +201,7 @@ _${script_name//-/_}_completion() {
     prev="\${COMP_WORDS[COMP_CWORD-1]}"
 
     # Available commands
-    commands="help start status restart start-with-metrics stop-metrics clean destroy logs dashboard grafana prometheus configure-dns completion install-completion generate-mkcert up down pull build ps top exec show-config"
+    commands="version help start status restart start-with-metrics stop-metrics clean destroy logs dashboard grafana prometheus configure-dns completion install-completion generate-mkcert up down pull build ps top exec show-config"
 
     # Available services for logs command
     services="traefik dinghy_layer join_networks dns prometheus grafana"
@@ -332,6 +332,10 @@ mkdir -p "${CONFIG_DIR}" "${CERT_DIR}"
 show_usage() {
   echo "Usage: ${0} <command> [options]"
   echo ""
+  echo "Information Commands:"
+  echo "  version              Show version information for spark-http-proxy and Traefik"
+  echo "  help                 Show this help message"
+  echo ""
   echo "Lifecycle Commands:"
   echo "  start                Start HTTP proxy (basic stack)"
   echo "  start-with-metrics   Start HTTP proxy with monitoring stack"
@@ -354,12 +358,12 @@ show_usage() {
   echo "                       (macOS: /etc/resolver, Linux: systemd-resolved)"
   echo "  completion           Generate shell completion script"
   echo "  install-completion   Install completion to shell profile"
-  echo "  help                 Show this help message"
   echo ""
   echo "Docker Compose Passthrough:"
   echo "  up, down, build...   Standard Docker Compose commands are also passed through."
   echo ""
   echo "Examples:"
+  echo "  ${0} version                  # Show version information"
   echo "  ${0} help                     # Show this help"
   echo "  ${0} show-config              # Show configuration file locations"
   echo "  ${0} install-completion       # Install autocomplete"
@@ -530,9 +534,60 @@ recreate_stack() {
   fi
 }
 
+show_version() {
+  echo "spark-http-proxy version information:"
+  echo ""
+  
+  # Try to get Git version if available
+  local git_version=""
+  if git -C "${SCRIPT_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
+    git_version=$(git -C "${SCRIPT_DIR}" describe --tags --always --dirty 2>/dev/null || git -C "${SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    echo "  spark-http-proxy version: ${git_version}"
+  else
+    echo "  spark-http-proxy version: unknown (not in git repository)"
+  fi
+  
+  echo ""
+  echo "Traefik version information:"
+  echo "----------------------------"
+  
+  # Get Traefik version by executing traefik version in the container
+  if is_running http-proxy; then
+    docker exec http-proxy traefik version 2>/dev/null || {
+      log_error "Failed to get Traefik version. Is the proxy running?"
+      echo "Try running: ${0} start"
+    }
+    
+    echo ""
+    echo "Build information:"
+    echo "------------------"
+    # Try to get build git version from container
+    local container_git_version
+    container_git_version=$(docker exec http-proxy cat /traefik/git-version.txt 2>/dev/null || echo "unknown")
+    echo "  Container build version: ${container_git_version}"
+  else
+    log_warning "HTTP Proxy is not running. Starting temporarily to get version..."
+    # Try to run a temporary container to get version
+    local temp_result
+    temp_result=$(docker run --rm traefik:v3.5.1 traefik version 2>/dev/null) || {
+      log_error "Failed to get Traefik version"
+      return 1
+    }
+    echo "${temp_result}"
+    echo ""
+    echo "Build information:"
+    echo "------------------"
+    echo "  Container build version: unknown (container not running)"
+  fi
+}
+
 case "$1" in
 "" | "-h" | "--help" | "help")
   show_usage
+  exit 0
+  ;;
+version)
+  show_version
   exit 0
   ;;
 show-config)
