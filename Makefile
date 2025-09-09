@@ -5,10 +5,14 @@ DOCKER_IMAGE_NAME ?= sparkfabrik/http-proxy:latest
 help: ## Show help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-dev-up: ## Run the development environment (basic stack)
+dev-up: dev-down ## Run the development environment (basic stack)
 	@echo "Starting development environment (basic stack)..."
 	@docker compose --profile metrics down -v
 	@docker compose up -d --build --remove-orphans
+
+dev-cli-traefik: dev-up ## Access the Traefik container CLI
+	@echo "Accessing Traefik container CLI..."
+	@docker compose exec http-proxy ash
 
 dev-up-metrics: ## Run the development environment with monitoring stack
 	@echo "Starting development environment with monitoring..."

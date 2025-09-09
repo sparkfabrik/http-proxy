@@ -119,6 +119,38 @@ test_http_access() {
     return 1
 }
 
+# Test HSTS headers are NOT present in HTTPS responses
+test_hsts_headers() {
+    local hostname=$1
+    local max_attempts=10
+    local attempt=1
+
+    log "Testing HSTS headers are NOT present for ${hostname}..."
+
+    while [ $attempt -le $max_attempts ]; do
+        # Try HTTPS connection and check for HSTS header
+        local headers=$(curl -k -s -I -H "Host: ${hostname}" https://localhost:443 2>/dev/null || echo "")
+        
+        if [ -n "$headers" ]; then
+            # Check if Strict-Transport-Security header is present
+            if echo "$headers" | grep -i "strict-transport-security" >/dev/null 2>&1; then
+                error "HSTS header found in HTTPS response for ${hostname}"
+                error "Headers received: $(echo "$headers" | grep -i strict-transport-security)"
+                return 1
+            else
+                success "HSTS header correctly absent for ${hostname}"
+                return 0
+            fi
+        fi
+
+        wait_with_message "$SLEEP_CONFIG_RESTORE" "for HTTPS service to be ready"
+        attempt=$((attempt + 1))
+    done
+
+    error "HTTPS access to ${hostname} failed after ${max_attempts} attempts"
+    return 1
+}
+
 # Test DNS functionality
 test_dns() {
     local hostname="$1"
@@ -602,6 +634,17 @@ main() {
     test_http_access "app5.${TEST_DOMAIN}" && http_passed=$((http_passed + 1))
     [ "$http_passed" -eq 5 ] && passed=$((passed + 1))
 
+    # HSTS Tests
+    log "Testing HSTS headers are NOT present..."
+    total=$((total + 1))
+    local hsts_passed=0
+    test_hsts_headers "app1.${TEST_DOMAIN}" && hsts_passed=$((hsts_passed + 1))
+    test_hsts_headers "app2.${TEST_DOMAIN}" && hsts_passed=$((hsts_passed + 1))
+    test_hsts_headers "app3.${TEST_DOMAIN}" && hsts_passed=$((hsts_passed + 1))
+    test_hsts_headers "app4.${TEST_DOMAIN}" && hsts_passed=$((hsts_passed + 1))
+    test_hsts_headers "app5.${TEST_DOMAIN}" && hsts_passed=$((hsts_passed + 1))
+    [ "$hsts_passed" -eq 5 ] && passed=$((passed + 1))
+
     # DNS Tests (if dig available)
     if command -v dig >/dev/null 2>&1; then
         log "Testing DNS functionality..."
@@ -625,6 +668,7 @@ main() {
     log "Test Results:"
     log "============="
     log "HTTP Tests: ${http_passed}/5 passed"
+    log "HSTS Tests: ${hsts_passed}/5 passed"
     log "Test Suites: ${passed}/${total} passed"
 
     cleanup
