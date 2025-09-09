@@ -34,3 +34,8 @@ applyTo: "**"
 - Use environment variables for configuration
 - Validate all user inputs
 - Follow principle of least privilege
+
+## Changelog
+
+- Maintain a CHANGELOG.md file
+- Document all changes, including bug fixes and new features
