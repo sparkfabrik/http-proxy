@@ -541,7 +541,11 @@ show_version() {
   # Get local git version
   local local_git_version=""
   if git -C "${SCRIPT_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
-    local_git_version=$(git -C "${SCRIPT_DIR}" describe --tags --always --dirty 2>/dev/null || git -C "${SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    local_git_version=$(git -C "${SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    # Check for uncommitted changes
+    if [[ -n "$(git -C "${SCRIPT_DIR}" status --porcelain 2>/dev/null)" ]]; then
+      local_git_version="${local_git_version}-dirty"
+    fi
     echo "  Local git version: ${local_git_version}"
   else
     echo "  Local git version: unknown (not in git repository)"
