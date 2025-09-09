@@ -579,15 +579,25 @@ start)
   configure_system_dns
   ;;
 restart)
-  ensure_running
-  log_info "Restarting HTTP Proxy..."
-  if is_running prometheus; then
-    log_info "Restarting with monitoring services..."
-    dc_metrics restart
+  if ! is_running http-proxy; then
+    log_info "HTTP Proxy is not running, starting it..."
+    if is_running prometheus; then
+      log_info "Starting with monitoring services..."
+      recreate_stack "true"
+    else
+      recreate_stack "false"
+    fi
+    log_success "HTTP Proxy started"
   else
-    dc_cmd restart
+    log_info "Restarting HTTP Proxy..."
+    if is_running prometheus; then
+      log_info "Restarting with monitoring services..."
+      dc_metrics restart
+    else
+      dc_cmd restart
+    fi
+    log_success "HTTP Proxy restarted"
   fi
-  log_success "HTTP Proxy restarted"
   ;;
 start-with-metrics)
   log_info "Starting HTTP Proxy with monitoring..."
