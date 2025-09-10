@@ -1,4 +1,4 @@
-FROM golang:1.24 AS builder
+FROM golang:1.25 AS builder
 ARG TARGETARCH
 ARG GIT_VERSION=unknown
 WORKDIR /go/src/github.com/sparkfabrik/http-proxy
