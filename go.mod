@@ -3,13 +3,15 @@ module github.com/sparkfabrik/http-proxy
 go 1.24
 
 require (
-	github.com/docker/docker v28.0.0+incompatible
+	github.com/docker/docker v28.4.0+incompatible
 	github.com/miekg/dns v1.1.66
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
+	github.com/containerd/errdefs v1.0.0 // indirect
+	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/distribution/reference v0.6.0 // indirect
