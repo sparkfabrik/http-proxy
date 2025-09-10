@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/devcontainers/go:1.24
+FROM mcr.microsoft.com/devcontainers/go:1.25
 
 # https://cloud.google.com/sdk/docs/install#deb
 # Install the Google Cloud SDK dependencies
