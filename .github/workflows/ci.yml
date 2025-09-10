@@ -100,7 +100,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@0.32.0
+        uses: aquasecurity/trivy-action@0.33.1
         with:
           scan-type: "fs"
           scan-ref: "."
@@ -196,7 +196,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}
 
       - name: Run Trivy vulnerability scanner on dev image
-        uses: aquasecurity/trivy-action@0.32.0
+        uses: aquasecurity/trivy-action@0.33.1
         with:
           image-ref: ${{ env.REGISTRY }}/${{ matrix.image_name }}:${{ steps.dev-tags.outputs.dev_tag }}
           format: "sarif"
@@ -285,7 +285,7 @@ jobs:
           sbom: true
 
       - name: Run Trivy vulnerability scanner on image
-        uses: aquasecurity/trivy-action@0.32.0
+        uses: aquasecurity/trivy-action@0.33.1
         with:
           image-ref: ${{ env.REGISTRY }}/${{ matrix.image_name }}:latest
           format: "sarif"
