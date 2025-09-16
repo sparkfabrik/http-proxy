@@ -322,8 +322,11 @@ open_url() {
 }
 
 # Ensure prerequisites are met
-if ! check_prerequisites; then
-  exit 1
+# Ignore if the first argument is "help" or "version" or "completion".
+if [[ "$1" != "help" && "$1" != "version" && "$1" != "completion" && "$1" != "install-completion" ]]; then
+  if ! check_prerequisites; then
+    exit 1
+  fi
 fi
 
 # Ensure config directories exist
