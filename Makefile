@@ -9,6 +9,26 @@ export GIT_VERSION
 help: ## Show help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
+build-go-dns: ## Build the Go DNS server
+	@echo "Building Go DNS server..."
+	@cd cmd/dns-server && CGO_ENABLED=0 GOOS=linux go build -o dns-server main.go
+
+build-go-dinghy-layer: ## Build the Go dinghy layer
+	@echo "Building Go dinghy layer..."
+	@cd cmd/dinghy-layer && CGO_ENABLED=0 GOOS=linux go build -o dinghy-layer main.go
+
+build-go-join-networks: ## Build the Go join networks tool
+	@echo "Building Go join networks tool..."
+	@cd cmd/join-networks && CGO_ENABLED=0 GOOS=linux go build -o join-networks main.go
+
+build: build-go-dns build-go-dinghy-layer build-go-join-networks ## Build all Go components
+
+clean: ## Clean build artifacts
+	@echo "Cleaning build artifacts..."
+	@rm -f cmd/dns-server/dns-server
+	@rm -f cmd/dinghy-layer/dinghy-layer
+	@rm -f cmd/join-networks/join-networks
+
 dev-up: dev-down ## Run the development environment (basic stack)
 	@echo "Starting development environment (basic stack)..."
 	@docker compose --profile metrics down -v
