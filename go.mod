@@ -4,7 +4,7 @@ go 1.24
 
 require (
 	github.com/docker/docker v28.4.0+incompatible
-	github.com/miekg/dns v1.1.66
+	github.com/miekg/dns v1.1.68
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -39,6 +39,6 @@ require (
 	golang.org/x/sync v0.14.0 // indirect
 	golang.org/x/sys v0.33.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
-	golang.org/x/tools v0.32.0 // indirect
+	golang.org/x/tools v0.33.0 // indirect
 	gotest.tools/v3 v3.5.0 // indirect
 )
