@@ -11,15 +11,15 @@ help: ## Show help message
 
 build-go-dns: ## Build the Go DNS server
 	@echo "Building Go DNS server..."
-	@cd cmd/dns-server && GO_ENABLED=0 GOOS=linux go build -o dns-server main.go
+	@cd cmd/dns-server && CGO_ENABLED=0 GOOS=linux go build -o dns-server main.go
 
 build-go-dinghy-layer: ## Build the Go dingy layer
 	@echo "Building Go dingy layer..."
-	@cd cmd/dinghy-layer && GO_ENABLED=0 GOOS=linux go build -o dinghy-layer main.go
+	@cd cmd/dinghy-layer && CGO_ENABLED=0 GOOS=linux go build -o dinghy-layer main.go
 
 build-go-join-networks: ## Build the Go join networks tool
 	@echo "Building Go join networks tool..."
-	@cd cmd/join-networks && GO_ENABLED=0 GOOS=linux go build -o join-networks main.go
+	@cd cmd/join-networks && CGO_ENABLED=0 GOOS=linux go build -o join-networks main.go
 
 build: build-go-dns build-go-dinghy-layer build-go-join-networks ## Build all Go components
 
