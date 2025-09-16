@@ -201,7 +201,7 @@ _${script_name//-/_}_completion() {
     prev="\${COMP_WORDS[COMP_CWORD-1]}"
 
     # Available commands
-    commands="version help start status restart start-with-metrics stop-metrics clean destroy logs dashboard grafana prometheus configure-dns completion install-completion generate-mkcert up down pull build ps top exec show-config"
+    commands="version help self-test start status restart start-with-metrics stop-metrics clean destroy logs dashboard grafana prometheus configure-dns completion install-completion generate-mkcert up down pull build ps top exec show-config"
 
     # Available services for logs command
     services="traefik dinghy_layer join_networks dns prometheus grafana"
@@ -334,7 +334,8 @@ show_usage() {
   echo ""
   echo "Information Commands:"
   echo "  version              Show version information for all services"
-  echo "  help                 Show this help message"
+  echo "  help                 Show detailed help message"
+  echo "  self-test            Run self-diagnosis test"
   echo ""
   echo "Lifecycle Commands:"
   echo "  start                Start HTTP proxy (basic stack)"
@@ -362,19 +363,11 @@ show_usage() {
   echo "Docker Compose Passthrough:"
   echo "  up, down, build...   Standard Docker Compose commands are also passed through."
   echo ""
-  echo "Examples:"
-  echo "  ${0} version                  # Show version information"
-  echo "  ${0} help                     # Show this help"
-  echo "  ${0} show-config              # Show configuration file locations"
-  echo "  ${0} install-completion       # Install autocomplete"
-  echo "  ${0} start                    # Basic HTTP proxy only"
-  echo "  ${0} start-with-metrics       # HTTP proxy + monitoring"
-  echo "  ${0} stop-metrics             # Remove monitoring, keep proxy"
-  echo "  ${0} clean                    # Stop everything"
-  echo "  ${0} logs traefik             # Show Traefik logs"
-  echo "  ${0} configure-dns            # Configure DNS only"
-  echo "  ${0} up --profile metrics     # Alternative metrics start"
-  echo ""
+  echo "Docker compose file: ${COMPOSE_FILE}"
+}
+
+show_detailed_help() {
+  show_usage
   echo ""
   echo "DNS Proxy Environment Variables:"
   echo "  HTTP_PROXY_DNS_TLDS          Top-level domains to proxy (.loc by default)"
@@ -390,23 +383,6 @@ show_usage() {
   echo ""
   echo "  On macOS:    Creates /etc/resolver files for each domain"
   echo "  On Linux:    Configures systemd-resolved with domain-specific DNS settings"
-  echo ""
-  echo "Example with DNS configuration:"
-  echo "  HTTP_PROXY_DNS_TLDS=local,dev ${0} start"
-  echo "  HTTP_PROXY_DNS_TARGET_IP=192.168.1.50 ${0} start"
-  echo ""
-  echo "Example with specific Docker image tag:"
-  echo "  HTTP_PROXY_DOCKER_IMAGE_TAG=v1.2.3 ${0} start"
-  echo ""
-  echo "Example certificate generation:"
-  echo "  ${0} generate-mkcert example.loc"
-  echo "  ${0} generate-mkcert '*.spark.loc'"
-  echo ""
-  echo "Autocomplete:"
-  echo "  Quick setup: ${0} install-completion"
-  echo "  Manual setup: source <(${0} completion)"
-  echo ""
-  echo "Docker compose file: ${COMPOSE_FILE}"
 }
 
 install_mkcert() {
@@ -509,6 +485,50 @@ dc_metrics() { docker compose -f "${COMPOSE_FILE}" --profile metrics "$@"; }
 # Check if service is running
 is_running() { dc_cmd ps | grep -q "$1"; }
 
+# Self-test function
+run_self_test() {
+  local test_domain="test.spark.loc"
+  local container_name="spark-proxy-self-test"
+  local dns_port="${HTTP_PROXY_DNS_PORT:-19322}"
+  local exit_code=0
+
+  log_info "Running self-test..."
+
+  # Check if DNS service is running
+  if ! is_running dns; then
+    log_error "DNS service is not running. Start the proxy first with: ${0} start"
+    return 1
+  fi
+
+  # Start test container
+  log_info "Starting test container..."
+  if ! docker run -d --name "${container_name}" nginx:latest >/dev/null 2>&1; then
+    log_error "Failed to start test container"
+    return 1
+  fi
+
+  # Test DNS resolution
+  log_info "Testing DNS resolution for ${test_domain}..."
+  if dig @127.0.0.1 -p"${dns_port}" "${test_domain}" +short >/dev/null 2>&1; then
+    log_success "DNS resolution test passed"
+  else
+    log_error "DNS resolution test failed"
+    exit_code=1
+  fi
+
+  # Cleanup
+  log_info "Cleaning up test container..."
+  docker rm -f "${container_name}" >/dev/null 2>&1 || true
+
+  if [[ ${exit_code} -eq 0 ]]; then
+    log_success "Self-test completed successfully"
+  else
+    log_error "Self-test failed"
+  fi
+
+  return ${exit_code}
+}
+
 # Ensure proxy is running before proceeding
 ensure_running() {
   if ! is_running http-proxy; then
@@ -607,8 +627,12 @@ show_version() {
 }
 
 case "$1" in
-"" | "-h" | "--help" | "help")
+"" | "-h" | "--help")
   show_usage
+  exit 0
+  ;;
+"help")
+  show_detailed_help
   exit 0
   ;;
 version)
@@ -618,6 +642,10 @@ version)
 show-config)
   show_config
   exit 0
+  ;;
+self-test)
+  run_self_test
+  exit $?
   ;;
 status)
   log_info "HTTP Proxy Status"
