@@ -13,8 +13,8 @@ build-go-dns: ## Build the Go DNS server
 	@echo "Building Go DNS server..."
 	@cd cmd/dns-server && CGO_ENABLED=0 GOOS=linux go build -o dns-server main.go
 
-build-go-dinghy-layer: ## Build the Go dingy layer
-	@echo "Building Go dingy layer..."
+build-go-dinghy-layer: ## Build the Go dinghy layer
+	@echo "Building Go dinghy layer..."
 	@cd cmd/dinghy-layer && CGO_ENABLED=0 GOOS=linux go build -o dinghy-layer main.go
 
 build-go-join-networks: ## Build the Go join networks tool
