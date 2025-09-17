@@ -646,8 +646,11 @@ echo "port 19322" | sudo tee -a /etc/resolver/loc
 You can test DNS resolution manually without system configuration:
 
 ```bash
-# Test with dig
+# Test with dig (UDP - default)
 dig @127.0.0.1 -p 19322 myapp.loc
+
+# Test with dig (TCP - useful for Lima and other virtualization environments)
+dig @127.0.0.1 -p 19322 +tcp myapp.loc
 
 # Test with nslookup
 nslookup myapp.loc 127.0.0.1 19322
