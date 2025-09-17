@@ -9,10 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Expose DNS server TCP port 19322 alongside UDP port for Lima virtualization compatibility ([#56](https://github.com/sparkfabrik/http-proxy/issues/56))
-  - DNS server now exposes both UDP and TCP protocols on port 19322
-  - Addresses Lima virtualization UDP networking issues (lima-vm/lima#4040)
-  - Fully backward compatible - existing UDP functionality unchanged
-  - Updated documentation with TCP testing examples using `dig +tcp`
 
 ### Fixed
 - Fixed restart command to automatically start containers when not running instead of failing ([#40](https://github.com/sparkfabrik/http-proxy/issues/40))
