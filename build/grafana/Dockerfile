@@ -1,4 +1,4 @@
-FROM grafana/grafana:12.1.1
+FROM grafana/grafana:12.2.0
 
 # Copy provisioning configurations
 COPY provisioning/datasources /etc/grafana/provisioning/datasources
