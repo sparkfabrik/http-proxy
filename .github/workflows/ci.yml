@@ -108,7 +108,7 @@ jobs:
           output: "trivy-results.sarif"
 
       - name: Upload Trivy scan results
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: "trivy-results.sarif"
@@ -205,7 +205,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Upload Trivy dev scan results
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: "trivy-dev-results-${{ matrix.name }}.sarif"
@@ -294,7 +294,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Upload Trivy image scan results
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: "trivy-image-results-${{ matrix.name }}.sarif"
