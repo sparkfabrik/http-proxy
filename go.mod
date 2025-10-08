@@ -3,7 +3,7 @@ module github.com/sparkfabrik/http-proxy
 go 1.24
 
 require (
-	github.com/docker/docker v28.5.0+incompatible
+	github.com/docker/docker v28.5.1+incompatible
 	github.com/miekg/dns v1.1.68
 	gopkg.in/yaml.v3 v3.0.1
 )
