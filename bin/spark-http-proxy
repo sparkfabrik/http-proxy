@@ -400,17 +400,48 @@ install_mkcert() {
     return 0
   fi
 
-  if ! command -v brew >/dev/null 2>&1; then
-    log_error "mkcert not found and Homebrew not available for installation"
+  # Try different package managers based on availability
+  if command -v brew >/dev/null 2>&1; then
+    log_info "Installing mkcert with Homebrew..."
+    if brew install mkcert nss && mkcert -install; then
+      log_success "mkcert installed successfully"
+      return 0
+    else
+      log_error "Failed to install mkcert with Homebrew"
+      return 1
+    fi
+  elif command -v pacman >/dev/null 2>&1; then
+    log_info "Installing mkcert with pacman..."
+    log_info "Please run: sudo pacman -S mkcert"
+    log_error "Automatic installation with pacman requires sudo privileges"
+    log_info "After installation, run the command again"
     return 1
-  fi
-
-  log_info "Installing mkcert with Homebrew..."
-  if brew install mkcert nss && mkcert -install; then
-    log_success "mkcert installed successfully"
-    return 0
+  elif command -v apt >/dev/null 2>&1; then
+    log_info "Installing mkcert with apt..."
+    log_info "Please run: sudo apt install mkcert"
+    log_error "Automatic installation with apt requires sudo privileges"
+    log_info "After installation, run the command again"
+    return 1
+  elif command -v yum >/dev/null 2>&1; then
+    log_info "Installing mkcert with yum..."
+    log_info "Please run: sudo yum install mkcert"
+    log_error "Automatic installation with yum requires sudo privileges"
+    log_info "After installation, run the command again"
+    return 1
+  elif command -v dnf >/dev/null 2>&1; then
+    log_info "Installing mkcert with dnf..."
+    log_info "Please run: sudo dnf install mkcert"
+    log_error "Automatic installation with dnf requires sudo privileges"
+    log_info "After installation, run the command again"
+    return 1
   else
-    log_error "Failed to install mkcert"
+    log_error "mkcert not found and no supported package manager available"
+    log_info "Please install mkcert manually:"
+    log_info "  - Arch Linux: sudo pacman -S mkcert"
+    log_info "  - Ubuntu/Debian: sudo apt install mkcert"
+    log_info "  - CentOS/RHEL: sudo yum install mkcert"
+    log_info "  - Fedora: sudo dnf install mkcert"
+    log_info "  - macOS: brew install mkcert"
     return 1
   fi
 }
