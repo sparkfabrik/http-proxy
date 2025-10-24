@@ -400,17 +400,30 @@ install_mkcert() {
     return 0
   fi
 
-  if ! command -v brew >/dev/null 2>&1; then
-    log_error "mkcert not found and Homebrew not available for installation"
-    return 1
-  fi
-
-  log_info "Installing mkcert with Homebrew..."
-  if brew install mkcert nss && mkcert -install; then
-    log_success "mkcert installed successfully"
-    return 0
+  # Try different package managers based on availability
+  if command -v brew >/dev/null 2>&1; then
+    log_info "Installing mkcert with Homebrew..."
+    if brew install mkcert nss && mkcert -install; then
+      log_success "mkcert installed successfully"
+      return 0
+    else
+      log_error "Failed to install mkcert with Homebrew"
+      return 1
+    fi
+  elif command -v pacman >/dev/null 2>&1; then
+    log_info "Installing mkcert with pacman..."
+    if sudo pacman -S --noconfirm nss mkcert && mkcert -install; then
+      log_success "mkcert installed successfully"
+      return 0
+    else
+      log_error "Failed to install mkcert with pacman"
+      return 1
+    fi
   else
-    log_error "Failed to install mkcert"
+    log_error "mkcert not found and no supported package manager available"
+    log_info "Please install mkcert manually:"
+    log_info "  - Arch Linux: sudo pacman -S nss mkcert"
+    log_info "  - macOS: brew install mkcert nss"
     return 1
   fi
 }
