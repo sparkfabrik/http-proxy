@@ -1,4 +1,4 @@
-FROM traefik:v3.5.4
+FROM traefik:v3.6.2
 
 # Accept git version as build argument
 ARG GIT_VERSION=unknown
