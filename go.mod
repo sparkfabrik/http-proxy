@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/docker/docker v28.5.2+incompatible
-	github.com/miekg/dns v1.1.70
+	github.com/miekg/dns v1.1.72
 	gopkg.in/yaml.v3 v3.0.1
 )
 
