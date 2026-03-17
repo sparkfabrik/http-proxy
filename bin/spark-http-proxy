@@ -201,7 +201,7 @@ _${script_name//-/_}_completion() {
     prev="\${COMP_WORDS[COMP_CWORD-1]}"
 
     # Available commands
-    commands="version help self-test start status restart start-with-metrics stop-metrics clean destroy logs dashboard grafana prometheus configure-dns completion install-completion generate-mkcert up down pull build ps top exec show-config"
+    commands="version help self-test start status restart start-with-metrics stop-metrics clean destroy logs dashboard grafana prometheus configure-dns completion install-completion generate-mkcert upgrade self-update up down pull build ps top exec show-config"
 
     # Available services for logs command
     services="traefik dinghy_layer join_networks dns prometheus grafana"
@@ -323,7 +323,7 @@ open_url() {
 
 # Ensure prerequisites are met
 # Ignore if the first argument is "help" or "version" or "completion".
-if [[ "$1" != "help" && "$1" != "version" && "$1" != "completion" && "$1" != "install-completion" ]]; then
+if [[ "$1" != "help" && "$1" != "version" && "$1" != "completion" && "$1" != "install-completion" && "$1" != "self-update" ]]; then
   if ! check_prerequisites; then
     exit 1
   fi
@@ -362,6 +362,10 @@ show_usage() {
   echo "                       (macOS: /etc/resolver, Linux: systemd-resolved)"
   echo "  completion           Generate shell completion script"
   echo "  install-completion   Install completion to shell profile"
+  echo ""
+  echo "Update & Maintenance:"
+  echo "  upgrade              Pull latest images and recreate containers (preserves volumes)"
+  echo "  self-update          Update the script and compose files from the git repository"
   echo ""
   echo "Docker Compose Passthrough:"
   echo "  up, down, build...   Standard Docker Compose commands are also passed through."
@@ -575,6 +579,60 @@ recreate_stack() {
   fi
 }
 
+# Pull latest images and recreate only changed containers (preserves volumes)
+upgrade_stack() {
+  local with_metrics="$1"
+
+  log_info "Pulling latest images..."
+  if [[ "${with_metrics}" == "true" ]]; then
+    dc_metrics pull
+  else
+    dc_cmd pull
+  fi
+
+  log_info "Recreating containers with updated images..."
+  if [[ "${with_metrics}" == "true" ]]; then
+    dc_metrics up -d
+  else
+    dc_cmd up -d
+  fi
+}
+
+# Self-update the script and compose files from the git repository
+self_update() {
+  local repo_dir
+  repo_dir="$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel 2>/dev/null)" || {
+    log_error "Not a git repository. Self-update requires a git-based installation."
+    log_info "Re-run the installer: https://github.com/sparkfabrik/http-proxy#installation"
+    exit 1
+  }
+
+  # Abort if there are local modifications
+  if [[ -n "$(git -C "${repo_dir}" status --porcelain 2>/dev/null)" ]]; then
+    log_error "Local changes detected in: ${repo_dir}"
+    log_warning "Aborting to avoid overwriting local modifications."
+    log_info "Commit or stash your changes, then retry."
+    exit 1
+  fi
+
+  local current_branch current_commit
+  current_branch=$(git -C "${repo_dir}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+  current_commit=$(git -C "${repo_dir}" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
+  log_info "Checking for updates on branch '${current_branch}' (currently at ${current_commit})..."
+  git -C "${repo_dir}" pull
+
+  local new_commit
+  new_commit=$(git -C "${repo_dir}" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
+  if [[ "${current_commit}" == "${new_commit}" ]]; then
+    log_success "Already up to date (${new_commit})"
+  else
+    log_success "Updated: ${current_commit} → ${new_commit}"
+    log_info "Run '${0} upgrade' to pull new Docker images and apply the changes."
+  fi
+}
+
 show_version() {
   echo "spark-http-proxy version information:"
   echo ""
@@ -784,5 +842,20 @@ prometheus) open_prometheus ;;
 completion) generate_completion ;;
 install-completion) install_completion ;;
 generate-mkcert) generate_mkcert "${2}" ;;
+upgrade)
+  ensure_running
+  log_info "Upgrading HTTP Proxy images..."
+  if is_running prometheus; then
+    upgrade_stack "true"
+  else
+    upgrade_stack "false"
+  fi
+  echo ""
+  log_success "Upgrade complete"
+  show_version
+  ;;
+self-update)
+  self_update
+  ;;
 *) dc_cmd "$@" ;;
 esac

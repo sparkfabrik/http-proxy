@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Expose DNS server TCP port 19322 alongside UDP port for Lima virtualization compatibility ([#56](https://github.com/sparkfabrik/http-proxy/issues/56))
+- Add `upgrade` command to pull latest Docker images and recreate only changed containers, preserving volumes (grafana/prometheus data) ([#96](https://github.com/sparkfabrik/http-proxy/pull/96))
+- Add `self-update` command to update the script and compose files from the git repository, with guards against non-git installs and dirty working trees ([#96](https://github.com/sparkfabrik/http-proxy/pull/96))
 
 ### Fixed
 - Fixed restart command to automatically start containers when not running instead of failing ([#40](https://github.com/sparkfabrik/http-proxy/issues/40))
