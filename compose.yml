@@ -69,6 +69,7 @@ services:
       - "${LOCAL_HOME:-$HOME}/.local/spark/http-proxy/certs:/traefik/certs:ro"
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - HTTP_PROXY_DISABLE_HTTP2=${HTTP_PROXY_DISABLE_HTTP2:-false}
     labels:
       - "traefik.enable=false"
     restart: unless-stopped
