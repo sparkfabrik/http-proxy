@@ -156,10 +156,7 @@ func (nj *NetworkJoiner) performInitialNetworkJoin(ctx context.Context, containe
 		return fmt.Errorf("failed to get container info: %w", err)
 	}
 
-	currentNetworks := make(NetworkSet)
-	for networkID := range containerInfo.Networks {
-		currentNetworks.Add(networkID)
-	}
+	currentNetworks := containerInfo.Networks
 
 	bridgeNetworks, err := nj.getActiveBridgeNetworks(ctx, containerInfo.ID)
 	if err != nil {

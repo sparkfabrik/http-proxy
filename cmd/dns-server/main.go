@@ -217,9 +217,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Validate target IP
-	if net.ParseIP(cfg.DNSIP) == nil {
-		log.Error("Invalid target IP address", "ip", cfg.DNSIP)
+	// Validate target IP. The server answers A records only, so the target must
+	// be IPv4; an IPv6 address would be silently truncated into a 4-byte A record.
+	if ip := net.ParseIP(cfg.DNSIP); ip == nil || ip.To4() == nil {
+		log.Error("Invalid target IP address, must be IPv4", "ip", cfg.DNSIP)
 		os.Exit(1)
 	}
 

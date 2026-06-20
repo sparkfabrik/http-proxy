@@ -504,9 +504,8 @@ func getDefaultPort(inspect types.ContainerJSON) string {
 			}
 		}
 	}
-	if len(exposed) > 0 {
-		sort.Ints(exposed)
-		return strconv.Itoa(exposed[0])
+	if port := lowestTCPPort(exposed); port != "" {
+		return port
 	}
 
 	var bound []int
@@ -517,12 +516,20 @@ func getDefaultPort(inspect types.ContainerJSON) string {
 			}
 		}
 	}
-	if len(bound) > 0 {
-		sort.Ints(bound)
-		return strconv.Itoa(bound[0])
+	if port := lowestTCPPort(bound); port != "" {
+		return port
 	}
 
 	return "80"
+}
+
+// lowestTCPPort returns the smallest port in the slice as a string, or "" if empty.
+func lowestTCPPort(ports []int) string {
+	if len(ports) == 0 {
+		return ""
+	}
+	sort.Ints(ports)
+	return strconv.Itoa(ports[0])
 }
 
 // tcpPortNumber returns the numeric port for a Docker "<n>/tcp" port string,
