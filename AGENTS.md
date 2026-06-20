@@ -2,6 +2,9 @@
 
 Guidance for agentic coding agents working in this repository.
 
+> `CLAUDE.md` is a symlink to this file. Both Claude Code and other agentic
+> harnesses read the same content — edit `AGENTS.md` only.
+
 ## Repository Overview
 
 Spark HTTP Proxy is a local development reverse proxy built on Traefik. It consists of:
@@ -13,6 +16,70 @@ Spark HTTP Proxy is a local development reverse proxy built on Traefik. It consi
 - **`bin/compose.yml`** — Production compose (GHCR pre-built images)
 - **`compose.yml`** — Development compose (builds from source)
 - **`test/`** — Integration tests only (no unit tests exist)
+
+## Architecture: the big picture
+
+The novel part is not Traefik itself but the three sidecar Go binaries that feed
+and surround it. Understanding their interaction requires reading across `cmd/`,
+`pkg/`, `compose.yml`, and `build/traefik/`.
+
+### The four runtime services (see `compose.yml`)
+
+1. **`traefik`** (container name `http-proxy`) — the actual proxy. Runs with
+   `exposedByDefault: false` (`build/traefik/traefik.yml`), so it ignores every
+   container unless explicitly opted in via `traefik.*` labels or a generated
+   dynamic-config file. Ports 80/443 public, 30000→8080 dashboard.
+2. **`dinghy_layer`** (`cmd/dinghy-layer`) — the compatibility translator.
+   Watches Docker events, reads `VIRTUAL_HOST`/`VIRTUAL_PORT` env vars on
+   containers, and **writes Traefik dynamic YAML config files** into the shared
+   `traefik_dynamic` volume. This is how nginx-proxy/jwilder-style containers
+   work without native Traefik labels.
+3. **`join_networks`** (`cmd/join-networks`) — the connectivity glue. Traefik
+   can only route to containers on networks it has joined. This watches Docker
+   events and **connects the `http-proxy` container to any Docker network that
+   holds a manageable container**. Without it, routes resolve but traffic can't
+   reach the backend. See `docs/network-joining-flow.md`.
+4. **`dns`** (`cmd/dns-server`) — built on `github.com/miekg/dns`. Resolves
+   configured TLDs/domains (default `*.loc`) to `127.0.0.1` so no `/etc/hosts`
+   editing is needed. Optionally forwards non-matching queries upstream.
+   Listens on UDP+TCP 19322.
+
+### The dynamic-config data flow (the key mechanism)
+
+```
+container with VIRTUAL_HOST  ─┐
+                              ├─► dinghy_layer ──writes──► traefik_dynamic volume ──watched by──► traefik ──routes──► container
+container with traefik.* labels ─────────────────────────(read directly by Docker provider)──────►
+                              join_networks ──connects http-proxy to the container's network──►
+```
+
+Two independent paths produce Traefik routes: native `traefik.*` labels (read
+directly by Traefik's Docker provider) and `VIRTUAL_HOST` env vars (translated
+by `dinghy_layer` into files). Both require `join_networks` to have bridged the
+network first.
+
+### Shared Go packages (`pkg/`)
+
+- **`pkg/config`** — env-var loading (`config.go`, all `HTTP_PROXY_DNS_*` vars
+  with defaults) **and** the Traefik dynamic-config YAML structs (`traefik.go`:
+  `TraefikConfig`/`Router`/`Service`/`TLSConfig`). `dinghy_layer` marshals these
+  structs to produce the files Traefik watches.
+- **`pkg/service`** — `docker_event_service.go`: the shared Docker-event-watching
+  loop (`EventHandler` interface, `RunWithSignalHandling`). Both `dinghy_layer`
+  and `join_networks` are `EventHandler` implementations on top of this. Performs
+  an initial full scan, then streams events with signal-based graceful shutdown.
+- **`pkg/logger`**, **`pkg/utils`** — leveled logging (`LOG_LEVEL`) and helpers.
+
+All three binaries build from the **same `build/Dockerfile`** (multi-stage) and
+are selected at runtime by their `command:` in compose.
+
+### Configuration surface
+
+Runtime behaviour is driven by env vars (mostly `HTTP_PROXY_DNS_*` and
+`LOG_LEVEL`), defaulted in `pkg/config/config.go` and wired through
+`compose.yml`. Per-container routing is driven by `VIRTUAL_HOST`/`VIRTUAL_PORT`
+or `traefik.*` labels. When adding an env var, update `pkg/config/config.go`,
+`compose.yml`, `README.md`, and `examples/applications.yml` together.
 
 ## Build Commands
 
@@ -44,6 +111,7 @@ docker compose config           # Validate compose file syntax
 ```
 
 Tests require:
+
 - Docker daemon running
 - Ports 80, 443, 19322 available
 - `dig` and `curl` installed (for DNS and HTTP assertions)
