@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Lower generated DNS A-record TTL from 3600s to 60s so a changed `HTTP_PROXY_DNS_TARGET_IP` propagates quickly instead of being cached by the OS stub resolver ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
 - Guard against a nil-pointer panic in `join-networks` when a container reports no network settings ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
 - Make signal-driven shutdown deterministic in the event-driven services by giving a single owner control of signal handling, and abort the event-stream reconnect backoff promptly on shutdown ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
+- Reconnect to the Docker event stream when the daemon closes it (for example on daemon restart) instead of busy-looping on the closed channel ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
+- Reject a non-IPv4 `HTTP_PROXY_DNS_TARGET_IP` at startup; the DNS server answers only A records, so an IPv6 target would otherwise be silently truncated ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
 - Fixed restart command to automatically start containers when not running instead of failing ([#40](https://github.com/sparkfabrik/http-proxy/issues/40))
   - The `spark-http-proxy restart` command now intelligently detects container state
   - When containers are not running: automatically starts them using existing recreate logic

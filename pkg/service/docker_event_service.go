@@ -126,20 +126,45 @@ func (s *Service) runEventLoop(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case event := <-eventsChan:
+		case event, ok := <-eventsChan:
+			if !ok {
+				// The Docker daemon closed the stream (e.g. restart). Reconnect
+				// after a backoff instead of spinning on the closed channel.
+				if !s.backoffBeforeReconnect(ctx) {
+					return nil
+				}
+				eventsChan, errChan = s.client.Events(ctx, containerEventOptions())
+				continue
+			}
 			s.processEventSafely(ctx, event)
-		case err := <-errChan:
+		case err, ok := <-errChan:
+			if !ok {
+				if !s.backoffBeforeReconnect(ctx) {
+					return nil
+				}
+				eventsChan, errChan = s.client.Events(ctx, containerEventOptions())
+				continue
+			}
 			if err != nil {
 				s.logger.Error("Docker events error", "error", err)
-				// Back off before reconnecting, but exit promptly on shutdown
-				select {
-				case <-ctx.Done():
+				if !s.backoffBeforeReconnect(ctx) {
 					return nil
-				case <-time.After(5 * time.Second):
 				}
 				eventsChan, errChan = s.client.Events(ctx, containerEventOptions())
 			}
 		}
+	}
+}
+
+// backoffBeforeReconnect waits before reconnecting to the Docker event stream.
+// It returns false if the context is cancelled during the wait, signalling the
+// caller to stop instead of reconnecting.
+func (s *Service) backoffBeforeReconnect(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(5 * time.Second):
+		return true
 	}
 }
 
