@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `upgrade` command to pull latest Docker images and recreate only changed containers, preserving volumes (grafana/prometheus data) ([#96](https://github.com/sparkfabrik/http-proxy/pull/96))
 - Add `self-update` command to update the script and compose files from the git repository, with guards against non-git installs and dirty working trees ([#96](https://github.com/sparkfabrik/http-proxy/pull/96))
 
+### Changed
+
+- `self-test` now verifies end-to-end routing instead of only DNS liveness: it starts a throwaway container with `VIRTUAL_HOST`, asserts DNS resolves the test domain to the configured target IP, and that the proxy serves it over both HTTP and HTTPS (with retries while routes propagate), then cleans up. Exits non-zero with a per-check report on failure ([#104](https://github.com/sparkfabrik/http-proxy/issues/104))
+
 ### Fixed
 
 - Make backend IP and port selection deterministic for `VIRTUAL_HOST` containers attached to multiple networks or exposing multiple ports; previously Go map iteration could route to a different network IP or port across restarts ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
