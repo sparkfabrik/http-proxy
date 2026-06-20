@@ -510,48 +510,101 @@ dc_metrics() { docker compose -f "${COMPOSE_FILE}" --profile metrics "$@"; }
 # Check if service is running
 is_running() { dc_cmd ps | grep -q "$1"; }
 
-# Self-test function
+# Poll a URL through the proxy until it returns HTTP 200 or attempts run out.
+# Uses --resolve so both the connection target and the TLS SNI match the test
+# host, exercising the real routing path. Echoes the last status code seen.
+self_test_http_probe() {
+  local scheme="$1" host="$2" port="$3" extra="$4"
+  local code=""
+
+  for _ in $(seq 1 15); do
+    code="$(curl ${extra} -s -o /dev/null -w '%{http_code}' \
+      --resolve "${host}:${port}:127.0.0.1" --max-time 5 \
+      "${scheme}://${host}" 2>/dev/null || true)"
+    if [[ "${code}" == "200" ]]; then
+      echo "200"
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "${code}"
+  return 1
+}
+
+# Self-test: end-to-end check that the proxy actually routes a container.
 run_self_test() {
-  local test_domain="test.spark.loc"
-  local container_name="spark-proxy-self-test"
-  local dns_port="${HTTP_PROXY_DNS_PORT:-19322}"
-  local exit_code=0
+  local first_tld test_domain container_name dns_port target_ip
+  local resolved http_code https_code failures=0
 
-  log_info "Running self-test..."
+  first_tld="${HTTP_PROXY_DNS_TLDS:-loc}"
+  first_tld="$(echo "${first_tld%%,*}" | tr -d '[:space:]')"
+  test_domain="spark-http-proxy-selftest.${first_tld}"
+  container_name="spark-proxy-self-test"
+  dns_port="${HTTP_PROXY_DNS_PORT:-19322}"
+  target_ip="${HTTP_PROXY_DNS_TARGET_IP:-127.0.0.1}"
 
-  # Check if DNS service is running
+  log_info "Running self-test (domain: ${test_domain})..."
+
+  # 1. Proxy and DNS services must be up
+  if ! is_running http-proxy; then
+    log_error "HTTP Proxy is not running. Start it first with: ${0} start"
+    return 1
+  fi
   if ! is_running dns; then
     log_error "DNS service is not running. Start the proxy first with: ${0} start"
     return 1
   fi
+  log_success "Proxy and DNS services are running"
 
-  # Start test container
-  log_info "Starting test container..."
-  if ! docker run -d --name "${container_name}" nginx:latest >/dev/null 2>&1; then
+  # Always remove the test container when the function returns
+  trap 'docker rm -f "'"${container_name}"'" >/dev/null 2>&1 || true' RETURN
+
+  # 2. Start a throwaway backend opted into the proxy via VIRTUAL_HOST
+  log_info "Starting test container with VIRTUAL_HOST=${test_domain}..."
+  docker rm -f "${container_name}" >/dev/null 2>&1 || true
+  if ! docker run -d --name "${container_name}" -e "VIRTUAL_HOST=${test_domain}" nginx:latest >/dev/null 2>&1; then
     log_error "Failed to start test container"
     return 1
   fi
 
-  # Test DNS resolution
-  log_info "Testing DNS resolution for ${test_domain}..."
-  if dig @127.0.0.1 -p"${dns_port}" "${test_domain}" +short >/dev/null 2>&1; then
-    log_success "DNS resolution test passed"
+  # 3. DNS must resolve the test domain to the configured target IP
+  log_info "Testing DNS resolution..."
+  resolved="$(dig @127.0.0.1 -p "${dns_port}" "${test_domain}" +short 2>/dev/null | head -n1)"
+  if [[ "${resolved}" == "${target_ip}" ]]; then
+    log_success "DNS resolves ${test_domain} → ${resolved}"
   else
-    log_error "DNS resolution test failed"
-    exit_code=1
+    log_error "DNS resolution failed (got '${resolved:-<empty>}', expected ${target_ip})"
+    failures=$((failures + 1))
   fi
 
-  # Cleanup
-  log_info "Cleaning up test container..."
-  docker rm -f "${container_name}" >/dev/null 2>&1 || true
+  # 4. The proxy must route the test domain over HTTP
+  log_info "Testing HTTP routing (this can take a few seconds to propagate)..."
+  http_code="$(self_test_http_probe http "${test_domain}" 80 "")"
+  if [[ "${http_code}" == "200" ]]; then
+    log_success "HTTP route works (200)"
+  else
+    log_error "HTTP route failed (last status: ${http_code:-none})"
+    failures=$((failures + 1))
+  fi
 
-  if [[ ${exit_code} -eq 0 ]]; then
+  # 5. The proxy must route the test domain over HTTPS (self-signed is fine)
+  log_info "Testing HTTPS routing..."
+  https_code="$(self_test_http_probe https "${test_domain}" 443 "-k")"
+  if [[ "${https_code}" == "200" ]]; then
+    log_success "HTTPS route works (200)"
+  else
+    log_error "HTTPS route failed (last status: ${https_code:-none})"
+    failures=$((failures + 1))
+  fi
+
+  if [[ ${failures} -eq 0 ]]; then
     log_success "Self-test completed successfully"
-  else
-    log_error "Self-test failed"
+    return 0
   fi
 
-  return ${exit_code}
+  log_error "Self-test failed (${failures} check(s) failed)"
+  return 1
 }
 
 # Ensure proxy is running before proceeding
