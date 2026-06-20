@@ -35,12 +35,19 @@ type EventHandler interface {
 	SetDependencies(client *client.Client, logger *logger.Logger)
 }
 
+// eventSubscriber subscribes to the Docker event stream. It matches the
+// signature of (*client.Client).Events and exists as a seam so the reconnect
+// behavior of the event loop can be tested without a Docker daemon.
+type eventSubscriber func(ctx context.Context, options events.ListOptions) (<-chan events.Message, <-chan error)
+
 // Service represents a Docker-event-driven service
 type Service struct {
-	client      *client.Client
-	logger      *logger.Logger
-	handler     EventHandler
-	serviceName string
+	client         *client.Client
+	logger         *logger.Logger
+	handler        EventHandler
+	serviceName    string
+	subscribe      eventSubscriber
+	reconnectDelay time.Duration
 }
 
 // NewService creates a new Docker event-driven service
@@ -69,10 +76,12 @@ func NewService(ctx context.Context, serviceName string, logLevel string, handle
 	handler.SetDependencies(dockerClient, log)
 
 	return &Service{
-		client:      dockerClient,
-		logger:      log,
-		handler:     handler,
-		serviceName: serviceName,
+		client:         dockerClient,
+		logger:         log,
+		handler:        handler,
+		serviceName:    serviceName,
+		subscribe:      dockerClient.Events,
+		reconnectDelay: 5 * time.Second,
 	}, nil
 }
 
@@ -120,7 +129,7 @@ func (s *Service) runEventLoop(ctx context.Context) error {
 	}
 
 	// Listen for Docker events
-	eventsChan, errChan := s.client.Events(ctx, containerEventOptions())
+	eventsChan, errChan := s.subscribe(ctx, containerEventOptions())
 
 	for {
 		select {
@@ -133,7 +142,7 @@ func (s *Service) runEventLoop(ctx context.Context) error {
 				if !s.backoffBeforeReconnect(ctx) {
 					return nil
 				}
-				eventsChan, errChan = s.client.Events(ctx, containerEventOptions())
+				eventsChan, errChan = s.subscribe(ctx, containerEventOptions())
 				continue
 			}
 			s.processEventSafely(ctx, event)
@@ -142,7 +151,7 @@ func (s *Service) runEventLoop(ctx context.Context) error {
 				if !s.backoffBeforeReconnect(ctx) {
 					return nil
 				}
-				eventsChan, errChan = s.client.Events(ctx, containerEventOptions())
+				eventsChan, errChan = s.subscribe(ctx, containerEventOptions())
 				continue
 			}
 			if err != nil {
@@ -150,7 +159,7 @@ func (s *Service) runEventLoop(ctx context.Context) error {
 				if !s.backoffBeforeReconnect(ctx) {
 					return nil
 				}
-				eventsChan, errChan = s.client.Events(ctx, containerEventOptions())
+				eventsChan, errChan = s.subscribe(ctx, containerEventOptions())
 			}
 		}
 	}
@@ -163,7 +172,7 @@ func (s *Service) backoffBeforeReconnect(ctx context.Context) bool {
 	select {
 	case <-ctx.Done():
 		return false
-	case <-time.After(5 * time.Second):
+	case <-time.After(s.reconnectDelay):
 		return true
 	}
 }
