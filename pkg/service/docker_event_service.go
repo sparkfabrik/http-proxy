@@ -35,12 +35,19 @@ type EventHandler interface {
 	SetDependencies(client *client.Client, logger *logger.Logger)
 }
 
+// eventSubscriber subscribes to the Docker event stream. It matches the
+// signature of (*client.Client).Events and exists as a seam so the reconnect
+// behavior of the event loop can be tested without a Docker daemon.
+type eventSubscriber func(ctx context.Context, options events.ListOptions) (<-chan events.Message, <-chan error)
+
 // Service represents a Docker-event-driven service
 type Service struct {
-	client      *client.Client
-	logger      *logger.Logger
-	handler     EventHandler
-	serviceName string
+	client         *client.Client
+	logger         *logger.Logger
+	handler        EventHandler
+	serviceName    string
+	subscribe      eventSubscriber
+	reconnectDelay time.Duration
 }
 
 // NewService creates a new Docker event-driven service
@@ -69,10 +76,12 @@ func NewService(ctx context.Context, serviceName string, logLevel string, handle
 	handler.SetDependencies(dockerClient, log)
 
 	return &Service{
-		client:      dockerClient,
-		logger:      log,
-		handler:     handler,
-		serviceName: serviceName,
+		client:         dockerClient,
+		logger:         log,
+		handler:        handler,
+		serviceName:    serviceName,
+		subscribe:      dockerClient.Events,
+		reconnectDelay: 5 * time.Second,
 	}, nil
 }
 
@@ -91,35 +100,22 @@ func (s *Service) Close() error {
 	return s.client.Close()
 }
 
-// Run starts the service with signal handling and event processing
+// Run executes the event loop until the context is cancelled or the loop fails.
+// Signal handling and lifecycle are owned by RunWithSignalHandling.
 func (s *Service) Run(ctx context.Context) error {
 	s.logger.Info("Starting service", "name", s.serviceName)
+	return s.runEventLoop(ctx)
+}
 
-	// Setup signal handling
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
-
-	// Start the event loop
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- s.runEventLoop(ctx)
-	}()
-
-	// Wait for shutdown signal or error
-	select {
-	case <-sigChan:
-		s.logger.Info("Received shutdown signal")
-		if err := s.Close(); err != nil {
-			s.logger.Error("Error while closing service", "error", err)
-		}
-		return context.Canceled
-	case err := <-errChan:
-		if err != nil {
-			s.logger.Error("Service error", "error", err)
-			return err
-		}
-		s.logger.Info("Service completed successfully")
-		return nil
+// containerEventOptions returns the Docker event-stream filters for the
+// container start/die events the services react to.
+func containerEventOptions() events.ListOptions {
+	return events.ListOptions{
+		Filters: filters.NewArgs(
+			filters.Arg("type", "container"),
+			filters.Arg("event", "start"),
+			filters.Arg("event", "die"),
+		),
 	}
 }
 
@@ -133,34 +129,51 @@ func (s *Service) runEventLoop(ctx context.Context) error {
 	}
 
 	// Listen for Docker events
-	eventsChan, errChan := s.client.Events(ctx, events.ListOptions{
-		Filters: filters.NewArgs(
-			filters.Arg("type", "container"),
-			filters.Arg("event", "start"),
-			filters.Arg("event", "die"),
-		),
-	})
+	eventsChan, errChan := s.subscribe(ctx, containerEventOptions())
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case event := <-eventsChan:
+		case event, ok := <-eventsChan:
+			if !ok {
+				// The Docker daemon closed the stream (e.g. restart). Reconnect
+				// after a backoff instead of spinning on the closed channel.
+				if !s.backoffBeforeReconnect(ctx) {
+					return nil
+				}
+				eventsChan, errChan = s.subscribe(ctx, containerEventOptions())
+				continue
+			}
 			s.processEventSafely(ctx, event)
-		case err := <-errChan:
+		case err, ok := <-errChan:
+			if !ok {
+				if !s.backoffBeforeReconnect(ctx) {
+					return nil
+				}
+				eventsChan, errChan = s.subscribe(ctx, containerEventOptions())
+				continue
+			}
 			if err != nil {
 				s.logger.Error("Docker events error", "error", err)
-				// Reconnect and continue
-				time.Sleep(5 * time.Second)
-				eventsChan, errChan = s.client.Events(ctx, events.ListOptions{
-					Filters: filters.NewArgs(
-						filters.Arg("type", "container"),
-						filters.Arg("event", "start"),
-						filters.Arg("event", "die"),
-					),
-				})
+				if !s.backoffBeforeReconnect(ctx) {
+					return nil
+				}
+				eventsChan, errChan = s.subscribe(ctx, containerEventOptions())
 			}
 		}
+	}
+}
+
+// backoffBeforeReconnect waits before reconnecting to the Docker event stream.
+// It returns false if the context is cancelled during the wait, signalling the
+// caller to stop instead of reconnecting.
+func (s *Service) backoffBeforeReconnect(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(s.reconnectDelay):
+		return true
 	}
 }
 
@@ -207,7 +220,7 @@ func RunWithSignalHandling(ctx context.Context, serviceName string, logLevel str
 	// Wait for shutdown signal or error
 	select {
 	case err := <-errChan:
-		if err != nil && err != context.Canceled {
+		if err != nil {
 			service.GetLogger().Error("Service failed", "error", err)
 			os.Exit(1)
 		}
@@ -219,7 +232,7 @@ func RunWithSignalHandling(ctx context.Context, serviceName string, logLevel str
 		// Wait for graceful shutdown with timeout
 		select {
 		case err := <-errChan:
-			if err != nil && err != context.Canceled {
+			if err != nil {
 				service.GetLogger().Error("Error during shutdown", "error", err)
 			}
 		case <-time.After(10 * time.Second):

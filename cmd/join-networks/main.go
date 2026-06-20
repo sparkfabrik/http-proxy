@@ -93,7 +93,7 @@ func (nj *NetworkJoiner) HandleEvent(ctx context.Context, event events.Message) 
 // Focuses on network connections to minimize API calls and provide network context.
 type ContainerInfo struct {
 	ID       string
-	Networks map[string]NetworkInfo
+	Networks NetworkSet
 }
 
 // NetworkOperation encapsulates a simple network management operation including
@@ -116,14 +116,6 @@ func (ns NetworkSet) Contains(networkID string) bool {
 // Add adds a network ID to the set
 func (ns NetworkSet) Add(networkID string) {
 	ns[networkID] = true
-}
-
-// NetworkInfo contains details about a network connection
-type NetworkInfo struct {
-	ID      string
-	Name    string
-	Gateway string
-	IP      string
 }
 
 // main parses command line arguments and runs the network join service
@@ -164,10 +156,7 @@ func (nj *NetworkJoiner) performInitialNetworkJoin(ctx context.Context, containe
 		return fmt.Errorf("failed to get container info: %w", err)
 	}
 
-	currentNetworks := make(NetworkSet)
-	for networkID := range containerInfo.Networks {
-		currentNetworks.Add(networkID)
-	}
+	currentNetworks := containerInfo.Networks
 
 	bridgeNetworks, err := nj.getActiveBridgeNetworks(ctx, containerInfo.ID)
 	if err != nil {
@@ -266,14 +255,11 @@ func (nj *NetworkJoiner) getContainerInfo(ctx context.Context, containerName str
 		return nil, fmt.Errorf("failed to inspect container %s: %w", containerName, err)
 	}
 
-	networks := make(map[string]NetworkInfo)
+	networks := make(NetworkSet)
 
-	for networkName, networkData := range containerJSON.NetworkSettings.Networks {
-		networks[networkData.NetworkID] = NetworkInfo{
-			ID:      networkData.NetworkID,
-			Name:    networkName,
-			Gateway: networkData.Gateway,
-			IP:      networkData.IPAddress,
+	if containerJSON.NetworkSettings != nil {
+		for _, networkData := range containerJSON.NetworkSettings.Networks {
+			networks.Add(networkData.NetworkID)
 		}
 	}
 

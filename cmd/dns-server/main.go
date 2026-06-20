@@ -17,6 +17,12 @@ import (
 // DNS_UPSTREAM_TIMEOUT defines the timeout for DNS queries to upstream servers
 const DNS_UPSTREAM_TIMEOUT = 5 * time.Second
 
+// defaultRecordTTL is the TTL (seconds) applied to generated A records. It is
+// intentionally short: this is a local development resolver, so a low TTL lets
+// a changed HTTP_PROXY_DNS_TARGET_IP propagate quickly instead of being cached
+// by the OS stub resolver for an hour.
+const defaultRecordTTL = 60
+
 type DNSServer struct {
 	customDomains   []string
 	targetIP        string
@@ -58,6 +64,13 @@ func (s *DNSServer) forwardDNSQuery(r *dns.Msg) (*dns.Msg, error) {
 	}
 
 	return nil, fmt.Errorf("all upstream servers failed")
+}
+
+// writeMsg writes a DNS response, logging any write failure.
+func (s *DNSServer) writeMsg(w dns.ResponseWriter, msg *dns.Msg) {
+	if err := w.WriteMsg(msg); err != nil {
+		s.logger.Error("Failed to write DNS response", "error", err)
+	}
 }
 
 // createRefusedResponse creates a REFUSED response for the given request
@@ -107,22 +120,30 @@ func (s *DNSServer) handleNonMatchingDomain(w dns.ResponseWriter, r *dns.Msg) {
 		if err != nil {
 			s.logger.Debug("Failed to forward query", "error", err)
 			// If forwarding fails, return REFUSED
-			refusedResp := s.createRefusedResponse(r)
-			w.WriteMsg(refusedResp)
+			s.writeMsg(w, s.createRefusedResponse(r))
 		} else {
-			w.WriteMsg(response)
+			s.writeMsg(w, response)
 		}
 	} else {
 		// Forwarding disabled - send REFUSED response
 		s.logger.Debug("Sending REFUSED response (not matching configured domains)")
-		refusedResp := s.createRefusedResponse(r)
-		w.WriteMsg(refusedResp)
+		s.writeMsg(w, s.createRefusedResponse(r))
 	}
 }
 
-// createARecord creates an A record for the given question
-func (s *DNSServer) createARecord(question dns.Question) (dns.RR, error) {
-	return dns.NewRR(fmt.Sprintf("%s A %s", question.Name, s.targetIP))
+// createARecord creates an A record for the given question. The target IP is
+// validated at startup, so it is constructed directly rather than parsed from a
+// zone-file string on every query.
+func (s *DNSServer) createARecord(question dns.Question) dns.RR {
+	return &dns.A{
+		Hdr: dns.RR_Header{
+			Name:   question.Name,
+			Rrtype: dns.TypeA,
+			Class:  dns.ClassINET,
+			Ttl:    defaultRecordTTL,
+		},
+		A: net.ParseIP(s.targetIP),
+	}
 }
 
 // handleQuestion processes a single DNS question and adds answers to the response
@@ -132,13 +153,8 @@ func (s *DNSServer) handleQuestion(question dns.Question, msg *dns.Msg) {
 	switch question.Qtype {
 	case dns.TypeA:
 		// Respond with our target IP for A records
-		rr, err := s.createARecord(question)
-		if err == nil {
-			msg.Answer = append(msg.Answer, rr)
-			s.logger.Info("Resolved A record", "name", name, "ip", s.targetIP)
-		} else {
-			s.logger.Error("Failed to create A record", "name", name, "error", err)
-		}
+		msg.Answer = append(msg.Answer, s.createARecord(question))
+		s.logger.Info("Resolved A record", "name", name, "ip", s.targetIP)
 	case dns.TypeAAAA:
 		// For IPv6 queries, return empty response (no IPv6 support)
 		s.logger.Debug("IPv6 query - returning empty response", "name", name)
@@ -179,8 +195,7 @@ func (s *DNSServer) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	// All queries are for our domains - create and send response
-	response := s.createDNSResponse(r)
-	w.WriteMsg(response)
+	s.writeMsg(w, s.createDNSResponse(r))
 }
 
 func main() {
@@ -202,9 +217,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Validate target IP
-	if net.ParseIP(cfg.DNSIP) == nil {
-		log.Error("Invalid target IP address", "ip", cfg.DNSIP)
+	// Validate target IP. The server answers A records only, so the target must
+	// be IPv4; an IPv6 address would be silently truncated into a 4-byte A record.
+	if ip := net.ParseIP(cfg.DNSIP); ip == nil || ip.To4() == nil {
+		log.Error("Invalid target IP address, must be IPv4", "ip", cfg.DNSIP)
 		os.Exit(1)
 	}
 

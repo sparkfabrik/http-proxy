@@ -176,6 +176,16 @@ func CheckContext(ctx context.Context) error {
 	}
 }
 
+// HasTraefikLabel reports whether any label key starts with "traefik."
+func HasTraefikLabel(labels map[string]string) bool {
+	for label := range labels {
+		if strings.HasPrefix(label, "traefik.") {
+			return true
+		}
+	}
+	return false
+}
+
 // ShouldManageContainer checks if a container should be managed based on dinghy env vars or traefik labels
 // Returns true if the container has VIRTUAL_HOST environment variable or traefik labels
 func ShouldManageContainer(env []string, labels map[string]string) bool {
@@ -184,14 +194,7 @@ func ShouldManageContainer(env []string, labels map[string]string) bool {
 		return true
 	}
 
-	// Check for traefik labels (any label starting with "traefik.")
-	for label := range labels {
-		if strings.HasPrefix(label, "traefik.") {
-			return true
-		}
-	}
-
-	return false
+	return HasTraefikLabel(labels)
 }
 
 // HasManageableContainersInNetwork checks if a network has any manageable containers,
@@ -230,14 +233,4 @@ func HasManageableContainersInNetwork(ctx context.Context, dockerClient *client.
 	}
 
 	return false, nil
-}
-
-// SliceToSet converts a slice of strings to a map[string]struct{} for O(1) lookups
-// This is useful for creating sets from slices where you only need to check existence
-func SliceToSet(slice []string) map[string]struct{} {
-	set := make(map[string]struct{})
-	for _, item := range slice {
-		set[item] = struct{}{}
-	}
-	return set
 }

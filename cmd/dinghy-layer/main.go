@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -80,17 +81,6 @@ func (cl *CompatibilityLayer) GetName() string {
 func (cl *CompatibilityLayer) SetDependencies(dockerClient *client.Client, logger *logger.Logger) {
 	cl.dockerClient = dockerClient
 	cl.logger = logger
-}
-
-// TraefikLabels represents the Traefik labels that would be applied to containers
-// for manual configuration. This struct is used for reference but the actual
-// implementation generates dynamic configuration files instead of container labels.
-type TraefikLabels struct {
-	Enable      string
-	Rule        string
-	Port        string
-	RouterName  string
-	ServiceName string
 }
 
 // ContainerInfo holds essential container information extracted from Docker
@@ -207,17 +197,13 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 		return nil
 	}
 
-	// Skip if traefik labels are already set.
-	// Check for traefik labels (any label starting with "traefik.")
-	labels := inspect.Config.Labels
-	for label := range labels {
-		if strings.HasPrefix(label, "traefik.") {
-			cl.logger.Debug("Skipping container with existing Traefik label",
-				"container_id", utils.FormatDockerID(containerID),
-				"container_name", containerInfo.Name,
-				"label", label)
-			return nil
-		}
+	// Skip if traefik labels are already set; native labels take precedence and
+	// Traefik's Docker provider handles those containers directly.
+	if utils.HasTraefikLabel(inspect.Config.Labels) {
+		cl.logger.Debug("Skipping container with existing Traefik label",
+			"container_id", utils.FormatDockerID(containerID),
+			"container_name", containerInfo.Name)
+		return nil
 	}
 
 	cl.logger.Info("Found container with VIRTUAL_HOST",
@@ -311,12 +297,22 @@ func (cl *CompatibilityLayer) generateTraefikConfig(inspect types.ContainerJSON,
 }
 
 func getContainerIP(inspect types.ContainerJSON) string {
-	// Try to get IP from the first network
-	if inspect.NetworkSettings != nil && inspect.NetworkSettings.Networks != nil {
-		for _, network := range inspect.NetworkSettings.Networks {
-			if network.IPAddress != "" {
-				return network.IPAddress
-			}
+	if inspect.NetworkSettings == nil || inspect.NetworkSettings.Networks == nil {
+		return ""
+	}
+
+	// Sort network names so the chosen IP is deterministic across restarts and
+	// events. Go map iteration order is randomized, which would otherwise make
+	// the routed backend IP vary for containers attached to multiple networks.
+	names := make([]string, 0, len(inspect.NetworkSettings.Networks))
+	for name := range inspect.NetworkSettings.Networks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		if ip := inspect.NetworkSettings.Networks[name].IPAddress; ip != "" {
+			return ip
 		}
 	}
 	return ""
@@ -496,25 +492,57 @@ func generateServiceName(containerName string) string {
 }
 
 func getDefaultPort(inspect types.ContainerJSON) string {
-	// Get the first exposed port or return "80" as default
+	// Prefer the lowest exposed TCP port, then fall back to the lowest bound TCP
+	// port. Sorting makes the selection deterministic; Go map iteration order is
+	// randomized, which would otherwise pick a different port across restarts for
+	// containers that expose more than one port.
+	var exposed []int
 	if inspect.Config.ExposedPorts != nil {
 		for port := range inspect.Config.ExposedPorts {
-			if strings.HasSuffix(string(port), "/tcp") {
-				return strings.TrimSuffix(string(port), "/tcp")
+			if n := tcpPortNumber(string(port)); n > 0 {
+				exposed = append(exposed, n)
 			}
 		}
 	}
+	if port := lowestTCPPort(exposed); port != "" {
+		return port
+	}
 
-	// Check port bindings
+	var bound []int
 	if inspect.NetworkSettings != nil && inspect.NetworkSettings.Ports != nil {
 		for port := range inspect.NetworkSettings.Ports {
-			if strings.HasSuffix(string(port), "/tcp") {
-				return strings.TrimSuffix(string(port), "/tcp")
+			if n := tcpPortNumber(string(port)); n > 0 {
+				bound = append(bound, n)
 			}
 		}
+	}
+	if port := lowestTCPPort(bound); port != "" {
+		return port
 	}
 
 	return "80"
+}
+
+// lowestTCPPort returns the smallest port in the slice as a string, or "" if empty.
+func lowestTCPPort(ports []int) string {
+	if len(ports) == 0 {
+		return ""
+	}
+	sort.Ints(ports)
+	return strconv.Itoa(ports[0])
+}
+
+// tcpPortNumber returns the numeric port for a Docker "<n>/tcp" port string,
+// or 0 if the string is not a TCP port or cannot be parsed.
+func tcpPortNumber(port string) int {
+	if !strings.HasSuffix(port, "/tcp") {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSuffix(port, "/tcp"))
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // configFileName returns the config file name for a container
