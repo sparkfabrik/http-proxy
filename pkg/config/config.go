@@ -2,7 +2,6 @@ package config
 
 import (
 	"os"
-	"strconv"
 	"strings"
 )
 
@@ -30,16 +29,6 @@ func Load() *Config {
 func GetEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
-	}
-	return defaultValue
-}
-
-// GetEnvOrDefaultInt returns an environment variable as an integer or a default
-func GetEnvOrDefaultInt(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if intValue, err := strconv.Atoi(value); err == nil {
-			return intValue
-		}
 	}
 	return defaultValue
 }
