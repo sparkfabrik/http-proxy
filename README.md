@@ -8,6 +8,11 @@
 
 Simply add `VIRTUAL_HOST=myapp.local` to any container or use native Traefik labels, and your applications become accessible with both HTTP and HTTPS automatically. No port management, no `/etc/hosts` editing, no hunting for the right port number. **Only explicitly configured containers are exposed**, keeping your development environment secure by default.
 
+> **Using an AI coding agent?** There is a `spark-http-proxy` agent skill that
+> teaches agents to expose containers, generate certificates, configure DNS, and
+> troubleshoot routing with this proxy:
+> [sparkfabrik/sf-agents-harness → skills/system/spark-http-proxy](https://github.com/sparkfabrik/sf-agents-harness/tree/main/skills/system/spark-http-proxy).
+
 ## Table of Contents
 
 - [Features](#features)
@@ -415,7 +420,7 @@ Traefik automatically generates self-signed certificates for HTTPS routes. For t
 **HTTP Strict Transport Security (HSTS) headers are automatically disabled** for all HTTPS traffic at the entrypoint level to prevent browser caching issues during development. This ensures that:
 
 - Browsers won't remember HTTPS requirements if certificates are changed or revoked
-- Switching between different development setups remains seamless  
+- Switching between different development setups remains seamless
 - Certificate issues don't persist in browser cache and block access
 
 This is implemented using Traefik's `disable-hsts` middleware applied to the HTTPS entrypoint, ensuring **all HTTPS traffic** (both dinghy-layer and native Traefik routes) benefits from this development-friendly configuration. This is essential for development environments where certificates may frequently change, expire, or be regenerated.
@@ -436,6 +441,7 @@ spark-http-proxy generate-mkcert "*.project.loc"
 ```
 
 The `generate-mkcert` command automatically:
+
 - **Installs mkcert** if not already available (using Homebrew on macOS)
 - **Creates the certificate directory** (`~/.local/spark/http-proxy/certs`)
 - **Generates certificates** with safe filenames for wildcard domains

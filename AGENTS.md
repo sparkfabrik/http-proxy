@@ -5,6 +5,12 @@ Guidance for agentic coding agents working in this repository.
 > `CLAUDE.md` is a symlink to this file. Both Claude Code and other agentic
 > harnesses read the same content — edit `AGENTS.md` only.
 
+> **Using this proxy in another project?** A dedicated `spark-http-proxy` agent
+> skill covers exposing containers, certificates, DNS, and troubleshooting:
+> [sparkfabrik/sf-agents-harness → skills/system/spark-http-proxy](https://github.com/sparkfabrik/sf-agents-harness/tree/main/skills/system/spark-http-proxy).
+> This `AGENTS.md` is for working **on** the proxy's own source; the skill is for
+> **using** the proxy from a consumer project.
+
 ## Repository Overview
 
 Spark HTTP Proxy is a local development reverse proxy built on Traefik. It consists of:
