@@ -35,6 +35,8 @@ Simply add `VIRTUAL_HOST=myapp.local` to any container or use native Traefik lab
 - [HTTPS Support](#https-support)
   - [Automatic HTTP and HTTPS Routes](#automatic-http-and-https-routes)
   - [Self-Signed Certificates](#self-signed-certificates)
+  - [HSTS Headers Disabled for Development](#hsts-headers-disabled-for-development)
+  - [Disabling HTTP/2 (workaround for stuck HTTPS sessions on macOS)](#disabling-http2-workaround-for-stuck-https-sessions-on-macos)
   - [Trusted Local Certificates with mkcert](#trusted-local-certificates-with-mkcert)
     - [Manual Certificate Generation (Alternative)](#manual-certificate-generation-alternative)
     - [Start the proxy](#start-the-proxy)
@@ -419,6 +421,27 @@ Traefik automatically generates self-signed certificates for HTTPS routes. For t
 - Certificate issues don't persist in browser cache and block access
 
 This is implemented using Traefik's `disable-hsts` middleware applied to the HTTPS entrypoint, ensuring **all HTTPS traffic** (both dinghy-layer and native Traefik routes) benefits from this development-friendly configuration. This is essential for development environments where certificates may frequently change, expire, or be regenerated.
+
+### Disabling HTTP/2 (workaround for stuck HTTPS sessions on macOS)
+
+On macOS with Docker Desktop, long-lived HTTP/2 sessions between browsers and the proxy can become "zombies": the host-side TCP socket through vpnkit stays alive while the container-side socket has already closed, and no FIN/RST propagates across the loopback shim. The browser keeps multiplexing new requests into a dead session, and **all** `.loc` hosts time out (`ERR_TIMED_OUT` in Chrome, equivalent in Firefox) until the browser is fully restarted. Command-line clients (curl, wget) are unaffected because they open fresh connections per request.
+
+Setting `HTTP_PROXY_DISABLE_HTTP2=true` on the `traefik` service restricts TLS ALPN negotiation to `http/1.1`. Browsers fall back to HTTP/1.1 over TLS, which detects dead connections aggressively at the socket layer and avoids the zombie-session class of bugs. HTTPS keeps working normally; only the wire protocol version changes.
+
+```yaml
+services:
+  traefik:
+    environment:
+      - HTTP_PROXY_DISABLE_HTTP2=true
+```
+
+Or via a top-level `.env`:
+
+```
+HTTP_PROXY_DISABLE_HTTP2=true
+```
+
+The default is `false`, so existing installations are unaffected. To verify the option is active, load any HTTPS site through the proxy and check the protocol column in your browser's network panel — it should report `HTTP/1.1` instead of `h2`.
 
 ### Trusted Local Certificates with mkcert
 
