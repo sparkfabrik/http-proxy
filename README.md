@@ -41,6 +41,7 @@ Simply add `VIRTUAL_HOST=myapp.local` to any container or use native Traefik lab
   - [Automatic HTTP and HTTPS Routes](#automatic-http-and-https-routes)
   - [Self-Signed Certificates](#self-signed-certificates)
   - [Trusted Local Certificates with mkcert](#trusted-local-certificates-with-mkcert)
+    - [Listing and Removing Certificates](#listing-and-removing-certificates)
     - [Manual Certificate Generation (Alternative)](#manual-certificate-generation-alternative)
     - [Start the proxy](#start-the-proxy)
     - [How Certificate Matching Works](#how-certificate-matching-works)
@@ -446,6 +447,23 @@ The `generate-mkcert` command automatically:
 - **Creates the certificate directory** (`~/.local/spark/http-proxy/certs`)
 - **Generates certificates** with safe filenames for wildcard domains
 - **Restarts Traefik** to load the new certificates immediately
+
+#### Listing and Removing Certificates
+
+List the certificates currently installed in the certificate directory:
+
+```bash
+spark-http-proxy list-certs
+```
+
+Remove a certificate pair for a domain. This deletes both the `.pem` and `-key.pem` files and restarts Traefik so it stops serving the removed certificate:
+
+```bash
+spark-http-proxy remove-cert "nginx.spark.loc"
+spark-http-proxy remove-cert "*.spark.loc"
+```
+
+Pass the same domain you used with `generate-mkcert`, including wildcards. The command asks for confirmation before deleting.
 
 #### Manual Certificate Generation (Alternative)
 
