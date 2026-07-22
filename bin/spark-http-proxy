@@ -201,7 +201,7 @@ _${script_name//-/_}_completion() {
     prev="\${COMP_WORDS[COMP_CWORD-1]}"
 
     # Available commands
-    commands="version help self-test start status restart start-with-metrics stop-metrics clean destroy logs dashboard grafana prometheus configure-dns completion install-completion generate-mkcert upgrade self-update up down pull build ps top exec show-config"
+    commands="version help self-test start status restart start-with-metrics stop-metrics clean destroy logs dashboard grafana prometheus configure-dns completion install-completion generate-mkcert list-certs remove-cert upgrade self-update up down pull build ps top exec show-config"
 
     # Available services for logs command
     services="traefik dinghy_layer join_networks dns prometheus grafana"
@@ -211,7 +211,7 @@ _${script_name//-/_}_completion() {
             COMPREPLY=( \$(compgen -W "\${services}" -- \${cur}) )
             return 0
             ;;
-        generate-mkcert)
+        generate-mkcert|remove-cert)
             # No completion for domain names
             return 0
             ;;
@@ -323,7 +323,7 @@ open_url() {
 
 # Ensure prerequisites are met
 # Ignore if the first argument is "help" or "version" or "completion".
-if [[ "$1" != "help" && "$1" != "version" && "$1" != "completion" && "$1" != "install-completion" && "$1" != "self-update" ]]; then
+if [[ "$1" != "help" && "$1" != "version" && "$1" != "completion" && "$1" != "install-completion" && "$1" != "self-update" && "$1" != "list-certs" ]]; then
   if ! check_prerequisites; then
     exit 1
   fi
@@ -358,6 +358,8 @@ show_usage() {
   echo "Configuration & Setup:"
   echo "  show-config          Show current configuration and file locations"
   echo "  generate-mkcert      Generate SSL certificates for a domain (supports wildcards)"
+  echo "  list-certs           List installed certificates"
+  echo "  remove-cert          Remove installed certificates for one or more domains"
   echo "  configure-dns        Configure system DNS to automatically resolve proxy domains"
   echo "                       (macOS: /etc/resolver, Linux: systemd-resolved)"
   echo "  completion           Generate shell completion script"
@@ -449,11 +451,8 @@ generate_mkcert() {
   fi
 
   # Create a safe filename for wildcard domains
-  local safe_filename="${domain}"
-  # Replace * with _wildcard_ for filename safety
-  safe_filename="${safe_filename//\*/_wildcard_}"
-  # Replace other problematic characters
-  safe_filename="${safe_filename//\//_}"
+  local safe_filename
+  safe_filename="$(cert_safe_filename "${domain}")"
 
   log_info "Generating certificates for: ${domain}"
   log_info "Certificate files will be named: ${safe_filename}.pem and ${safe_filename}-key.pem"
@@ -469,6 +468,116 @@ generate_mkcert() {
   # Restart traefik to apply new certificates.
   log_info "Restarting Traefik to apply new certificates..."
   docker compose -f "${COMPOSE_FILE}" restart traefik
+}
+
+# Derive the safe filename used to store a domain's certificate files
+cert_safe_filename() {
+  local domain="$1"
+  local safe_filename="${domain}"
+  # Replace * with _wildcard_ for filename safety
+  safe_filename="${safe_filename//\*/_wildcard_}"
+  # Replace other problematic characters
+  safe_filename="${safe_filename//\//_}"
+  echo "${safe_filename}"
+}
+
+# List installed certificates in the cert directory
+list_certs() {
+  log_info "Certificate directory: ${CERT_DIR}"
+
+  local found=0
+  local cert_file
+  for cert_file in "${CERT_DIR}"/*.pem; do
+    # Guard against the literal glob when no files match
+    [[ -e "${cert_file}" ]] || break
+    # Skip key files; they are listed alongside their certificate
+    [[ "${cert_file}" == *-key.pem ]] && continue
+
+    local safe_filename
+    safe_filename="$(basename "${cert_file}" .pem)"
+    # Reverse the safe-filename mapping for display
+    local domain="${safe_filename//_wildcard_/\*}"
+
+    echo ""
+    log_success "${domain}"
+    log_info "  Certificate: ${cert_file}"
+    local key_file="${CERT_DIR}/${safe_filename}-key.pem"
+    if [[ -f "${key_file}" ]]; then
+      log_info "  Private key: ${key_file}"
+    else
+      log_warning "  Private key missing: ${key_file}"
+    fi
+    found=$((found + 1))
+  done
+
+  if [[ "${found}" -eq 0 ]]; then
+    echo ""
+    log_warning "No certificates found. Generate one with: $(basename "${0}") generate-mkcert <domain>"
+    return 0
+  fi
+
+  echo ""
+  log_info "${found} certificate(s) installed"
+  log_info "Remove one with: $(basename "${0}") remove-cert <domain>"
+}
+
+# Remove installed certificate pairs for one or more domains
+remove_cert() {
+  if [ "$#" -eq 0 ]; then
+    local -a prompted=()
+    read -rp "Enter domain name(s) to remove: " -a prompted
+    set -- "${prompted[@]}"
+  fi
+
+  if [ "$#" -eq 0 ]; then
+    log_error "Domain name required"
+    exit 1
+  fi
+
+  local -a files=()
+  local -a matched=()
+  local -a missing=()
+  local domain safe_filename cert_file key_file
+  for domain in "$@"; do
+    safe_filename="$(cert_safe_filename "${domain}")"
+    cert_file="${CERT_DIR}/${safe_filename}.pem"
+    key_file="${CERT_DIR}/${safe_filename}-key.pem"
+
+    if [[ ! -f "${cert_file}" && ! -f "${key_file}" ]]; then
+      missing+=("${domain}")
+      continue
+    fi
+
+    log_warning "Will remove certificate for: ${domain}"
+    [[ -f "${cert_file}" ]] && { log_info "  Certificate: ${cert_file}"; files+=("${cert_file}"); }
+    [[ -f "${key_file}" ]] && { log_info "  Private key: ${key_file}"; files+=("${key_file}"); }
+    matched+=("${domain}")
+  done
+
+  for domain in "${missing[@]}"; do
+    log_error "No certificate found for domain: ${domain}"
+  done
+
+  if [[ "${#matched[@]}" -eq 0 ]]; then
+    log_info "List installed certificates with: $(basename "${0}") list-certs"
+    exit 1
+  fi
+
+  read -p "Remove ${#matched[@]} certificate(s)? (y/N): " -n 1 -r
+  echo
+  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    log_info "Removal cancelled"
+    return 0
+  fi
+
+  rm -f "${files[@]}"
+  log_success "Removed ${#matched[@]} certificate(s): ${matched[*]}"
+
+  # Restart traefik so it stops serving the removed certificates.
+  if is_running http-proxy; then
+    log_info "Restarting Traefik to apply the change..."
+    docker compose -f "${COMPOSE_FILE}" restart traefik
+  fi
 }
 
 open_dashboard() {
@@ -895,6 +1004,8 @@ prometheus) open_prometheus ;;
 completion) generate_completion ;;
 install-completion) install_completion ;;
 generate-mkcert) generate_mkcert "${2}" ;;
+list-certs) list_certs ;;
+remove-cert) remove_cert "${@:2}" ;;
 upgrade)
   ensure_running
   log_info "Upgrading HTTP Proxy images..."
