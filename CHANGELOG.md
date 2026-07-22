@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add `list-certs` command to list installed certificates and `remove-cert` command to remove a certificate pair for a domain and restart Traefik ([#107](https://github.com/sparkfabrik/http-proxy/issues/107))
+- Add `list-certs` command to list installed certificates and `remove-cert` command to remove certificate pairs for one or more domains and restart Traefik ([#107](https://github.com/sparkfabrik/http-proxy/issues/107))
 - Unit tests for the pure parsing/config helpers in `dinghy-layer`, `dns-server`, `config`, and `utils` ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
 - CI `go-checks` job running `gofmt`, `go vet`, and `go test -race` on every non-`main` branch ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
 - Expose DNS server TCP port 19322 alongside UDP port for Lima virtualization compatibility ([#56](https://github.com/sparkfabrik/http-proxy/issues/56))

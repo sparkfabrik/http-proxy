@@ -359,7 +359,7 @@ show_usage() {
   echo "  show-config          Show current configuration and file locations"
   echo "  generate-mkcert      Generate SSL certificates for a domain (supports wildcards)"
   echo "  list-certs           List installed certificates"
-  echo "  remove-cert          Remove installed certificates for a domain"
+  echo "  remove-cert          Remove installed certificates for one or more domains"
   echo "  configure-dns        Configure system DNS to automatically resolve proxy domains"
   echo "                       (macOS: /etc/resolver, Linux: systemd-resolved)"
   echo "  completion           Generate shell completion script"
@@ -521,44 +521,59 @@ list_certs() {
   log_info "Remove one with: $(basename "${0}") remove-cert <domain>"
 }
 
-# Remove an installed certificate pair for a domain
+# Remove installed certificate pairs for one or more domains
 remove_cert() {
-  local domain="$1"
-
-  if [ -z "${domain}" ]; then
-    read -rp "Enter domain name to remove: " domain
+  if [ "$#" -eq 0 ]; then
+    local -a prompted=()
+    read -rp "Enter domain name(s) to remove: " -a prompted
+    set -- "${prompted[@]}"
   fi
 
-  if [ -z "${domain}" ]; then
+  if [ "$#" -eq 0 ]; then
     log_error "Domain name required"
     exit 1
   fi
 
-  local safe_filename
-  safe_filename="$(cert_safe_filename "${domain}")"
-  local cert_file="${CERT_DIR}/${safe_filename}.pem"
-  local key_file="${CERT_DIR}/${safe_filename}-key.pem"
+  local -a files=()
+  local -a matched=()
+  local -a missing=()
+  local domain safe_filename cert_file key_file
+  for domain in "$@"; do
+    safe_filename="$(cert_safe_filename "${domain}")"
+    cert_file="${CERT_DIR}/${safe_filename}.pem"
+    key_file="${CERT_DIR}/${safe_filename}-key.pem"
 
-  if [[ ! -f "${cert_file}" && ! -f "${key_file}" ]]; then
+    if [[ ! -f "${cert_file}" && ! -f "${key_file}" ]]; then
+      missing+=("${domain}")
+      continue
+    fi
+
+    log_warning "Will remove certificate for: ${domain}"
+    [[ -f "${cert_file}" ]] && { log_info "  Certificate: ${cert_file}"; files+=("${cert_file}"); }
+    [[ -f "${key_file}" ]] && { log_info "  Private key: ${key_file}"; files+=("${key_file}"); }
+    matched+=("${domain}")
+  done
+
+  for domain in "${missing[@]}"; do
     log_error "No certificate found for domain: ${domain}"
+  done
+
+  if [[ "${#matched[@]}" -eq 0 ]]; then
     log_info "List installed certificates with: $(basename "${0}") list-certs"
     exit 1
   fi
 
-  log_warning "This will remove the certificate for: ${domain}"
-  [[ -f "${cert_file}" ]] && log_info "  Certificate: ${cert_file}"
-  [[ -f "${key_file}" ]] && log_info "  Private key: ${key_file}"
-  read -p "Are you sure? (y/N): " -n 1 -r
+  read -p "Remove ${#matched[@]} certificate(s)? (y/N): " -n 1 -r
   echo
   if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     log_info "Removal cancelled"
     return 0
   fi
 
-  rm -f "${cert_file}" "${key_file}"
-  log_success "Certificate removed for: ${domain}"
+  rm -f "${files[@]}"
+  log_success "Removed ${#matched[@]} certificate(s): ${matched[*]}"
 
-  # Restart traefik so it stops serving the removed certificate.
+  # Restart traefik so it stops serving the removed certificates.
   if is_running http-proxy; then
     log_info "Restarting Traefik to apply the change..."
     docker compose -f "${COMPOSE_FILE}" restart traefik
@@ -990,7 +1005,7 @@ completion) generate_completion ;;
 install-completion) install_completion ;;
 generate-mkcert) generate_mkcert "${2}" ;;
 list-certs) list_certs ;;
-remove-cert) remove_cert "${2}" ;;
+remove-cert) remove_cert "${@:2}" ;;
 upgrade)
   ensure_running
   log_info "Upgrading HTTP Proxy images..."

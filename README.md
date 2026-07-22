@@ -456,14 +456,15 @@ List the certificates currently installed in the certificate directory:
 spark-http-proxy list-certs
 ```
 
-Remove a certificate pair for a domain. This deletes both the `.pem` and `-key.pem` files and restarts Traefik so it stops serving the removed certificate:
+Remove certificate pairs for one or more domains. This deletes both the `.pem` and `-key.pem` files and restarts Traefik so it stops serving the removed certificates:
 
 ```bash
 spark-http-proxy remove-cert "nginx.spark.loc"
 spark-http-proxy remove-cert "*.spark.loc"
+spark-http-proxy remove-cert "nginx.spark.loc" "api.spark.loc" "*.old.loc"
 ```
 
-Pass the same domain you used with `generate-mkcert`, including wildcards. The command asks for confirmation before deleting.
+Pass the same domains you used with `generate-mkcert`, including wildcards. The command lists every match, reports any domain it cannot find, and asks for a single confirmation before deleting.
 
 #### Manual Certificate Generation (Alternative)
 
