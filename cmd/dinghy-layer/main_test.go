@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/docker/docker/api/types"
@@ -305,6 +307,100 @@ func TestGenerateTraefikConfigWildcardUsesHostRegexp(t *testing.T) {
 	}
 	if router.Rule != "HostRegexp(`^.*\\.wild\\.loc$`)" {
 		t.Errorf("wildcard rule = %q, want HostRegexp(`^.*\\.wild\\.loc$`)", router.Rule)
+	}
+}
+
+func TestIsDinghyConfigFile(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{"0123456789ab.yaml", true},
+		{"abcdef012345.yaml", true},
+		{"auto-tls.yml", false},
+		{"hsts.yaml", false},
+		{"0123456789ab.yml", false},   // wrong extension
+		{"0123456789a.yaml", false},   // 11 chars, too short
+		{"0123456789abc.yaml", false}, // 13 chars, too long
+		{"0123456789AB.yaml", false},  // uppercase not produced by FormatDockerID
+		{"0123456789ag.yaml", false},  // non-hex character
+		{"0123456789ab.yaml.tmp", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := isDinghyConfigFile(tt.in); got != tt.want {
+			t.Errorf("isDinghyConfigFile(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestReconcileConfigsRemovesOnlyOrphans(t *testing.T) {
+	dir := t.TempDir()
+
+	// A recreated container leaves both its current file (kept) and a stale one
+	// (orphaned). The shared directory also holds files this service must never
+	// touch: the entrypoint's auto-tls.yml, a certificate config, and the
+	// middlewares subdirectory.
+	orphan := "aaaaaaaaaaaa.yaml"
+	current := "bbbbbbbbbbbb.yaml"
+	files := []string{orphan, current, "auto-tls.yml", "custom-cert.yaml"}
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("http: {}\n"), 0o644); err != nil {
+			t.Fatalf("failed to seed %s: %v", name, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "middlewares"), 0o755); err != nil {
+		t.Fatalf("failed to seed middlewares dir: %v", err)
+	}
+
+	cl := &CompatibilityLayer{
+		logger: logger.New("test"),
+		config: &CompatibilityConfig{TraefikDynamicDir: dir},
+	}
+
+	keep := map[string]struct{}{current: {}}
+	if err := cl.reconcileConfigs(keep); err != nil {
+		t.Fatalf("reconcileConfigs returned error: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, orphan)); !os.IsNotExist(err) {
+		t.Errorf("orphaned config %s should have been removed", orphan)
+	}
+	survivors := []string{current, "auto-tls.yml", "custom-cert.yaml", "middlewares"}
+	for _, name := range survivors {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("%s should have survived reconciliation: %v", name, err)
+		}
+	}
+}
+
+func TestReconcileConfigsDryRunKeepsFiles(t *testing.T) {
+	dir := t.TempDir()
+	orphan := "cccccccccccc.yaml"
+	if err := os.WriteFile(filepath.Join(dir, orphan), []byte("http: {}\n"), 0o644); err != nil {
+		t.Fatalf("failed to seed %s: %v", orphan, err)
+	}
+
+	cl := &CompatibilityLayer{
+		logger: logger.New("test"),
+		config: &CompatibilityConfig{TraefikDynamicDir: dir, DryRun: true},
+	}
+
+	if err := cl.reconcileConfigs(map[string]struct{}{}); err != nil {
+		t.Fatalf("reconcileConfigs returned error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, orphan)); err != nil {
+		t.Errorf("dry run must not remove %s: %v", orphan, err)
+	}
+}
+
+func TestReconcileConfigsMissingDir(t *testing.T) {
+	cl := &CompatibilityLayer{
+		logger: logger.New("test"),
+		config: &CompatibilityConfig{TraefikDynamicDir: filepath.Join(t.TempDir(), "does-not-exist")},
+	}
+	if err := cl.reconcileConfigs(map[string]struct{}{}); err != nil {
+		t.Errorf("reconcileConfigs on missing dir should be a no-op, got %v", err)
 	}
 }
 

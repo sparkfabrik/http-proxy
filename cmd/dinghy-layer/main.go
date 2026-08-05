@@ -114,19 +114,45 @@ func (cl *CompatibilityLayer) HandleInitialScan(ctx context.Context) error {
 
 	cl.logger.Info("Scanning existing containers", "count", len(containers))
 
+	// keep holds the config file names of the containers processed in this scan.
+	// After the scan it drives reconciliation: any dinghy-layer config file not
+	// in this set belongs to a container that no longer exists and is removed.
+	keep := make(map[string]struct{})
+	scanErrors := 0
+
 	for _, cont := range containers {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
-			if err := cl.processContainer(ctx, cont.ID); err != nil {
+			name, err := cl.processContainer(ctx, cont.ID)
+			if err != nil {
+				scanErrors++
 				cl.logger.Error("Failed to process container",
 					"error", err,
 					"container_id", utils.FormatDockerID(cont.ID),
 					"container_name", cont.Names)
 				// Continue processing other containers instead of failing fast
+				continue
+			}
+			if name != "" {
+				keep[name] = struct{}{}
 			}
 		}
+	}
+
+	// Skip reconciliation when a container could not be inspected. A transient
+	// inspect failure would leave that container out of keep, and pruning then
+	// would delete the config of a container that is still running. Reconcile
+	// only when the scan saw every container cleanly.
+	if scanErrors > 0 {
+		cl.logger.Warn("Skipping orphaned-config reconciliation after scan errors",
+			"errors", scanErrors)
+		return nil
+	}
+
+	if err := cl.reconcileConfigs(keep); err != nil {
+		cl.logger.Error("Failed to reconcile Traefik configs", "error", err)
 	}
 
 	return nil
@@ -136,7 +162,8 @@ func (cl *CompatibilityLayer) HandleInitialScan(ctx context.Context) error {
 func (cl *CompatibilityLayer) HandleEvent(ctx context.Context, event events.Message) error {
 	switch event.Action {
 	case "start":
-		return cl.processContainer(ctx, event.Actor.ID)
+		_, err := cl.processContainer(ctx, event.Actor.ID)
+		return err
 	case "die":
 		return cl.removeTraefikConfig(event.Actor.ID)
 	default:
@@ -172,10 +199,15 @@ func main() {
 	}
 }
 
-func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID string) error {
+// processContainer inspects a container and writes or refreshes its Traefik
+// config file. It returns the base name of the config file it wrote, or an
+// empty string when the container is skipped (not running, no VIRTUAL_HOST, or
+// already managed by native Traefik labels). The returned name lets the initial
+// scan know which files must survive reconciliation.
+func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID string) (string, error) {
 	inspect, err := utils.RetryContainerInspect(ctx, cl.dockerClient, containerID)
 	if err != nil {
-		return fmt.Errorf("failed to inspect container %s: %w", containerID, err)
+		return "", fmt.Errorf("failed to inspect container %s: %w", containerID, err)
 	}
 
 	// Extract container information
@@ -186,7 +218,7 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 		cl.logger.Debug("Skipping non-running container",
 			"container_id", utils.FormatDockerID(containerID),
 			"container_name", containerInfo.Name)
-		return nil
+		return "", nil
 	}
 
 	// Skip if no VIRTUAL_HOST found
@@ -194,7 +226,7 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 		cl.logger.Debug("Skipping container without VIRTUAL_HOST",
 			"container_id", utils.FormatDockerID(containerID),
 			"container_name", containerInfo.Name)
-		return nil
+		return "", nil
 	}
 
 	// Skip if traefik labels are already set; native labels take precedence and
@@ -203,7 +235,7 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 		cl.logger.Debug("Skipping container with existing Traefik label",
 			"container_id", utils.FormatDockerID(containerID),
 			"container_name", containerInfo.Name)
-		return nil
+		return "", nil
 	}
 
 	cl.logger.Info("Found container with VIRTUAL_HOST",
@@ -221,7 +253,11 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 		"services", len(traefikConfig.HTTP.Services))
 
 	// Write Traefik configuration to file
-	return cl.writeTraefikConfig(containerID, traefikConfig)
+	if err := cl.writeTraefikConfig(containerID, traefikConfig); err != nil {
+		return "", err
+	}
+
+	return cl.configFileName(containerID), nil
 }
 
 func (cl *CompatibilityLayer) generateTraefikConfig(inspect types.ContainerJSON, containerInfo ContainerInfo) *config.TraefikConfig {
@@ -404,6 +440,54 @@ func (cl *CompatibilityLayer) removeTraefikConfig(containerID string) error {
 	return nil
 }
 
+// reconcileConfigs removes the config files of containers that no longer exist.
+// keep holds the base names of the config files that must survive, one per
+// container processed in the current scan. Only files this service owns (those
+// matching dinghyConfigFilePattern) are eligible for removal, so certificate,
+// middleware, and auto-TLS files sharing the dynamic directory are left alone.
+//
+// This is what reconciles a recreated container's IP. When the container's die
+// event was missed, its old config file survives with a stale backend endpoint;
+// the next scan removes it because no current container maps to that file.
+func (cl *CompatibilityLayer) reconcileConfigs(keep map[string]struct{}) error {
+	entries, err := os.ReadDir(cl.config.TraefikDynamicDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to read Traefik dynamic directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+		if !isDinghyConfigFile(name) {
+			continue
+		}
+		if _, ok := keep[name]; ok {
+			continue
+		}
+
+		if cl.config.DryRun {
+			cl.logger.Info("DRY RUN: Would remove orphaned Traefik config", "config_file", name)
+			continue
+		}
+
+		path := filepath.Join(cl.config.TraefikDynamicDir, name)
+		if err := os.Remove(path); err != nil {
+			cl.logger.Error("Failed to remove orphaned Traefik config", "error", err, "config_file", name)
+			continue
+		}
+
+		cl.logger.Info("Removed orphaned Traefik configuration", "config_file", name)
+	}
+
+	return nil
+}
+
 type virtualHost struct {
 	hostname string
 	port     string
@@ -548,4 +632,17 @@ func tcpPortNumber(port string) int {
 // configFileName returns the config file name for a container
 func (cl *CompatibilityLayer) configFileName(containerID string) string {
 	return fmt.Sprintf("%s.yaml", utils.FormatDockerID(containerID))
+}
+
+// dinghyConfigFilePattern matches the config file names this service generates:
+// the 12-character short container ID from utils.FormatDockerID followed by
+// ".yaml". It deliberately excludes the other files that share the Traefik
+// dynamic directory, such as the entrypoint-generated auto-tls.yml and the
+// middlewares copied in at image build time.
+var dinghyConfigFilePattern = regexp.MustCompile(`^[0-9a-f]{12}\.yaml$`)
+
+// isDinghyConfigFile reports whether name is a config file generated by this
+// service, and therefore safe for reconciliation to remove.
+func isDinghyConfigFile(name string) bool {
+	return dinghyConfigFilePattern.MatchString(name)
 }
