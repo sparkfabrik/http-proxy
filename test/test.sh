@@ -40,6 +40,7 @@ TRAEFIK_CONTAINER="test-traefik-app"
 VIRTUAL_HOST_CONTAINER="test-virtual-host-app"
 VIRTUAL_HOST_PORT_CONTAINER="test-virtual-host-port-app"
 MULTI_VIRTUAL_HOST_CONTAINER="test-multi-virtual-host-app"
+ORPHAN_CONTAINER="test-orphan-reconcile-app"
 
 # Hostname configurations for DNS testing
 TRAEFIK_HOSTNAME="app1.${TEST_DOMAIN}"
@@ -47,6 +48,7 @@ VIRTUAL_HOST_HOSTNAME="app2.${TEST_DOMAIN}"
 VIRTUAL_HOST_PORT_HOSTNAME="app3.${TEST_DOMAIN}"
 MULTI_VIRTUAL_HOST_HOSTNAME1="app4.${TEST_DOMAIN}"
 MULTI_VIRTUAL_HOST_HOSTNAME2="app5.${TEST_DOMAIN}"
+ORPHAN_HOSTNAME="app6.${TEST_DOMAIN}"
 
 # Logging function
 log() {
@@ -149,6 +151,71 @@ test_hsts_headers() {
 
     error "HTTPS access to ${hostname} failed after ${max_attempts} attempts"
     return 1
+}
+
+# Test that a recreated container's orphaned config is pruned on the next
+# initial scan (issue #109). Stopping dinghy_layer makes it miss the die event,
+# so the old container's config file survives as an orphan with a stale backend
+# until reconciliation removes it.
+test_orphan_config_reconciliation() {
+    docker run -d --name "$ORPHAN_CONTAINER" \
+        --env "VIRTUAL_HOST=${ORPHAN_HOSTNAME}" nginx:alpine
+    wait_for_container "$ORPHAN_CONTAINER" || return 1
+    test_http_access "$ORPHAN_HOSTNAME" || return 1
+
+    local old_id
+    old_id=$(docker inspect --format '{{.Id}}' "$ORPHAN_CONTAINER" | cut -c1-12)
+    if ! docker exec http-proxy test -f "/traefik/dynamic/${old_id}.yaml"; then
+        error "Expected config file ${old_id}.yaml was not generated"
+        return 1
+    fi
+
+    local had_auto_tls=0
+    docker exec http-proxy test -f /traefik/dynamic/auto-tls.yml && had_auto_tls=1
+
+    log "Stopping dinghy_layer to simulate a missed die event..."
+    docker compose stop dinghy_layer
+
+    docker rm -f "$ORPHAN_CONTAINER"
+    docker run -d --name "$ORPHAN_CONTAINER" \
+        --env "VIRTUAL_HOST=${ORPHAN_HOSTNAME}" nginx:alpine
+    wait_for_container "$ORPHAN_CONTAINER" || return 1
+
+    local new_id
+    new_id=$(docker inspect --format '{{.Id}}' "$ORPHAN_CONTAINER" | cut -c1-12)
+
+    log "Restarting dinghy_layer to trigger the initial scan..."
+    docker compose start dinghy_layer
+
+    # Wait for the initial scan to reconcile the orphaned config
+    local attempt=1
+    while [ $attempt -le 10 ]; do
+        if ! docker exec http-proxy test -f "/traefik/dynamic/${old_id}.yaml"; then
+            break
+        fi
+        wait_with_message "$SLEEP_CONTAINER_CHECK" "for the initial scan to reconcile configs"
+        attempt=$((attempt + 1))
+    done
+
+    if docker exec http-proxy test -f "/traefik/dynamic/${old_id}.yaml"; then
+        error "Orphaned config ${old_id}.yaml was not removed"
+        return 1
+    fi
+    success "Orphaned config ${old_id}.yaml was removed"
+
+    if ! docker exec http-proxy test -f "/traefik/dynamic/${new_id}.yaml"; then
+        error "Config ${new_id}.yaml for the recreated container is missing"
+        return 1
+    fi
+    if [ "$had_auto_tls" -eq 1 ] && ! docker exec http-proxy test -f /traefik/dynamic/auto-tls.yml; then
+        error "auto-tls.yml was removed by reconciliation"
+        return 1
+    fi
+    test_http_access "$ORPHAN_HOSTNAME" || return 1
+    success "Recreated container config and shared files survived reconciliation"
+
+    docker rm -f "$ORPHAN_CONTAINER" >/dev/null 2>&1 || true
+    return 0
 }
 
 # Test DNS functionality
@@ -561,7 +628,7 @@ test_with_dns_config() {
 
 # Cleanup test containers
 cleanup() {
-    docker rm -f "$TRAEFIK_CONTAINER" "$VIRTUAL_HOST_CONTAINER" "$VIRTUAL_HOST_PORT_CONTAINER" "$MULTI_VIRTUAL_HOST_CONTAINER" 2>/dev/null || true
+    docker rm -f "$TRAEFIK_CONTAINER" "$VIRTUAL_HOST_CONTAINER" "$VIRTUAL_HOST_PORT_CONTAINER" "$MULTI_VIRTUAL_HOST_CONTAINER" "$ORPHAN_CONTAINER" 2>/dev/null || true
 }
 
 # Full stack cleanup and rebuild
@@ -645,6 +712,13 @@ main() {
     test_hsts_headers "app5.${TEST_DOMAIN}" && hsts_passed=$((hsts_passed + 1))
     [ "$hsts_passed" -eq 5 ] && passed=$((passed + 1))
 
+    # Orphaned config reconciliation test (issue #109)
+    log "Testing orphaned config reconciliation..."
+    total=$((total + 1))
+    local orphan_passed=0
+    test_orphan_config_reconciliation && orphan_passed=1
+    [ "$orphan_passed" -eq 1 ] && passed=$((passed + 1))
+
     # DNS Tests (if dig available)
     if command -v dig >/dev/null 2>&1; then
         log "Testing DNS functionality..."
@@ -669,6 +743,7 @@ main() {
     log "============="
     log "HTTP Tests: ${http_passed}/5 passed"
     log "HSTS Tests: ${hsts_passed}/5 passed"
+    log "Orphan Reconciliation Tests: ${orphan_passed}/1 passed"
     log "Test Suites: ${passed}/${total} passed"
 
     cleanup
