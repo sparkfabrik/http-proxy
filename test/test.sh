@@ -41,6 +41,7 @@ VIRTUAL_HOST_CONTAINER="test-virtual-host-app"
 VIRTUAL_HOST_PORT_CONTAINER="test-virtual-host-port-app"
 MULTI_VIRTUAL_HOST_CONTAINER="test-multi-virtual-host-app"
 ORPHAN_CONTAINER="test-orphan-reconcile-app"
+ONEOFF_CONTAINER="test-oneoff-app"
 
 # Hostname configurations for DNS testing
 TRAEFIK_HOSTNAME="app1.${TEST_DOMAIN}"
@@ -49,6 +50,7 @@ VIRTUAL_HOST_PORT_HOSTNAME="app3.${TEST_DOMAIN}"
 MULTI_VIRTUAL_HOST_HOSTNAME1="app4.${TEST_DOMAIN}"
 MULTI_VIRTUAL_HOST_HOSTNAME2="app5.${TEST_DOMAIN}"
 ORPHAN_HOSTNAME="app6.${TEST_DOMAIN}"
+ONEOFF_HOSTNAME="app7.${TEST_DOMAIN}"
 
 # Logging function
 log() {
@@ -215,6 +217,40 @@ test_orphan_config_reconciliation() {
     success "Recreated container config and shared files survived reconciliation"
 
     docker rm -f "$ORPHAN_CONTAINER" >/dev/null 2>&1 || true
+    return 0
+}
+
+# Test that one-off containers created by "docker compose run" are ignored
+# (issue #111). Compose marks them with com.docker.compose.oneoff=True and they
+# inherit VIRTUAL_HOST from the service, so routing them would let a short-lived
+# container claim the service domain.
+test_oneoff_container_ignored() {
+    docker run -d --name "$ONEOFF_CONTAINER" \
+        --label "com.docker.compose.oneoff=True" \
+        --env "VIRTUAL_HOST=${ONEOFF_HOSTNAME}" nginx:alpine
+    wait_for_container "$ONEOFF_CONTAINER" || return 1
+    wait_with_message "$SLEEP_PROXY_CONFIG" "for proxy configuration to propagate"
+
+    local container_id
+    container_id=$(docker inspect --format '{{.Id}}' "$ONEOFF_CONTAINER" | cut -c1-12)
+    if docker exec http-proxy test -f "/traefik/dynamic/${container_id}.yaml"; then
+        error "Config file ${container_id}.yaml was generated for a one-off container"
+        docker rm -f "$ONEOFF_CONTAINER" >/dev/null 2>&1 || true
+        return 1
+    fi
+    success "No config file was generated for the one-off container"
+
+    local status
+    status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+        -H "Host: ${ONEOFF_HOSTNAME}" "http://localhost:${HTTP_PORT}" 2>/dev/null || echo "000")
+    if [ "$status" != "404" ]; then
+        error "Expected 404 for ${ONEOFF_HOSTNAME}, got ${status}"
+        docker rm -f "$ONEOFF_CONTAINER" >/dev/null 2>&1 || true
+        return 1
+    fi
+    success "One-off container domain ${ONEOFF_HOSTNAME} is not routed"
+
+    docker rm -f "$ONEOFF_CONTAINER" >/dev/null 2>&1 || true
     return 0
 }
 
@@ -628,7 +664,7 @@ test_with_dns_config() {
 
 # Cleanup test containers
 cleanup() {
-    docker rm -f "$TRAEFIK_CONTAINER" "$VIRTUAL_HOST_CONTAINER" "$VIRTUAL_HOST_PORT_CONTAINER" "$MULTI_VIRTUAL_HOST_CONTAINER" "$ORPHAN_CONTAINER" 2>/dev/null || true
+    docker rm -f "$TRAEFIK_CONTAINER" "$VIRTUAL_HOST_CONTAINER" "$VIRTUAL_HOST_PORT_CONTAINER" "$MULTI_VIRTUAL_HOST_CONTAINER" "$ORPHAN_CONTAINER" "$ONEOFF_CONTAINER" 2>/dev/null || true
 }
 
 # Full stack cleanup and rebuild
@@ -719,6 +755,13 @@ main() {
     test_orphan_config_reconciliation && orphan_passed=1
     [ "$orphan_passed" -eq 1 ] && passed=$((passed + 1))
 
+    # One-off compose container test (issue #111)
+    log "Testing one-off compose containers are ignored..."
+    total=$((total + 1))
+    local oneoff_passed=0
+    test_oneoff_container_ignored && oneoff_passed=1
+    [ "$oneoff_passed" -eq 1 ] && passed=$((passed + 1))
+
     # DNS Tests (if dig available)
     if command -v dig >/dev/null 2>&1; then
         log "Testing DNS functionality..."
@@ -744,6 +787,7 @@ main() {
     log "HTTP Tests: ${http_passed}/5 passed"
     log "HSTS Tests: ${hsts_passed}/5 passed"
     log "Orphan Reconciliation Tests: ${orphan_passed}/1 passed"
+    log "One-off Container Tests: ${oneoff_passed}/1 passed"
     log "Test Suites: ${passed}/${total} passed"
 
     cleanup

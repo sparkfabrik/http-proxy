@@ -229,6 +229,17 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 		return "", nil
 	}
 
+	// Skip one-off containers created by "docker compose run". They inherit
+	// VIRTUAL_HOST from the service definition, so routing them would make a
+	// short-lived container compete with the service for the same domain.
+	if utils.IsComposeOneOff(inspect.Config.Labels) {
+		cl.logger.Info("Skipping one-off compose container",
+			"container_id", utils.FormatDockerID(containerID),
+			"container_name", containerInfo.Name,
+			"virtual_host", containerInfo.VirtualHost)
+		return "", nil
+	}
+
 	// Skip if traefik labels are already set; native labels take precedence and
 	// Traefik's Docker provider handles those containers directly.
 	if utils.HasTraefikLabel(inspect.Config.Labels) {

@@ -165,6 +165,8 @@ The proxy uses **opt-in container discovery** (`exposedByDefault: false`). Only 
 
 Unmanaged containers are ignored and never exposed.
 
+One-off containers created by `docker compose run` are also ignored, even when they inherit `VIRTUAL_HOST` from the service definition. They are labelled `com.docker.compose.oneoff=True` by Compose, and routing them would let a short-lived container claim the domain of the long-running service. Use `docker compose up` for containers that must be reachable through the proxy.
+
 ## Network Management
 
 The proxy automatically joins Docker networks that contain manageable containers, enabling seamless routing without manual network configuration. This process is handled by the `join-networks` service.

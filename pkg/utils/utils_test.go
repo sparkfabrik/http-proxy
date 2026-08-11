@@ -51,6 +51,9 @@ func TestShouldManageContainer(t *testing.T) {
 		{"virtual host", []string{"VIRTUAL_HOST=app.loc"}, nil, true},
 		{"traefik label", nil, map[string]string{"traefik.enable": "true"}, true},
 		{"both", []string{"VIRTUAL_HOST=app.loc"}, map[string]string{"traefik.enable": "true"}, true},
+		{"oneoff virtual host", []string{"VIRTUAL_HOST=app.loc"}, map[string]string{"com.docker.compose.oneoff": "True"}, false},
+		{"oneoff traefik label", nil, map[string]string{"com.docker.compose.oneoff": "True", "traefik.enable": "true"}, false},
+		{"not oneoff", []string{"VIRTUAL_HOST=app.loc"}, map[string]string{"com.docker.compose.oneoff": "False"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
