@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Ignore one-off containers created by `docker compose run` (labelled `com.docker.compose.oneoff=True`) in `dinghy-layer` and `join-networks`; they inherit `VIRTUAL_HOST` from the service definition and could claim the service domain with a backend port nothing listens on, returning `502` ([#111](https://github.com/sparkfabrik/http-proxy/issues/111))
 - Reconcile the generated `dinghy-layer` config files against running containers during the initial scan, removing orphaned files whose container no longer exists; a recreated container previously kept a stale backend IP that returned `502` until a full teardown ([#109](https://github.com/sparkfabrik/http-proxy/issues/109))
 - Make backend IP and port selection deterministic for `VIRTUAL_HOST` containers attached to multiple networks or exposing multiple ports; previously Go map iteration could route to a different network IP or port across restarts ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
 - Lower generated DNS A-record TTL from 3600s to 60s so a changed `HTTP_PROXY_DNS_TARGET_IP` propagates quickly instead of being cached by the OS stub resolver ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))

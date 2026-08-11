@@ -186,9 +186,22 @@ func HasTraefikLabel(labels map[string]string) bool {
 	return false
 }
 
+// IsComposeOneOff reports whether the container was created by "docker compose run".
+// Compose labels those containers with com.docker.compose.oneoff=True, while
+// containers created by "docker compose up" carry the same label set to False.
+// One-off containers inherit VIRTUAL_HOST from the service definition, so routing
+// them would let a short-lived container claim the service domain.
+func IsComposeOneOff(labels map[string]string) bool {
+	return strings.EqualFold(labels["com.docker.compose.oneoff"], "true")
+}
+
 // ShouldManageContainer checks if a container should be managed based on dinghy env vars or traefik labels
 // Returns true if the container has VIRTUAL_HOST environment variable or traefik labels
 func ShouldManageContainer(env []string, labels map[string]string) bool {
+	if IsComposeOneOff(labels) {
+		return false
+	}
+
 	// Check for dinghy VIRTUAL_HOST environment variable
 	if GetDockerEnvVar(env, "VIRTUAL_HOST") != "" {
 		return true
