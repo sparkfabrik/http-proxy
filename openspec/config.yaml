@@ -1,0 +1,26 @@
+schema: spec-driven
+
+context: |
+  Spark HTTP Proxy is a local development reverse proxy built on Traefik.
+
+  Three Go sidecars surround Traefik and are where most behaviour lives:
+  dinghy-layer translates VIRTUAL_HOST/VIRTUAL_PORT env vars on containers into
+  Traefik dynamic config files, join-networks connects the proxy container to
+  the networks of manageable containers, and dns-server resolves the local TLD.
+
+  Traefik runs with exposedByDefault false, so a container is only routed when
+  it opts in, either through those env vars or through native traefik.* labels.
+
+  Conventions: Go formatted with gofmt and goimports, conventional commits,
+  never push to main. Unit tests live beside the code in cmd/ and pkg/;
+  integration tests are a single shell suite under test/ that runs the real
+  stack in Docker.
+
+  This runs on every developer machine, so a regression breaks everyone's local
+  environment. Changes to routing behaviour need integration coverage, not just
+  unit tests.
+
+rules:
+  specs:
+    - Describe observable routing behaviour, never Go identifiers or Traefik
+      rule syntax. The rule strings belong in design.md.
