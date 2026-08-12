@@ -15,8 +15,15 @@ type HTTPConfig struct {
 
 // Router represents a Traefik router configuration
 type Router struct {
-	Rule        string           `yaml:"rule,omitempty"`
-	Service     string           `yaml:"service,omitempty"`
+	Rule    string `yaml:"rule,omitempty"`
+	Service string `yaml:"service,omitempty"`
+	// Priority orders this router against every other one on the same
+	// entrypoint. Left unset, Traefik ranks by rule length instead. Only
+	// path-mounted routers set it, so host-only routers keep the ordering they
+	// have always had. omitempty is therefore load-bearing rather than
+	// cosmetic: a zero would erase the field and silently restore rule-length
+	// ordering, which is why the value assigned is never zero.
+	Priority    int              `yaml:"priority,omitempty"`
 	EntryPoints []string         `yaml:"entryPoints,omitempty"`
 	Middlewares []string         `yaml:"middlewares,omitempty"`
 	TLS         *RouterTLSConfig `yaml:"tls,omitempty"`

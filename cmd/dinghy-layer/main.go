@@ -44,6 +44,28 @@ type CompatibilityLayer struct {
 	dockerClient *client.Client
 	logger       *logger.Logger
 	config       *CompatibilityConfig
+
+	// claims records which container holds each host-and-path pair, so a second
+	// container claiming one already taken can be reported. Detecting this only
+	// during the initial scan would miss the ordinary case, where the proxy is
+	// already running and a compose stack starts afterwards, so both containers
+	// arrive as separate events.
+	claims map[routeClaim]claimHolder
+}
+
+// routeClaim identifies a route by what a request has to match to reach it.
+// The empty path is the host's own route, so two containers claiming a bare
+// host collide on the same key as two claiming the same path.
+type routeClaim struct {
+	host string
+	path string
+}
+
+// claimHolder is the container holding a claim. The ID is the identity, since
+// a container is recreated with the same name; the name is what a reader needs.
+type claimHolder struct {
+	id   string
+	name string
 }
 
 // CompatibilityConfig holds the configuration options for the compatibility layer.
@@ -69,6 +91,7 @@ func (c *CompatibilityConfig) Validate() error {
 func NewCompatibilityLayer(cfg *CompatibilityConfig) *CompatibilityLayer {
 	return &CompatibilityLayer{
 		config: cfg,
+		claims: make(map[routeClaim]claimHolder),
 	}
 }
 
@@ -91,6 +114,7 @@ type ContainerInfo struct {
 	Name        string
 	VirtualHost string
 	VirtualPort string
+	VirtualPath string
 	IsRunning   bool
 }
 
@@ -101,6 +125,7 @@ func (cl *CompatibilityLayer) extractContainerInfo(inspect types.ContainerJSON) 
 		Name:        strings.TrimPrefix(inspect.Name, "/"),
 		VirtualHost: utils.GetDockerEnvVar(inspect.Config.Env, "VIRTUAL_HOST"),
 		VirtualPort: utils.GetDockerEnvVar(inspect.Config.Env, "VIRTUAL_PORT"),
+		VirtualPath: utils.GetDockerEnvVar(inspect.Config.Env, "VIRTUAL_PATH"),
 		IsRunning:   inspect.State.Running,
 	}
 }
@@ -221,8 +246,18 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 		return "", nil
 	}
 
-	// Skip if no VIRTUAL_HOST found
+	// Skip if no VIRTUAL_HOST found. A container asking for a path without a
+	// host is a mistake rather than a container that opted out, so it is worth
+	// saying out loud: a path needs a hostname to sit on, and without
+	// VIRTUAL_HOST nothing exposes the container at all.
 	if containerInfo.VirtualHost == "" {
+		if containerInfo.VirtualPath != "" {
+			cl.logger.Warn("Ignoring VIRTUAL_PATH on a container without VIRTUAL_HOST",
+				"container_id", utils.FormatDockerID(containerID),
+				"container_name", containerInfo.Name,
+				"virtual_path", containerInfo.VirtualPath)
+			return "", nil
+		}
 		cl.logger.Debug("Skipping container without VIRTUAL_HOST",
 			"container_id", utils.FormatDockerID(containerID),
 			"container_name", containerInfo.Name)
@@ -241,8 +276,21 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 	}
 
 	// Skip if traefik labels are already set; native labels take precedence and
-	// Traefik's Docker provider handles those containers directly.
+	// Traefik's Docker provider handles those containers directly. Any
+	// traefik. label counts, including a middleware that was never meant to
+	// take over routing, so a container that also declares VIRTUAL_HOST loses
+	// it. That is easy to hit when reaching for a middleware alongside a
+	// mounted path, and silent at debug level, so say it plainly instead.
 	if utils.HasTraefikLabel(inspect.Config.Labels) {
+		if containerInfo.VirtualHost != "" {
+			cl.logger.Warn("Ignoring VIRTUAL_HOST and VIRTUAL_PATH on a container carrying a traefik. label",
+				"container_id", utils.FormatDockerID(containerID),
+				"container_name", containerInfo.Name,
+				"virtual_host", containerInfo.VirtualHost,
+				"virtual_path", containerInfo.VirtualPath,
+				"hint", "declare the routers as labels too, or remove the label")
+			return "", nil
+		}
 		cl.logger.Debug("Skipping container with existing Traefik label",
 			"container_id", utils.FormatDockerID(containerID),
 			"container_name", containerInfo.Name)
@@ -280,12 +328,29 @@ func (cl *CompatibilityLayer) generateTraefikConfig(inspect types.ContainerJSON,
 	// Parse VIRTUAL_HOST (can contain multiple hosts separated by commas)
 	hosts := parseVirtualHosts(containerInfo.VirtualHost)
 
+	// VIRTUAL_PATH belongs to the container, not to an individual host entry,
+	// so a container naming several hosts is mounted at the same path on each.
+	// An unusable value is reported and dropped: the container still gets its
+	// host routes rather than disappearing from the proxy entirely.
+	virtualPath, err := normalizeVirtualPath(containerInfo.VirtualPath)
+	if err != nil {
+		cl.logger.Warn("Ignoring VIRTUAL_PATH",
+			"container_id", utils.FormatDockerID(inspect.ID),
+			"container_name", containerInfo.Name,
+			"virtual_path", containerInfo.VirtualPath,
+			"reason", err)
+	}
+
 	// Get container IP address
 	containerIP := getContainerIP(inspect)
 	if containerIP == "" {
 		cl.logger.Error("Could not determine container IP", "container_id", utils.FormatDockerID(inspect.ID))
 		return traefikConfig
 	}
+
+	// Recorded only once the container can actually be routed to, so one with
+	// no address does not hold a route it cannot serve.
+	cl.recordClaims(containerInfo, hosts, virtualPath)
 
 	for i, host := range hosts {
 		routerName := fmt.Sprintf("%s-%d", serviceName, i)
@@ -307,10 +372,20 @@ func (cl *CompatibilityLayer) generateTraefikConfig(inspect types.ContainerJSON,
 			rule = fmt.Sprintf("Host(`%s`)", host.hostname)
 		}
 
+		// A mounted path narrows the rule and takes an explicit priority. Host
+		// routers keep taking Traefik's rule-length ordering, so containers
+		// that do not use VIRTUAL_PATH rank exactly as they always have.
+		priority := 0
+		if virtualPath != "" {
+			rule = fmt.Sprintf("%s && %s", rule, pathMatcher(virtualPath))
+			priority = pathPriority(virtualPath)
+		}
+
 		// Create HTTP router
 		httpRouter := &config.Router{
 			Rule:        rule,
 			Service:     serviceName,
+			Priority:    priority,
 			EntryPoints: []string{"http"},
 		}
 		traefikConfig.HTTP.Routers[routerName] = httpRouter
@@ -320,6 +395,7 @@ func (cl *CompatibilityLayer) generateTraefikConfig(inspect types.ContainerJSON,
 		httpsRouter := &config.Router{
 			Rule:        rule,
 			Service:     serviceName,
+			Priority:    priority,
 			EntryPoints: []string{"https"},
 			TLS:         &config.RouterTLSConfig{},
 		}
@@ -424,6 +500,10 @@ func (cl *CompatibilityLayer) writeTraefikConfig(containerID string, cfg *config
 }
 
 func (cl *CompatibilityLayer) removeTraefikConfig(containerID string) error {
+	// Free the routes first, so a replacement container taking the same host
+	// and path is not reported as colliding with the one it replaced.
+	cl.releaseClaims(containerID)
+
 	if cl.config.DryRun {
 		cl.logger.Info("DRY RUN: Would remove Traefik config",
 			"container_id", utils.FormatDockerID(containerID),
@@ -532,6 +612,115 @@ func parseVirtualHosts(virtualHostEnv string) []virtualHost {
 	}
 
 	return hosts
+}
+
+// pathPriorityBase lifts every mounted-path router above the rule-length
+// ordering Traefik applies when no priority is set. Rule length is bounded by
+// how long a hostname and a path can plausibly be, so a base well past that
+// keeps a mounted path ahead of a bare host and of a wildcard that happens to
+// produce a long regex.
+const pathPriorityBase = 10000
+
+// normalizeVirtualPath validates VIRTUAL_PATH and returns the form used to
+// build a rule: a leading separator, no trailing one, and empty when the
+// container is not mounted under a path at all.
+//
+// The empty return with a non-nil error is deliberate. A container whose path
+// cannot be used still deserves its host routes, so callers report the error
+// and carry on with the empty value.
+func normalizeVirtualPath(raw string) (string, error) {
+	path := strings.TrimSpace(raw)
+	if path == "" {
+		return "", nil
+	}
+
+	// A list is the mistake VIRTUAL_HOST's own syntax invites. Commas are legal
+	// in a URL path, so accepting one would build a rule that never matches.
+	if strings.Contains(path, ",") {
+		return "", fmt.Errorf("must be a single path, not a list")
+	}
+
+	if !strings.HasPrefix(path, "/") {
+		return "", fmt.Errorf("must start with /")
+	}
+
+	// The rule is assembled by string formatting, so a backtick would close the
+	// matcher and let the rest of the value become routing syntax. The other
+	// characters here cannot appear in a path Traefik matches against.
+	if strings.ContainsAny(path, "`$\"'\\ \t\n\r?#") {
+		return "", fmt.Errorf("contains characters that are not allowed in a path")
+	}
+
+	// Trailing separators are stripped so /api and /api/ are one declaration.
+	// Repeated separators would produce a path no request can match.
+	trimmed := strings.TrimRight(path, "/")
+	if trimmed == "" {
+		// VIRTUAL_PATH=/ addresses the whole host, which VIRTUAL_HOST already
+		// does. Treated as absent rather than as a second route for the host.
+		return "", nil
+	}
+	if strings.Contains(trimmed, "//") {
+		return "", fmt.Errorf("contains an empty path segment")
+	}
+
+	return trimmed, nil
+}
+
+// pathMatcher builds the matcher for a mounted path.
+//
+// PathPrefix alone is a raw string prefix in Traefik, so PathPrefix(`/api`)
+// also matches /api-docs. An Ingress path prefix splits on separators and does
+// not, and the point of mounting a path locally is that one relative call
+// behaves the same in both places. Pairing the prefix with an exact match
+// restores segment-aware behaviour.
+func pathMatcher(path string) string {
+	return fmt.Sprintf("(PathPrefix(`%s/`) || Path(`%s`))", path, path)
+}
+
+// pathPriority ranks a mounted path above the host it sits on, and a longer
+// path above a shorter one on the same host, so /api/internal wins over /api.
+func pathPriority(path string) int {
+	return pathPriorityBase + len(path)
+}
+
+// recordClaims registers the routes a container is about to be given and
+// reports any that another container already holds. Which of the two answers
+// such a request is decided by Traefik's own ordering of identical rules, so
+// the only useful thing to do is name both and let a human resolve it.
+func (cl *CompatibilityLayer) recordClaims(info ContainerInfo, hosts []virtualHost, path string) {
+	cl.releaseClaims(info.ID)
+
+	for _, host := range hosts {
+		claim := routeClaim{host: host.hostname, path: path}
+		if holder, taken := cl.claims[claim]; taken && holder.id != info.ID {
+			cl.logger.Warn("Two containers claim the same route",
+				"host", claim.host,
+				"path", claimPathForLog(claim.path),
+				"containers", fmt.Sprintf("%s, %s", holder.name, info.Name),
+				"hint", "which one answers is not defined; give one of them a different host or path")
+			continue
+		}
+		cl.claims[claim] = claimHolder{id: info.ID, name: info.Name}
+	}
+}
+
+// releaseClaims drops everything a container holds, so a route freed by one
+// container stopping can be taken by another without a false collision.
+func (cl *CompatibilityLayer) releaseClaims(containerID string) {
+	for claim, holder := range cl.claims {
+		if holder.id == containerID {
+			delete(cl.claims, claim)
+		}
+	}
+}
+
+// claimPathForLog renders the host's own route, which has no path, as something
+// readable rather than as an empty value.
+func claimPathForLog(path string) string {
+	if path == "" {
+		return "/"
+	}
+	return path
 }
 
 func isPort(s string) bool {

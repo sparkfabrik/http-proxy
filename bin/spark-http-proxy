@@ -446,6 +446,10 @@ generate_mkcert() {
     exit 1
   fi
 
+  if ! reject_path_in_domain "${domain}"; then
+    exit 1
+  fi
+
   if ! install_mkcert; then
     exit 1
   fi
@@ -468,6 +472,24 @@ generate_mkcert() {
   # Restart traefik to apply new certificates.
   log_info "Restarting Traefik to apply new certificates..."
   docker compose -f "${COMPOSE_FILE}" restart traefik
+}
+
+# Reject a certificate argument that names a path rather than a hostname.
+# A certificate covers a hostname, and a container mounted under a path with
+# VIRTUAL_PATH is served by the certificate of the host it sits on. Without this
+# check the path would be folded into the filename and the request would half
+# succeed, leaving a certificate nothing can use.
+reject_path_in_domain() {
+  local domain="$1"
+
+  if [[ "${domain}" == */* ]]; then
+    log_error "'${domain}' contains a path. A certificate covers a hostname."
+    log_info "Use the hostname on its own: ${domain%%/*}"
+    log_info "A container mounted with VIRTUAL_PATH is served by its host's certificate."
+    return 1
+  fi
+
+  return 0
 }
 
 # Derive the safe filename used to store a domain's certificate files
@@ -539,6 +561,9 @@ remove_cert() {
   local -a missing=()
   local domain safe_filename cert_file key_file
   for domain in "$@"; do
+    if ! reject_path_in_domain "${domain}"; then
+      exit 1
+    fi
     safe_filename="$(cert_safe_filename "${domain}")"
     cert_file="${CERT_DIR}/${safe_filename}.pem"
     key_file="${CERT_DIR}/${safe_filename}-key.pem"
@@ -623,13 +648,13 @@ is_running() { dc_cmd ps | grep -q "$1"; }
 # Uses --resolve so both the connection target and the TLS SNI match the test
 # host, exercising the real routing path. Echoes the last status code seen.
 self_test_http_probe() {
-  local scheme="$1" host="$2" port="$3" extra="$4"
+  local scheme="$1" host="$2" port="$3" extra="$4" path="${5:-}"
   local code=""
 
   for _ in $(seq 1 15); do
     code="$(curl ${extra} -s -o /dev/null -w '%{http_code}' \
       --resolve "${host}:${port}:127.0.0.1" --max-time 5 \
-      "${scheme}://${host}" 2>/dev/null || true)"
+      "${scheme}://${host}${path}" 2>/dev/null || true)"
     if [[ "${code}" == "200" ]]; then
       echo "200"
       return 0
@@ -641,15 +666,44 @@ self_test_http_probe() {
   return 1
 }
 
+# Poll a URL until it returns the expected body, or attempts run out.
+#
+# A mounted path cannot be checked by status code alone. When its route is
+# missing, the request falls through to whatever serves the hostname, which
+# answers 200 from the wrong container, so a status probe passes on a machine
+# where VIRTUAL_PATH is broken. Comparing the body is what makes the check
+# meaningful. Echoes the last body seen.
+self_test_body_probe() {
+  local scheme="$1" host="$2" port="$3" extra="$4" path="$5" expected="$6"
+  local body=""
+
+  for _ in $(seq 1 15); do
+    body="$(curl ${extra} -s \
+      --resolve "${host}:${port}:127.0.0.1" --max-time 5 \
+      "${scheme}://${host}${path}" 2>/dev/null || true)"
+    if [[ "${body}" == *"${expected}"* ]]; then
+      echo "${expected}"
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "${body}"
+  return 1
+}
+
 # Self-test: end-to-end check that the proxy actually routes a container.
 run_self_test() {
   local first_tld test_domain container_name dns_port target_ip
   local resolved http_code https_code failures=0
+  local path_container_name path_body https_path_body
+  local path_marker="spark-http-proxy path routing works"
 
   first_tld="${HTTP_PROXY_DNS_TLDS:-loc}"
   first_tld="$(echo "${first_tld%%,*}" | tr -d '[:space:]')"
   test_domain="spark-http-proxy-selftest.${first_tld}"
   container_name="spark-proxy-self-test"
+  path_container_name="spark-proxy-self-test-path"
   dns_port="${HTTP_PROXY_DNS_PORT:-19322}"
   target_ip="${HTTP_PROXY_DNS_TARGET_IP:-127.0.0.1}"
 
@@ -666,14 +720,27 @@ run_self_test() {
   fi
   log_success "Proxy and DNS services are running"
 
-  # Always remove the test container when the function returns
-  trap 'docker rm -f "'"${container_name}"'" >/dev/null 2>&1 || true' RETURN
+  # Always remove the test containers when the function returns
+  trap 'docker rm -f "'"${container_name}"'" "'"${path_container_name}"'" >/dev/null 2>&1 || true' RETURN
 
   # 2. Start a throwaway backend opted into the proxy via VIRTUAL_HOST
   log_info "Starting test container with VIRTUAL_HOST=${test_domain}..."
   docker rm -f "${container_name}" >/dev/null 2>&1 || true
   if ! docker run -d --name "${container_name}" -e "VIRTUAL_HOST=${test_domain}" nginx:latest >/dev/null 2>&1; then
     log_error "Failed to start test container"
+    return 1
+  fi
+
+  # A second backend on the same hostname, mounted under a path. It serves a
+  # marker the host's container does not, which is what distinguishes a working
+  # path route from a request falling through to the host.
+  log_info "Starting test container with VIRTUAL_PATH=/self-test on the same host..."
+  docker rm -f "${path_container_name}" >/dev/null 2>&1 || true
+  if ! docker run -d --name "${path_container_name}" \
+    -e "VIRTUAL_HOST=${test_domain}" -e "VIRTUAL_PATH=/self-test" \
+    -e "MARKER=${path_marker}" \
+    nginx:latest sh -c 'mkdir -p /usr/share/nginx/html/self-test && printf "%s" "${MARKER}" > /usr/share/nginx/html/self-test/index.html && exec nginx -g "daemon off;"' >/dev/null 2>&1; then
+    log_error "Failed to start path test container"
     return 1
   fi
 
@@ -704,6 +771,28 @@ run_self_test() {
     log_success "HTTPS route works (200)"
   else
     log_error "HTTPS route failed (last status: ${https_code:-none})"
+    failures=$((failures + 1))
+  fi
+
+  # 6. A container mounted under a path must answer that path itself. Checked by
+  # body, not status: without the path route the request reaches the host's
+  # container, which answers 200 and would hide the failure.
+  log_info "Testing VIRTUAL_PATH routing..."
+  path_body="$(self_test_body_probe http "${test_domain}" 80 "" "/self-test" "${path_marker}")"
+  if [[ "${path_body}" == "${path_marker}" ]]; then
+    log_success "Path route works (/self-test answered by the mounted container)"
+  else
+    log_error "Path route failed (/self-test was not answered by the mounted container)"
+    failures=$((failures + 1))
+  fi
+
+  # 7. The same over HTTPS, so the two schemes cannot diverge unnoticed
+  log_info "Testing VIRTUAL_PATH routing over HTTPS..."
+  https_path_body="$(self_test_body_probe https "${test_domain}" 443 "-k" "/self-test" "${path_marker}")"
+  if [[ "${https_path_body}" == "${path_marker}" ]]; then
+    log_success "Path route works over HTTPS"
+  else
+    log_error "Path route over HTTPS failed"
     failures=$((failures + 1))
   fi
 

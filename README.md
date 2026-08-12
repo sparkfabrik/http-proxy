@@ -20,6 +20,7 @@ Simply add `VIRTUAL_HOST=myapp.local` to any container or use native Traefik lab
   - [Optional Commands](#optional-commands)
 - [Container Configuration](#container-configuration)
   - [Supported Patterns](#supported-patterns)
+  - [Sharing one domain with VIRTUAL_PATH](#sharing-one-domain-with-virtual_path)
 - [Container Management](#container-management)
 - [Network Management](#network-management)
 - [DNS Server](#dns-server)
@@ -48,6 +49,7 @@ Simply add `VIRTUAL_HOST=myapp.local` to any container or use native Traefik lab
   - [Using Traefik Labels Instead of VIRTUAL_HOST](#using-traefik-labels-instead-of-virtual_host)
 - [Dinghy Layer Compatibility](#dinghy-layer-compatibility)
   - [Supported Environment Variables](#supported-environment-variables)
+  - [Borrowed from nginx-proxy](#borrowed-from-nginx-proxy)
   - [Migration Notes](#migration-notes)
 - [DNS Server](#dns-server-1)
   - [DNS Configuration](#dns-configuration-1)
@@ -145,16 +147,71 @@ services:
     environment:
       - VIRTUAL_HOST=myapp.local # Required: your custom domain
       - VIRTUAL_PORT=8080 # Optional: defaults to exposed port or 80
+      - VIRTUAL_PATH=/api # Optional: mount under a path of VIRTUAL_HOST
     expose:
       - "8080"
 ```
 
 ### Supported Patterns
 
+`VIRTUAL_HOST` accepts several forms:
+
 - **Single domain**: `VIRTUAL_HOST=myapp.local`
 - **Multiple domains**: `VIRTUAL_HOST=app.local,api.local`
 - **Wildcards**: `VIRTUAL_HOST=*.myapp.local`
 - **Regex patterns**: `VIRTUAL_HOST=~^api\\..*\\.local$`
+
+`VIRTUAL_PATH` is a separate variable, not another host form. It mounts the
+container under a path of the hostname `VIRTUAL_HOST` names, so two containers
+can share one domain.
+
+### Sharing one domain with VIRTUAL_PATH
+
+A browser-served frontend and its API often need to be on one origin: same
+domain, so no CORS, no preflight, and one certificate. Point both containers at
+the same `VIRTUAL_HOST` and give the second a `VIRTUAL_PATH`:
+
+```yaml
+# docker-compose.yml
+services:
+  frontend:
+    image: node:22-alpine
+    environment:
+      - VIRTUAL_HOST=myapp.local
+      - VIRTUAL_PORT=5173
+
+  api:
+    image: node:22-alpine
+    environment:
+      - VIRTUAL_HOST=myapp.local # the same domain
+      - VIRTUAL_PATH=/api # mounted under it
+      - VIRTUAL_PORT=3000
+```
+
+`http://myapp.local/` reaches the frontend and `http://myapp.local/api/...`
+reaches the API, so the page can call `/api/...` with no host in front of it.
+
+What to know before using it:
+
+- **`/api` matches `/api` and everything under it, never `/api-docs`.** Matching
+  is by path segment, so a mount cannot capture a sibling that merely starts
+  with the same characters.
+- **Nothing is stripped.** The API receives `/api/users`, not `/users`, so it
+  has to serve the prefix itself. `VIRTUAL_DEST` is not supported.
+- **A certificate covers the hostname**, so a mounted path needs none of its
+  own and is served by the certificate of the domain it sits on.
+- **`VIRTUAL_PORT` belongs to the container.** Each container has its own,
+  independently of the others sharing the domain.
+- **`VIRTUAL_PATH` applies to every domain the container names.** With
+  `VIRTUAL_HOST=a.local,b.local` the container is mounted at that path on both.
+- **A `traefik.*` label disables both variables.** A container carrying any
+  `traefik.` label is handled by Traefik's Docker provider instead, so its
+  `VIRTUAL_HOST` and `VIRTUAL_PATH` are ignored entirely.
+- **Stopping the mounted container does not produce a 404.** Its routes go with
+  it and its paths fall through to whichever container serves the domain, which
+  for a dev server usually means a page and a `200`.
+- **Changing the value needs the container recreated**, since environment
+  variables cannot be changed in place.
 
 ## Container Management
 
@@ -563,6 +620,20 @@ This HTTP proxy provides compatibility with the original [dinghy-http-proxy](htt
 | -------------- | ----------- | -------------------------------- |
 | `VIRTUAL_HOST` | ✅ **Full** | Automatic HTTP and HTTPS routing |
 | `VIRTUAL_PORT` | ✅ **Full** | Backend port configuration       |
+
+### Borrowed from nginx-proxy
+
+`VIRTUAL_PATH` is not a dinghy-http-proxy variable. It comes from
+[nginx-proxy](https://github.com/nginx-proxy/nginx-proxy), which uses it for the
+same purpose:
+
+| Variable       | Support         | Description                                              |
+| -------------- | --------------- | -------------------------------------------------------- |
+| `VIRTUAL_PATH` | ✅ **Full**     | Mount a container under a path of its `VIRTUAL_HOST`      |
+| `VIRTUAL_DEST` | ❌ **None**     | Rewriting the path before the backend sees it             |
+
+Without `VIRTUAL_DEST` the request reaches the backend unchanged, which matches
+both nginx-proxy's own default and how an ingress forwards a path prefix.
 
 ### Migration Notes
 
