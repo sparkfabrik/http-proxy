@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/docker/docker/api/types"
@@ -10,12 +12,14 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/go-connections/nat"
 	"github.com/sparkfabrik/http-proxy/pkg/logger"
+	"gopkg.in/yaml.v3"
 )
 
 func testLayer() *CompatibilityLayer {
 	return &CompatibilityLayer{
 		logger: logger.New("test"),
 		config: &CompatibilityConfig{TraefikDynamicDir: "/tmp"},
+		claims: make(map[routeClaim]claimHolder),
 	}
 }
 
@@ -417,5 +421,264 @@ func TestGenerateTraefikConfigMultiHost(t *testing.T) {
 	}
 	if got := len(cfg.HTTP.Services); got != 1 {
 		t.Errorf("service count = %d, want 1", got)
+	}
+}
+
+func TestNormalizeVirtualPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{"absent", "", "", false},
+		{"simple", "/api", "/api", false},
+		{"trailing separator is stripped", "/api/", "/api", false},
+		{"nested", "/api/v1", "/api/v1", false},
+		{"surrounding space is ignored", "  /api  ", "/api", false},
+		{"root is the host itself", "/", "", false},
+		{"repeated separators only", "///", "", false},
+		{"no leading separator", "api", "", true},
+		{"a list is not a path", "/api,/admin", "", true},
+		{"query string", "/api?x=1", "", true},
+		{"fragment", "/api#top", "", true},
+		{"embedded space", "/api v1", "", true},
+		{"empty segment", "/api//v1", "", true},
+		{"backtick closes the matcher", "/api`) || Host(`evil.loc", "", true},
+		{"double quote", "/api\"", "", true},
+		{"single quote", "/api'", "", true},
+		{"backslash", "/api\\x", "", true},
+		{"dollar", "/api$x", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeVirtualPath(tt.input)
+			if tt.wantErr && err == nil {
+				t.Fatalf("normalizeVirtualPath(%q) = %q, want an error", tt.input, got)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("normalizeVirtualPath(%q) returned %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Errorf("normalizeVirtualPath(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// A rejected path must not take the container's host routes down with it.
+func TestGenerateTraefikConfigRejectedPathKeepsHostRoutes(t *testing.T) {
+	cl := testLayer()
+	inspect := inspectWithIP("/bad", "172.0.0.9")
+	info := ContainerInfo{Name: "bad", VirtualHost: "bad.loc", VirtualPort: "80", VirtualPath: "api"}
+
+	cfg := cl.generateTraefikConfig(inspect, info)
+
+	router, ok := cfg.HTTP.Routers["bad-0"]
+	if !ok {
+		t.Fatalf("missing router bad-0; got %v", cfg.HTTP.Routers)
+	}
+	if router.Rule != "Host(`bad.loc`)" {
+		t.Errorf("rule = %q, want the plain host rule", router.Rule)
+	}
+	if router.Priority != 0 {
+		t.Errorf("priority = %d, want 0 for a container with no usable path", router.Priority)
+	}
+}
+
+func TestGenerateTraefikConfigMountedPath(t *testing.T) {
+	cl := testLayer()
+	inspect := inspectWithIP("/api", "172.0.0.7")
+	info := ContainerInfo{Name: "api", VirtualHost: "app.loc", VirtualPort: "3000", VirtualPath: "/api"}
+
+	cfg := cl.generateTraefikConfig(inspect, info)
+
+	wantRule := "Host(`app.loc`) && (PathPrefix(`/api/`) || Path(`/api`))"
+	wantPriority := pathPriorityBase + len("/api")
+
+	for _, name := range []string{"api-0", "api-tls-0"} {
+		router, ok := cfg.HTTP.Routers[name]
+		if !ok {
+			t.Fatalf("missing router %s; got %v", name, cfg.HTTP.Routers)
+		}
+		if router.Rule != wantRule {
+			t.Errorf("%s rule = %q, want %q", name, router.Rule, wantRule)
+		}
+		// Both schemes must rank together, or a request could reach different
+		// containers over http and https.
+		if router.Priority != wantPriority {
+			t.Errorf("%s priority = %d, want %d", name, router.Priority, wantPriority)
+		}
+	}
+}
+
+// A container without VIRTUAL_PATH must emit no priority at all, so its
+// ordering against every other router on the machine is the one it always had.
+func TestGenerateTraefikConfigHostOnlyEmitsNoPriority(t *testing.T) {
+	cl := testLayer()
+	inspect := inspectWithIP("/plain", "172.0.0.8")
+	info := ContainerInfo{Name: "plain", VirtualHost: "plain.loc", VirtualPort: "80"}
+
+	cfg := cl.generateTraefikConfig(inspect, info)
+
+	for name, router := range cfg.HTTP.Routers {
+		if router.Priority != 0 {
+			t.Errorf("%s priority = %d, want 0", name, router.Priority)
+		}
+	}
+
+	// The zero must also disappear from the emitted YAML. Traefik reads a
+	// missing priority as "rank by rule length"; a literal 0 would mean the
+	// same thing, but the field is only ever meaningful when it is non-zero,
+	// and serialising it would misrepresent an untouched router as configured.
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(out), "priority") {
+		t.Errorf("host-only config mentions priority:\n%s", out)
+	}
+}
+
+// The priority has to survive marshalling: with omitempty a zero would vanish
+// and silently restore rule-length ordering.
+func TestMountedPathPriorityIsSerialised(t *testing.T) {
+	cl := testLayer()
+	inspect := inspectWithIP("/api", "172.0.0.7")
+	info := ContainerInfo{Name: "api", VirtualHost: "app.loc", VirtualPort: "3000", VirtualPath: "/api"}
+
+	out, err := yaml.Marshal(cl.generateTraefikConfig(inspect, info))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	want := fmt.Sprintf("priority: %d", pathPriorityBase+len("/api"))
+	if !strings.Contains(string(out), want) {
+		t.Errorf("emitted config is missing %q:\n%s", want, out)
+	}
+}
+
+// The ordering the feature depends on: a mounted path must outrank the host it
+// sits on and any wildcard covering that host, and a longer path must outrank a
+// shorter one. Host rules carry no priority, so Traefik ranks them by rule
+// length, which is bounded well below the base.
+func TestPathPriorityOrdering(t *testing.T) {
+	host := len("Host(`app.loc`)")
+	wildcard := len("HostRegexp(`^.*\\.a\\.very\\.long\\.example\\.domain\\.loc$`)")
+
+	short := pathPriority("/api")
+	long := pathPriority("/api/internal")
+
+	if short <= host {
+		t.Errorf("mounted path priority %d does not outrank the host rule length %d", short, host)
+	}
+	if short <= wildcard {
+		t.Errorf("mounted path priority %d does not outrank the wildcard rule length %d", short, wildcard)
+	}
+	if long <= short {
+		t.Errorf("longer path priority %d does not outrank shorter path priority %d", long, short)
+	}
+}
+
+// VIRTUAL_PATH belongs to the container, so every host it names is mounted.
+func TestGenerateTraefikConfigMountedPathAcrossHosts(t *testing.T) {
+	cl := testLayer()
+	inspect := inspectWithIP("/api", "172.0.0.10")
+	info := ContainerInfo{Name: "api", VirtualHost: "a.loc,b.loc", VirtualPort: "3000", VirtualPath: "/api"}
+
+	cfg := cl.generateTraefikConfig(inspect, info)
+
+	if got := len(cfg.HTTP.Routers); got != 4 {
+		t.Fatalf("router count = %d, want 4", got)
+	}
+	for i, host := range []string{"a.loc", "b.loc"} {
+		name := fmt.Sprintf("api-%d", i)
+		router, ok := cfg.HTTP.Routers[name]
+		if !ok {
+			t.Fatalf("missing router %s; got %v", name, cfg.HTTP.Routers)
+		}
+		want := fmt.Sprintf("Host(`%s`) && (PathPrefix(`/api/`) || Path(`/api`))", host)
+		if router.Rule != want {
+			t.Errorf("%s rule = %q, want %q", name, router.Rule, want)
+		}
+	}
+}
+
+// A wildcard host keeps its meaning when a path is mounted on it.
+func TestGenerateTraefikConfigMountedPathOnWildcard(t *testing.T) {
+	cl := testLayer()
+	inspect := inspectWithIP("/api", "172.0.0.11")
+	info := ContainerInfo{Name: "api", VirtualHost: "*.app.loc", VirtualPort: "3000", VirtualPath: "/api"}
+
+	cfg := cl.generateTraefikConfig(inspect, info)
+
+	router, ok := cfg.HTTP.Routers["api-0"]
+	if !ok {
+		t.Fatalf("missing router api-0; got %v", cfg.HTTP.Routers)
+	}
+	if !strings.HasPrefix(router.Rule, "HostRegexp(`") {
+		t.Errorf("rule = %q, want a HostRegexp matcher", router.Rule)
+	}
+	if !strings.HasSuffix(router.Rule, "&& (PathPrefix(`/api/`) || Path(`/api`))") {
+		t.Errorf("rule = %q, want the path matcher appended", router.Rule)
+	}
+}
+
+func TestRecordClaimsDetectsDuplicates(t *testing.T) {
+	cl := testLayer()
+	hosts := []virtualHost{{hostname: "app.loc"}}
+
+	first := ContainerInfo{ID: "aaa", Name: "first"}
+	second := ContainerInfo{ID: "bbb", Name: "second"}
+
+	cl.recordClaims(first, hosts, "/api")
+	if got := cl.claims[routeClaim{host: "app.loc", path: "/api"}].name; got != "first" {
+		t.Fatalf("claim holder = %q, want first", got)
+	}
+
+	// The second container must not take the claim from the first: reporting
+	// the collision is the point, and the holder is what the report names.
+	cl.recordClaims(second, hosts, "/api")
+	if got := cl.claims[routeClaim{host: "app.loc", path: "/api"}].name; got != "first" {
+		t.Errorf("claim holder = %q, want it to stay with first", got)
+	}
+
+	// A different path on the same host is not a collision.
+	cl.recordClaims(second, hosts, "/admin")
+	if got := cl.claims[routeClaim{host: "app.loc", path: "/admin"}].name; got != "second" {
+		t.Errorf("claim holder for /admin = %q, want second", got)
+	}
+}
+
+// A container replacing another on the same route must not report a collision
+// against the container it replaced.
+func TestReleaseClaimsFreesTheRoute(t *testing.T) {
+	cl := testLayer()
+	hosts := []virtualHost{{hostname: "app.loc"}}
+
+	cl.recordClaims(ContainerInfo{ID: "aaa", Name: "first"}, hosts, "/api")
+	cl.releaseClaims("aaa")
+
+	if _, held := cl.claims[routeClaim{host: "app.loc", path: "/api"}]; held {
+		t.Fatal("route is still claimed after the holder was released")
+	}
+
+	cl.recordClaims(ContainerInfo{ID: "bbb", Name: "second"}, hosts, "/api")
+	if got := cl.claims[routeClaim{host: "app.loc", path: "/api"}].name; got != "second" {
+		t.Errorf("claim holder = %q, want second", got)
+	}
+}
+
+// Two containers claiming a bare host collide on the same key as two claiming
+// one path, so the existing single-host case is covered by the same mechanism.
+func TestRecordClaimsCoversBareHosts(t *testing.T) {
+	cl := testLayer()
+	hosts := []virtualHost{{hostname: "app.loc"}}
+
+	cl.recordClaims(ContainerInfo{ID: "aaa", Name: "first"}, hosts, "")
+	cl.recordClaims(ContainerInfo{ID: "bbb", Name: "second"}, hosts, "")
+
+	if got := cl.claims[routeClaim{host: "app.loc"}].name; got != "first" {
+		t.Errorf("claim holder = %q, want it to stay with first", got)
 	}
 }

@@ -64,17 +64,47 @@ services:
     environment:
       - VIRTUAL_HOST=whoami-https.loc # Automatically available on both HTTP and HTTPS
 
-  # Example 7: API with Traefik CORS labels (if needed)
+  # Example 7: API with Traefik CORS labels
+  #
+  # A container carrying any traefik. label is handled by Traefik's Docker
+  # provider, so VIRTUAL_HOST is ignored for it. Once you add a middleware
+  # label you own the routing too: declare both routers and the service.
   whoami-cors:
     image: traefik/whoami:latest
-    environment:
-      - VIRTUAL_HOST=api.loc
     labels:
-      # Example CORS configuration using Traefik labels
+      - "traefik.enable=true"
+      # CORS middleware
       - "traefik.http.middlewares.api-cors.headers.accesscontrolalloworiginlist=*"
       - "traefik.http.middlewares.api-cors.headers.accesscontrolallowmethods=GET,OPTIONS,PUT,POST,DELETE,PATCH"
+      # HTTP router
+      - "traefik.http.routers.api-http.rule=Host(`api.loc`)"
+      - "traefik.http.routers.api-http.entrypoints=http"
       - "traefik.http.routers.api-http.middlewares=api-cors"
+      # HTTPS router
+      - "traefik.http.routers.api-https.rule=Host(`api.loc`)"
+      - "traefik.http.routers.api-https.entrypoints=https"
+      - "traefik.http.routers.api-https.tls=true"
       - "traefik.http.routers.api-https.middlewares=api-cors"
+      - "traefik.http.services.api.loadbalancer.server.port=80"
+
+  # Example 8: two containers sharing one domain, so a page and the API it
+  # calls are on the same origin: no CORS, no preflight, one certificate.
+  #
+  # onehost.loc/      -> whoami-frontend
+  # onehost.loc/api   -> whoami-backend
+  #
+  # Nothing is stripped, so the backend receives /api/... and has to serve that
+  # prefix itself.
+  whoami-frontend:
+    image: traefik/whoami:latest
+    environment:
+      - VIRTUAL_HOST=onehost.loc
+
+  whoami-backend:
+    image: traefik/whoami:latest
+    environment:
+      - VIRTUAL_HOST=onehost.loc
+      - VIRTUAL_PATH=/api
 
 networks:
   default:

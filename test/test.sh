@@ -42,6 +42,10 @@ VIRTUAL_HOST_PORT_CONTAINER="test-virtual-host-port-app"
 MULTI_VIRTUAL_HOST_CONTAINER="test-multi-virtual-host-app"
 ORPHAN_CONTAINER="test-orphan-reconcile-app"
 ONEOFF_CONTAINER="test-oneoff-app"
+PATH_ROOT_CONTAINER="test-path-root-app"
+PATH_MOUNTED_CONTAINER="test-path-mounted-app"
+WILDCARD_CONTAINER="test-wildcard-app"
+WILDCARD_MOUNTED_CONTAINER="test-wildcard-mounted-app"
 
 # Hostname configurations for DNS testing
 TRAEFIK_HOSTNAME="app1.${TEST_DOMAIN}"
@@ -51,6 +55,16 @@ MULTI_VIRTUAL_HOST_HOSTNAME1="app4.${TEST_DOMAIN}"
 MULTI_VIRTUAL_HOST_HOSTNAME2="app5.${TEST_DOMAIN}"
 ORPHAN_HOSTNAME="app6.${TEST_DOMAIN}"
 ONEOFF_HOSTNAME="app7.${TEST_DOMAIN}"
+PATH_HOSTNAME="app8.${TEST_DOMAIN}"
+WILDCARD_HOSTNAME="app9.wild.${TEST_DOMAIN}"
+
+# Bodies that identify which container answered. A mounted path cannot be
+# checked by status code: when its route is missing the request falls through to
+# the container serving the hostname, which answers 200 from the wrong place.
+PATH_ROOT_BODY="body-from-root-container"
+PATH_MOUNTED_BODY="body-from-mounted-container"
+WILDCARD_BODY="body-from-wildcard-container"
+WILDCARD_MOUNTED_BODY="body-from-wildcard-mounted-container"
 
 # Logging function
 log() {
@@ -662,9 +676,166 @@ test_with_dns_config() {
     [ "$passed" -eq "$total" ]
 }
 
+# Serve a fixed body from an nginx container, at the root and under a path, so
+# a response identifies which container produced it. nginx:alpine is used
+# throughout because wait_for_container probes readiness by running curl inside
+# the container, which an image without a shell can never satisfy.
+run_body_container() {
+    local name=$1 body=$2
+    shift 2
+
+    docker run -d --name "$name" \
+        -e "BODY=$body" \
+        "$@" \
+        nginx:alpine sh -c 'mkdir -p /usr/share/nginx/html/api /usr/share/nginx/html/api-docs && \
+            printf "%s" "$BODY" > /usr/share/nginx/html/index.html && \
+            printf "%s" "$BODY" > /usr/share/nginx/html/api/index.html && \
+            printf "%s" "$BODY" > /usr/share/nginx/html/api-docs/index.html && \
+            exec nginx -g "daemon off;"'
+}
+
+# Fetch a URL through the proxy and compare the body against what is expected.
+#
+# Redirects are followed: nginx answers /api with a 301 to /api/ when serving a
+# directory, and that redirect page looks the same from either container, so
+# without -L the assertion could not tell them apart. --resolve rather than a
+# Host header, so the redirect target resolves back through the proxy, and both
+# ports are mapped because the backend does not know the request arrived over
+# TLS and sends its redirect to the http scheme.
+test_body() {
+    local hostname=$1 path=$2 expected=$3 label=$4
+    local max_attempts=10
+    local attempt=1
+    local body=""
+
+    log "Testing ${label}..."
+
+    while [ $attempt -le $max_attempts ]; do
+        body="$(curl -s -L \
+            --resolve "${hostname}:${HTTP_PORT}:127.0.0.1" \
+            --resolve "${hostname}:443:127.0.0.1" \
+            "http://${hostname}${path}" 2>/dev/null || true)"
+        if [ "$body" = "$expected" ]; then
+            success "${label}"
+            return 0
+        fi
+        wait_with_message "$SLEEP_CONFIG_RESTORE" "for routing to settle"
+        attempt=$((attempt + 1))
+    done
+
+    error "${label} (got '${body:-<empty>}', expected '${expected}')"
+    return 1
+}
+
+# The same over HTTPS, so the two schemes cannot diverge unnoticed.
+test_body_https() {
+    local hostname=$1 path=$2 expected=$3 label=$4
+    local max_attempts=10
+    local attempt=1
+    local body=""
+
+    log "Testing ${label}..."
+
+    while [ $attempt -le $max_attempts ]; do
+        body="$(curl -s -k -L \
+            --resolve "${hostname}:443:127.0.0.1" \
+            --resolve "${hostname}:${HTTP_PORT}:127.0.0.1" \
+            "https://${hostname}${path}" 2>/dev/null || true)"
+        if [ "$body" = "$expected" ]; then
+            success "${label}"
+            return 0
+        fi
+        wait_with_message "$SLEEP_CONFIG_RESTORE" "for routing to settle"
+        attempt=$((attempt + 1))
+    done
+
+    error "${label} (got '${body:-<empty>}', expected '${expected}')"
+    return 1
+}
+
+# VIRTUAL_PATH: a container mounted under a path of a hostname another container
+# serves. Every assertion compares bodies, because status codes cannot tell a
+# working path route from a request falling through to the host.
+test_virtual_path_routing() {
+    local passed=0 total=0
+
+    # The root of the shared hostname belongs to the container without a path.
+    total=$((total + 1))
+    test_body "$PATH_HOSTNAME" "/" "$PATH_ROOT_BODY" \
+        "root of ${PATH_HOSTNAME} is served by the host container" && passed=$((passed + 1))
+
+    # The mounted path, and anything beneath it, belongs to the mounted one.
+    total=$((total + 1))
+    test_body "$PATH_HOSTNAME" "/api" "$PATH_MOUNTED_BODY" \
+        "/api is served by the mounted container" && passed=$((passed + 1))
+
+    total=$((total + 1))
+    test_body "$PATH_HOSTNAME" "/api/" "$PATH_MOUNTED_BODY" \
+        "/api/ is served by the mounted container" && passed=$((passed + 1))
+
+    # The regression this feature exists to avoid: PathPrefix alone is a raw
+    # string prefix in Traefik, so /api would also capture /api-docs. Both
+    # containers serve /api-docs, so only the body distinguishes them.
+    total=$((total + 1))
+    test_body "$PATH_HOSTNAME" "/api-docs/" "$PATH_ROOT_BODY" \
+        "/api-docs is not captured by the /api mount" && passed=$((passed + 1))
+
+    # HTTPS must route identically.
+    total=$((total + 1))
+    test_body_https "$PATH_HOSTNAME" "/api/" "$PATH_MOUNTED_BODY" \
+        "/api/ over HTTPS is served by the mounted container" && passed=$((passed + 1))
+
+    total=$((total + 1))
+    test_body_https "$PATH_HOSTNAME" "/" "$PATH_ROOT_BODY" \
+        "root over HTTPS is served by the host container" && passed=$((passed + 1))
+
+    log "VIRTUAL_PATH routing: ${passed}/${total} checks passed"
+    [ "$passed" -eq "$total" ]
+}
+
+# A mounted path must outrank a wildcard that also matches its hostname. Without
+# an explicit priority this depends on which generated rule happens to be the
+# longer string, which is not something to leave to chance.
+test_virtual_path_beats_wildcard() {
+    local passed=0 total=0
+
+    total=$((total + 1))
+    test_body "$WILDCARD_HOSTNAME" "/" "$WILDCARD_BODY" \
+        "root of ${WILDCARD_HOSTNAME} is served by the wildcard container" && passed=$((passed + 1))
+
+    total=$((total + 1))
+    test_body "$WILDCARD_HOSTNAME" "/api" "$WILDCARD_MOUNTED_BODY" \
+        "/api outranks the wildcard covering the same hostname" && passed=$((passed + 1))
+
+    log "VIRTUAL_PATH against a wildcard: ${passed}/${total} checks passed"
+    [ "$passed" -eq "$total" ]
+}
+
+# Stopping the mounted container removes its routes, so its paths fall through
+# to whatever serves the hostname. A deployed ingress behaves the same way, so
+# this is pinned as intended behaviour rather than left to be discovered.
+test_virtual_path_fallthrough() {
+    log "Stopping the mounted container to check the documented fall-through..."
+    docker rm -f "$PATH_MOUNTED_CONTAINER" >/dev/null 2>&1 || true
+    wait_with_message "$SLEEP_PROXY_CONFIG" "for the mounted route to be withdrawn"
+
+    local passed=0 total=0
+
+    total=$((total + 1))
+    test_body "$PATH_HOSTNAME" "/api" "$PATH_ROOT_BODY" \
+        "/api falls through to the host container once the mounted one stops" && passed=$((passed + 1))
+
+    total=$((total + 1))
+    test_body "$PATH_HOSTNAME" "/" "$PATH_ROOT_BODY" \
+        "the host container is unaffected" && passed=$((passed + 1))
+
+    log "VIRTUAL_PATH fall-through: ${passed}/${total} checks passed"
+    [ "$passed" -eq "$total" ]
+}
+
 # Cleanup test containers
 cleanup() {
-    docker rm -f "$TRAEFIK_CONTAINER" "$VIRTUAL_HOST_CONTAINER" "$VIRTUAL_HOST_PORT_CONTAINER" "$MULTI_VIRTUAL_HOST_CONTAINER" "$ORPHAN_CONTAINER" "$ONEOFF_CONTAINER" 2>/dev/null || true
+    docker rm -f "$TRAEFIK_CONTAINER" "$VIRTUAL_HOST_CONTAINER" "$VIRTUAL_HOST_PORT_CONTAINER" "$MULTI_VIRTUAL_HOST_CONTAINER" "$ORPHAN_CONTAINER" "$ONEOFF_CONTAINER" "$PATH_ROOT_CONTAINER" "$PATH_MOUNTED_CONTAINER" "$WILDCARD_CONTAINER" "$WILDCARD_MOUNTED_CONTAINER" 2>/dev/null || true
 }
 
 # Full stack cleanup and rebuild
@@ -716,11 +887,27 @@ main() {
         --env "VIRTUAL_HOST=app4.${TEST_DOMAIN},app5.${TEST_DOMAIN}" \
         --env "VIRTUAL_PORT=80" nginx:alpine
 
+    # Two containers sharing one hostname: the second is mounted under /api.
+    run_body_container "$PATH_ROOT_CONTAINER" "$PATH_ROOT_BODY" \
+        --env "VIRTUAL_HOST=${PATH_HOSTNAME}"
+    run_body_container "$PATH_MOUNTED_CONTAINER" "$PATH_MOUNTED_BODY" \
+        --env "VIRTUAL_HOST=${PATH_HOSTNAME}" --env "VIRTUAL_PATH=/api"
+
+    # A wildcard covering the same hostname, to prove the mount outranks it.
+    run_body_container "$WILDCARD_CONTAINER" "$WILDCARD_BODY" \
+        --env "VIRTUAL_HOST=*.wild.${TEST_DOMAIN}"
+    run_body_container "$WILDCARD_MOUNTED_CONTAINER" "$WILDCARD_MOUNTED_BODY" \
+        --env "VIRTUAL_HOST=${WILDCARD_HOSTNAME}" --env "VIRTUAL_PATH=/api"
+
     # Wait for containers
     wait_for_container "$TRAEFIK_CONTAINER"
     wait_for_container "$VIRTUAL_HOST_CONTAINER"
     wait_for_container "$VIRTUAL_HOST_PORT_CONTAINER"
     wait_for_container "$MULTI_VIRTUAL_HOST_CONTAINER"
+    wait_for_container "$PATH_ROOT_CONTAINER"
+    wait_for_container "$PATH_MOUNTED_CONTAINER"
+    wait_for_container "$WILDCARD_CONTAINER"
+    wait_for_container "$WILDCARD_MOUNTED_CONTAINER"
     wait_with_message "$SLEEP_PROXY_CONFIG" "for proxy configuration to propagate"
 
     # Run tests
@@ -761,6 +948,27 @@ main() {
     local oneoff_passed=0
     test_oneoff_container_ignored && oneoff_passed=1
     [ "$oneoff_passed" -eq 1 ] && passed=$((passed + 1))
+
+    # VIRTUAL_PATH routing (issue #113)
+    log "Testing VIRTUAL_PATH routing..."
+    total=$((total + 1))
+    local vpath_passed=0
+    test_virtual_path_routing && vpath_passed=1
+    [ "$vpath_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing VIRTUAL_PATH against a wildcard host..."
+    total=$((total + 1))
+    local vpath_wildcard_passed=0
+    test_virtual_path_beats_wildcard && vpath_wildcard_passed=1
+    [ "$vpath_wildcard_passed" -eq 1 ] && passed=$((passed + 1))
+
+    # Runs last of the VIRTUAL_PATH suites: it removes the mounted container,
+    # so anything after it would see the hostname without its path.
+    log "Testing VIRTUAL_PATH fall-through when the mounted container stops..."
+    total=$((total + 1))
+    local vpath_fallthrough_passed=0
+    test_virtual_path_fallthrough && vpath_fallthrough_passed=1
+    [ "$vpath_fallthrough_passed" -eq 1 ] && passed=$((passed + 1))
 
     # DNS Tests (if dig available)
     if command -v dig >/dev/null 2>&1; then

@@ -21,7 +21,8 @@ Spark HTTP Proxy is a local development reverse proxy built on Traefik. It consi
 - **`build/`** — Dockerfiles for each service (traefik, prometheus, grafana, services)
 - **`bin/compose.yml`** — Production compose (GHCR pre-built images)
 - **`compose.yml`** — Development compose (builds from source)
-- **`test/`** — Integration tests only (no unit tests exist)
+- **`test/`** — Docker-based integration tests (`test.sh`); unit tests live
+  beside the code in `cmd/` and `pkg/`
 
 ## Architecture: the big picture
 
@@ -36,10 +37,13 @@ and surround it. Understanding their interaction requires reading across `cmd/`,
    container unless explicitly opted in via `traefik.*` labels or a generated
    dynamic-config file. Ports 80/443 public, 30000→8080 dashboard.
 2. **`dinghy_layer`** (`cmd/dinghy-layer`) — the compatibility translator.
-   Watches Docker events, reads `VIRTUAL_HOST`/`VIRTUAL_PORT` env vars on
-   containers, and **writes Traefik dynamic YAML config files** into the shared
-   `traefik_dynamic` volume. This is how nginx-proxy/jwilder-style containers
-   work without native Traefik labels.
+   Watches Docker events, reads `VIRTUAL_HOST`/`VIRTUAL_PORT`/`VIRTUAL_PATH`
+   env vars on containers, and **writes Traefik dynamic YAML config files** into
+   the shared `traefik_dynamic` volume. This is how nginx-proxy/jwilder-style
+   containers work without native Traefik labels. `VIRTUAL_PATH` mounts a
+   container under a path of its `VIRTUAL_HOST`, so two containers can share one
+   domain; those routers carry an explicit `priority` while host-only routers
+   deliberately do not, keeping their existing rule-length ordering untouched.
 3. **`join_networks`** (`cmd/join-networks`) — the connectivity glue. Traefik
    can only route to containers on networks it has joined. This watches Docker
    events and **connects the `http-proxy` container to any Docker network that
@@ -83,9 +87,15 @@ are selected at runtime by their `command:` in compose.
 
 Runtime behaviour is driven by env vars (mostly `HTTP_PROXY_DNS_*` and
 `LOG_LEVEL`), defaulted in `pkg/config/config.go` and wired through
-`compose.yml`. Per-container routing is driven by `VIRTUAL_HOST`/`VIRTUAL_PORT`
-or `traefik.*` labels. When adding an env var, update `pkg/config/config.go`,
-`compose.yml`, `README.md`, and `examples/applications.yml` together.
+`compose.yml`. Per-container routing is driven by
+`VIRTUAL_HOST`/`VIRTUAL_PORT`/`VIRTUAL_PATH` or `traefik.*` labels. When adding
+an env var, update `pkg/config/config.go`, `compose.yml`, `README.md`, and
+`examples/applications.yml` together.
+
+Note that **any** `traefik.` label on a container makes `dinghy_layer` skip it
+entirely, `VIRTUAL_HOST` included. That is intentional (native labels win) but
+easy to trip over by adding a middleware label alone, so the layer now warns
+when it happens.
 
 ## Build Commands
 
@@ -107,14 +117,19 @@ rm -f cmd/dns-server/dns-server cmd/dinghy-layer/dinghy-layer cmd/join-networks/
 
 ## Test Commands
 
-There are **no unit tests**. All tests are Docker-based integration tests.
+Two suites. Unit tests sit beside the code as `_test.go` files; the integration
+suite is a single shell script that runs the real stack in Docker.
 
 ```bash
-make test                       # Full rebuild + integration tests
-./test/test.sh --no-rebuild     # Run tests against an already-running stack (faster)
+go test ./...                   # Unit tests — fast, no Docker
+make test                       # Full rebuild + integration tests (NOT unit tests)
+./test/test.sh --no-rebuild     # Run integration tests against a running stack (faster)
 ./test/test.sh --help           # Show test options
 docker compose config           # Validate compose file syntax
 ```
+
+`make test` runs the integration suite only, so run `go test ./...` as well
+before pushing. CI runs both.
 
 Tests require:
 
