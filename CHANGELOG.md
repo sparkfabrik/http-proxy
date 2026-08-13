@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `self-test` no longer aborts on the first failed check. Its probes returned non-zero from inside a command substitution, which under `set -e` ended the script before it could report which check failed or remove the containers it had started ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
 - Fix the CORS example in `examples/applications.yml`, which could never have worked: its `traefik.` middleware label made the layer skip the container, so its `VIRTUAL_HOST` was ignored and no route existed. It now declares its routers as labels too ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
 - Correct `AGENTS.md`, which stated that the repository has no unit tests and that `make test` is the verification step. Unit tests exist beside the code, and `make test` runs only the integration suite ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
 - Ignore one-off containers created by `docker compose run` (labelled `com.docker.compose.oneoff=True`) in `dinghy-layer` and `join-networks`; they inherit `VIRTUAL_HOST` from the service definition and could claim the service domain with a backend port nothing listens on, returning `502` ([#111](https://github.com/sparkfabrik/http-proxy/issues/111))

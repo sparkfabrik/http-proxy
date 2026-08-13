@@ -662,8 +662,10 @@ self_test_http_probe() {
     sleep 2
   done
 
+  # Always succeeds, for the same reason as the body probe below: a non-zero
+  # return inside the caller's command substitution would abort the self-test
+  # under set -e instead of letting it report which check failed.
   echo "${code}"
-  return 1
 }
 
 # Poll a URL until it returns the expected body, or attempts run out.
@@ -678,7 +680,10 @@ self_test_body_probe() {
   local body=""
 
   for _ in $(seq 1 15); do
-    body="$(curl ${extra} -s \
+    # -L because a backend serving a directory answers the bare path with a
+    # redirect to the trailing-slash form, and that redirect page looks the
+    # same whichever container produced it.
+    body="$(curl ${extra} -s -L \
       --resolve "${host}:${port}:127.0.0.1" --max-time 5 \
       "${scheme}://${host}${path}" 2>/dev/null || true)"
     if [[ "${body}" == *"${expected}"* ]]; then
@@ -688,8 +693,10 @@ self_test_body_probe() {
     sleep 2
   done
 
+  # Always succeeds: the caller assigns this in a command substitution, and
+  # under set -e a non-zero return there would abort the whole self-test before
+  # it could report the failure or clean up its containers.
   echo "${body}"
-  return 1
 }
 
 # Self-test: end-to-end check that the proxy actually routes a container.

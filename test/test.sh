@@ -695,6 +695,11 @@ run_body_container() {
 }
 
 # Fetch a URL through the proxy and compare the body against what is expected.
+#
+# Redirects are followed: nginx answers /api with a 301 to /api/ when serving a
+# directory, and that redirect page looks the same from either container, so
+# without -L the assertion could not tell them apart. --resolve rather than a
+# Host header, so the redirect target resolves back through the proxy.
 test_body() {
     local hostname=$1 path=$2 expected=$3 label=$4
     local max_attempts=10
@@ -704,7 +709,7 @@ test_body() {
     log "Testing ${label}..."
 
     while [ $attempt -le $max_attempts ]; do
-        body="$(curl -s -H "Host: ${hostname}" "http://localhost:${HTTP_PORT}${path}" 2>/dev/null || true)"
+        body="$(curl -s -L --resolve "${hostname}:${HTTP_PORT}:127.0.0.1" "http://${hostname}${path}" 2>/dev/null || true)"
         if [ "$body" = "$expected" ]; then
             success "${label}"
             return 0
@@ -727,7 +732,7 @@ test_body_https() {
     log "Testing ${label}..."
 
     while [ $attempt -le $max_attempts ]; do
-        body="$(curl -s -k --resolve "${hostname}:443:127.0.0.1" "https://${hostname}${path}" 2>/dev/null || true)"
+        body="$(curl -s -k -L --resolve "${hostname}:443:127.0.0.1" "https://${hostname}${path}" 2>/dev/null || true)"
         if [ "$body" = "$expected" ]; then
             success "${label}"
             return 0
