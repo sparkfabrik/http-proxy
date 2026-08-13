@@ -795,7 +795,7 @@ run_self_test() {
 
   # 7. The same over HTTPS, so the two schemes cannot diverge unnoticed
   log_info "Testing VIRTUAL_PATH routing over HTTPS..."
-  https_path_body="$(self_test_body_probe https "${test_domain}" 443 "-k" "/self-test" "${path_marker}")"
+  https_path_body="$(self_test_body_probe https "${test_domain}" 443 "-k" "/self-test/" "${path_marker}")"
   if [[ "${https_path_body}" == "${path_marker}" ]]; then
     log_success "Path route works over HTTPS"
   else
