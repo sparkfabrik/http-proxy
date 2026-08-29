@@ -1,11 +1,5 @@
 // Package tailscale reads the machines of a tailnet from the status document
-// the local Tailscale daemon produces, and reduces it to the machines that may
-// be probed for routes.
-//
-// A source decides only how the document is obtained. The filter below runs
-// over every document whatever its transport, so the restriction to the user's
-// own machines cannot depend on the platform. This package reads no
-// environment, so no setting reaches that filter either.
+// the local Tailscale daemon produces. It reads no environment.
 package tailscale
 
 import (
@@ -27,21 +21,13 @@ const (
 
 // Peer is a machine found on the tailnet.
 type Peer struct {
-	// ID is the node key the status document keys the machine by. Tailscale
-	// does not make hostnames unique, and a tailnet routinely carries several
-	// machines called the same thing, so identity is the key and the hostname
-	// is only a label.
+	// ID is the node key, unique where the hostname is not.
 	ID string
-	// Name is the Tailscale hostname. It is the first ordering key when two
-	// machines serve the same hostname, so every machine reaches the same
-	// conclusion; ID breaks the tie when the names are equal too.
+	// Name is the Tailscale hostname, and orders two machines claiming one host.
 	Name string
 	// Address is the peer's IPv4 tailnet address.
 	Address string
-	// SkipReason is empty for a machine that may be probed, and otherwise says
-	// why it is not. Excluded machines are kept rather than dropped so the
-	// command line can explain a machine that contributed nothing; a machine
-	// carrying a reason is never probed.
+	// SkipReason says why a machine is not probed, and is empty when it may be.
 	SkipReason string
 }
 
@@ -64,15 +50,12 @@ type Status struct {
 	Self *node            `json:"Self"`
 	Peer map[string]*node `json:"Peer"`
 
-	// UpdatedAt is when the document was produced, which a source sets. The
-	// document itself does not say, and how old it is decides whether it can
-	// still be trusted, so the source that obtained it is what knows.
+	// UpdatedAt is when the document was produced, set by the source: the
+	// document itself does not say.
 	UpdatedAt time.Time `json:"-"`
 }
 
-// ParseStatus decodes a status document. A document without a self node is
-// rejected: the user it names is the other half of the ownership test, and
-// without it no machine can be accepted.
+// ParseStatus decodes a status document, rejecting one without a self node.
 func ParseStatus(r io.Reader) (*Status, error) {
 	var status Status
 	if err := json.NewDecoder(r).Decode(&status); err != nil {
@@ -85,20 +68,14 @@ func ParseStatus(r io.Reader) (*Status, error) {
 }
 
 // Peers returns the machines of the tailnet other than this one, sorted by
-// hostname. Only machines that are online and belong to the same user as this
-// one are probeable; the rest carry a skip reason.
-//
-// The same-user test is the trust boundary of peer routing. It is applied here,
-// in the one place holding both user identities, for every source.
+// hostname, marking as probeable the online ones belonging to the same user.
 func (s *Status) Peers() []Peer {
 	peers := make([]Peer, 0, len(s.Peer))
 	for id, n := range s.Peer {
 		if n == nil {
 			continue
 		}
-		// This machine is excluded by address rather than by hostname: another
-		// machine may legitimately carry the same hostname, and dropping it
-		// would lose its routes silently.
+		// By address, since another machine may share this one's hostname.
 		if sharesAddress(n.TailscaleIPs, s.Self.TailscaleIPs) {
 			continue
 		}
@@ -116,9 +93,7 @@ func (s *Status) Peers() []Peer {
 	return peers
 }
 
-// skipReason returns why a machine is not probed, or an empty string when it
-// is. The user test comes first: another user's machine is excluded whatever
-// else is true of it.
+// skipReason returns why a machine is not probed, or an empty string.
 func skipReason(n *node, self *node) string {
 	if n.UserID != self.UserID {
 		return SkipOtherUser
@@ -132,8 +107,7 @@ func skipReason(n *node, self *node) string {
 	return ""
 }
 
-// sharesAddress reports whether two nodes hold any tailnet address in common,
-// which on a tailnet means they are the same machine.
+// sharesAddress reports whether two nodes are the same machine.
 func sharesAddress(addresses, others []string) bool {
 	for _, address := range addresses {
 		if slices.Contains(others, address) {
@@ -143,8 +117,7 @@ func sharesAddress(addresses, others []string) bool {
 	return false
 }
 
-// firstIPv4 returns the first IPv4 address of a node. The hop is a plain HTTP
-// request to a literal address, and an IPv4 literal needs no bracketing.
+// firstIPv4 returns the first IPv4 address of a node.
 func firstIPv4(addresses []string) string {
 	for _, raw := range addresses {
 		addr, err := netip.ParseAddr(raw)

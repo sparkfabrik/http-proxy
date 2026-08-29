@@ -52,17 +52,13 @@ TAILSCALE_STATE_FILE="${STATE_DIR}/tailscale-peers.json"
 TAILSCALE_RENDERED_FILE="${STATE_DIR}/tailscale-peers.txt"
 TAILSCALE_SOCKET_OVERRIDE="$(dirname "${COMPOSE_FILE}")/compose.tailscale-socket.yml"
 
-# The compose invocation, as an argument list rather than as COMPOSE_FILE.
-# Compose reads that variable as a list separated by ":", and every call site
-# also passes it with -f, so a second path cannot go in there.
+# Compose reads COMPOSE_FILE as a ":"-separated list, so extra files go here.
 COMPOSE_FILES=("-f" "${COMPOSE_FILE}")
 
 if [[ "${TAILSCALE_ENABLED}" == "true" ]]; then
   export COMPOSE_PROFILES="${COMPOSE_PROFILES:+${COMPOSE_PROFILES},}tailscale"
 
-  # The socket mount lives in its own file, so a platform whose daemon exposes
-  # no socket runs with the mount absent rather than pointed at something that
-  # is not one.
+  # The socket mount lives in its own file, absent on a platform without one.
   if [[ "${TAILSCALE_SOURCE}" == "socket" ]]; then
     if [[ -f "${TAILSCALE_SOCKET_OVERRIDE}" ]]; then
       COMPOSE_FILES+=("-f" "${TAILSCALE_SOCKET_OVERRIDE}")
@@ -705,18 +701,13 @@ open_prometheus() {
 
 # Tailnet peer routing ------------------------------------------------------
 
-# Create the directory holding the tailnet status document and the peer report.
-# It is a trust input rather than a scratch area: the document in it decides
-# which machines traffic is forwarded to, so it is readable and writable by its
-# owner alone.
+# Creates the state directory, owner only.
 ensure_state_dir() {
   mkdir -p "${STATE_DIR}"
   chmod 700 "${STATE_DIR}"
 }
 
-# Resolve the Tailscale command-line client. On macOS the client ships inside
-# the application bundle and is not on PATH, which is the normal case there
-# rather than an unusual one.
+# Resolves the Tailscale client from PATH, then from the macOS bundle.
 resolve_tailscale_client() {
   local bundled="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
 
@@ -733,11 +724,7 @@ resolve_tailscale_client() {
   return 1
 }
 
-# Write the tailnet status document the file source reads.
-#
-# Written through a temporary file and a rename, so the service never reads a
-# half-written document, and so the rename gives it a fresh modification time,
-# which is what the service judges staleness by.
+# Writes the tailnet status document the file source reads, through a rename.
 write_tailscale_status() {
   local client temp
 
@@ -762,7 +749,7 @@ write_tailscale_status() {
   log_success "Tailnet status written to ${TAILSCALE_STATUS_FILE}"
 }
 
-# Refresh the status document when the source needs the host to produce it.
+# Writes the status document when the source is the host-written file.
 refresh_tailscale_status_if_needed() {
   if [[ "${TAILSCALE_ENABLED}" != "true" || "${TAILSCALE_SOURCE}" != "file" ]]; then
     return 0
@@ -772,14 +759,12 @@ refresh_tailscale_status_if_needed() {
   write_tailscale_status || log_warning "Peer discovery will report the status document as missing"
 }
 
-# Start the proxy with peer routing on. The variable stays the mechanism, this
-# is the interface, the same way start-with-metrics fronts the metrics profile.
+# Starts the proxy with peer routing on.
 start_with_tailscale() {
     export HTTP_PROXY_TAILSCALE_ENABLED=true
     TAILSCALE_ENABLED=true
 
-    # The configuration block at the top already did this when the variable was
-    # exported by the caller, so both appends are guarded rather than repeated.
+    # Guarded: the block at the top already did this when the caller exported it.
     if [[ ",${COMPOSE_PROFILES:-}," != *",tailscale,"* ]]; then
         COMPOSE_PROFILES="${COMPOSE_PROFILES:+${COMPOSE_PROFILES},}tailscale"
         export COMPOSE_PROFILES
@@ -801,12 +786,7 @@ start_with_tailscale() {
     recreate_stack "false"
 }
 
-# Stop peer routing alone, leaving the rest of the proxy serving.
-#
-# Unlike stopping the metrics stack, which only removes dashboards, this changes
-# what the proxy answers, so no forwarded hostname may stay reachable afterwards.
-# The service withdraws its own routes as it shuts down, and the files are
-# removed here as well for the case where it was already gone.
+# Stops peer routing alone and removes every forwarded hostname.
 stop_tailscale() {
     log_info "Stopping tailnet peer routing..."
     dc_tailscale stop tailscale_peers >/dev/null 2>&1 || true
@@ -820,11 +800,7 @@ stop_tailscale() {
     log_info "No hostname is forwarded to another machine until it is started again"
 }
 
-# Show what the proxy found on its most recent discovery cycle.
-#
-# It reports rather than discovers: the service writes both the state file and
-# its rendered form, and this prints what the proxy actually acted on. Reading a
-# file also means it still answers when the stack is stopped.
+# Prints the report the service wrote for its most recent discovery cycle.
 show_tailscale_peers() {
   local as_json="${1:-false}"
 
@@ -857,9 +833,7 @@ show_tailscale_peers() {
     log_warning "The proxy is not running, so this is the last recorded cycle and not the current state"
     echo ""
   elif [[ -n "$(find "${report}" -mmin +1 2>/dev/null)" ]]; then
-    # The proxy is up but the report has not been rewritten in a while, which
-    # means discovery stopped rather than found nothing. Said out loud, because
-    # a stale report is indistinguishable from a current one at a glance.
+    # The proxy is up but discovery has not written in a while.
     log_warning "This report is more than a minute old, so discovery may have stopped"
     echo "   Check the service with: ${0} logs tailscale_peers"
     echo ""
@@ -868,9 +842,7 @@ show_tailscale_peers() {
   cat "${report}"
 }
 
-# One line for the status command, pointing at the detail rather than repeating
-# it. The summary comes from the report the service already rendered, so this
-# never has to parse the state file or disagree with it.
+# Prints one summary line for the status command.
 show_tailscale_summary() {
   local summary
 
@@ -1300,6 +1272,7 @@ start)
   configure_system_dns
   ;;
 restart)
+  ensure_state_dir
   if ! is_running http-proxy; then
     log_info "HTTP Proxy is not running, starting it..."
     if is_running prometheus; then
@@ -1396,6 +1369,7 @@ generate-mkcert) generate_mkcert "${2}" ;;
 list-certs) list_certs ;;
 remove-cert) remove_cert "${@:2}" ;;
 upgrade)
+  ensure_state_dir
   ensure_running
   log_info "Upgrading HTTP Proxy images..."
   if is_running prometheus; then

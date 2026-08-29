@@ -7,12 +7,8 @@ import (
 	"time"
 )
 
-// Render turns a cycle into the table the command line shows.
-//
-// The service renders it rather than the command parsing the state file,
-// because a formatter in the shell would be a second implementation of what a
-// peer contributed and could disagree with the one that acted. It also keeps
-// the command free of a JSON parser, which is not a dependency this project has.
+// Render turns a cycle into the table the command line shows. Rendered here so
+// the command cannot disagree with what the proxy acted on.
 func (r *Report) Render() string {
 	var b strings.Builder
 
@@ -24,8 +20,7 @@ func (r *Report) Render() string {
 	b.WriteString("\n\n")
 
 	if r.SourceError != "" {
-		// Said before the table, because an empty table after a daemon blip
-		// reads like a fault rather than like a source that stopped answering.
+		// Before the table: an empty table alone reads like a fault.
 		fmt.Fprintf(&b, "No machines were considered: the tailnet status could not be read (%s).\n", r.SourceError)
 		fmt.Fprintf(&b, "This is the status source failing, not an empty tailnet. It is retried every %s.\n", r.RefreshInterval)
 		return b.String()
@@ -61,9 +56,7 @@ func (r *Report) Render() string {
 	return b.String()
 }
 
-// rejectedRules lists the rules refused this cycle, named by the machine that
-// offered them. A refusal is a misconfiguration on the other machine, so it has
-// to be visible rather than silent.
+// rejectedRules lists the rules refused this cycle and who offered them.
 func rejectedRules(peers []PeerReport) []string {
 	var lines []string
 	for _, peer := range peers {
@@ -110,12 +103,9 @@ func writeRow(b *strings.Builder, row [4]string, widths [4]int) {
 	b.WriteString("\n")
 }
 
-// peerDetail is what a machine contributed, or why it contributed nothing.
-//
-// A retry is shown as the wait rather than as an absolute time. An absolute one
-// printed to the second sits beside a cycle timestamp rounded the same way, so a
-// short wait renders as the same instant as the cycle that scheduled it and
-// reads as though the backoff were not advancing.
+// peerDetail is what a machine contributed, or why it contributed nothing. A
+// retry shows the wait: an absolute time beside the cycle timestamp, both
+// rounded to the second, reads as though the backoff were not advancing.
 func peerDetail(peer PeerReport, cycle time.Time) string {
 	if len(peer.Hosts) > 0 {
 		return strings.Join(peer.Hosts, ", ")
@@ -131,10 +121,8 @@ func peerDetail(peer PeerReport, cycle time.Time) string {
 	return detail
 }
 
-// compactReason shortens a probe failure for the table. A Go transport error
-// carries the whole request URL, which is three quarters of a line of noise
-// repeated once per machine, and on a tailnet most machines fail. The state
-// file keeps the full text for anyone who needs it.
+// compactReason shortens a probe failure for the table. The state file keeps
+// the full text.
 func compactReason(reason string) string {
 	for _, known := range []string{
 		"connection refused",
@@ -156,9 +144,8 @@ func compactReason(reason string) string {
 	return reason
 }
 
-// renderSummary keeps a tailnet full of phones, routers and televisions from
-// reading as a fault: on a real tailnet most machines run no proxy, and that is
-// the ordinary case rather than an error to investigate.
+// renderSummary keeps a tailnet full of phones and routers from reading as a
+// fault: most machines running no proxy is the ordinary case.
 func renderSummary(peers []PeerReport) string {
 	var forwarding, hostnames, noProxy, undeclared, unreachable, skipped int
 	for _, peer := range peers {
@@ -205,8 +192,7 @@ func plural(count int, noun string) string {
 	return fmt.Sprintf("%d %ss", count, noun)
 }
 
-// renderedStateFile is the state file's rendered twin, written beside it so the
-// command line can show a cycle without parsing anything.
+// renderedStateFile is the state file's rendered twin, written beside it.
 func renderedStateFile(stateFile string) string {
 	return strings.TrimSuffix(stateFile, filepath.Ext(stateFile)) + ".txt"
 }

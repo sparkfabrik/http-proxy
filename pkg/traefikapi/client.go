@@ -22,29 +22,17 @@ const RoutersPath = "/api/http/routers"
 // which is where a proxy's declaration of itself is found.
 const MiddlewaresPath = "/api/http/middlewares"
 
-// ProxyDeclarationName is the middleware every Spark HTTP Proxy publishes to
-// say what it is. Port 30000 identifies a Traefik, not this proxy, and a tailnet
-// may carry an unrelated Traefik with its dashboard exposed, whose routes must
-// never be adopted. The declaration is what separates the two.
-//
-// A middleware is the right shape for it because it is inert: Traefik applies
-// one only where a router references it, so a declaration no router references
-// changes nothing on the machine that makes it.
+// ProxyDeclarationName is the middleware a proxy publishes to say what it is.
+// Port 30000 identifies a Traefik, not this proxy.
 const ProxyDeclarationName = "spark-http-proxy"
 
-// PeerRouterPrefix names the routers generated for tailnet peers. A machine
-// offers only the routes it serves itself, so routers carrying this prefix are
-// skipped when reading a routing table: without it two machines that both
-// forward a hostname would forward it to each other indefinitely.
-//
-// The same prefix names the generated files and the Traefik services, so the
-// loop guard, the file ownership and the entrypoint's cleanup all move together.
+// PeerRouterPrefix marks a forwarded router, so it is not offered onward. It
+// also names the generated files and the entrypoint's cleanup glob: all three
+// move together.
 const PeerRouterPrefix = "tailscale-peer-"
 
-// ErrUnreachable reports a machine that did not answer on the API port at all,
-// as opposed to one that answered with something that is not a routing table.
-// Most devices on a tailnet run no proxy, so the two outcomes are worth telling
-// apart when reporting why a machine contributed nothing.
+// ErrUnreachable reports a machine that did not answer at all, as opposed to
+// one that answered with something else.
 var ErrUnreachable = errors.New("machine did not answer")
 
 // ErrUndeclared reports a machine answering as a Traefik that does not declare
@@ -68,9 +56,8 @@ type Middleware struct {
 	Status   string `json:"status"`
 }
 
-// Host is a hostname a rule claims. A regular expression host is kept as its
-// pattern text and flagged, so a caller can test it against the hostnames it
-// serves itself rather than comparing two strings that never match.
+// Host is a hostname a rule claims. A pattern is flagged, since it has to be
+// matched against hostnames rather than compared to them.
 type Host struct {
 	Value    string
 	IsRegexp bool
@@ -85,8 +72,6 @@ type Route struct {
 }
 
 // MaxHostPatternLength bounds a peer-supplied pattern before it is compiled.
-// Go's regexp is RE2, so a pattern cannot backtrack catastrophically, but an
-// absurd one is refused rather than compiled.
 const MaxHostPatternLength = 512
 
 // Client reads the routing table of one proxy.
@@ -100,16 +85,13 @@ func New(httpClient *http.Client, baseURL string) *Client {
 	return &Client{httpClient: httpClient, baseURL: baseURL}
 }
 
-// NewWithTimeout returns a client with its own HTTP client. Most devices on a
-// tailnet do not run the proxy, so failing fast is the common path.
+// NewWithTimeout returns a client with its own HTTP client.
 func NewWithTimeout(baseURL string, timeout time.Duration) *Client {
 	return New(&http.Client{Timeout: timeout}, baseURL)
 }
 
-// Declares reports whether the machine says it is this proxy.
-//
-// It is asked before the routing table, so a machine that is not this proxy
-// costs one request rather than two.
+// Declares reports whether the machine says it is this proxy. Asked before the
+// routing table, so a machine that is not costs one request.
 func (c *Client) Declares(ctx context.Context) (bool, error) {
 	var middlewares []Middleware
 	if err := c.get(ctx, MiddlewaresPath, &middlewares); err != nil {
@@ -125,8 +107,7 @@ func (c *Client) Declares(ctx context.Context) (bool, error) {
 	return false, nil
 }
 
-// Routers returns the HTTP routers the proxy reports, sorted by name so a
-// caller sees the same order on every poll.
+// Routers returns the HTTP routers the proxy reports, sorted by name.
 func (c *Client) Routers(ctx context.Context) ([]Router, error) {
 	var routers []Router
 	if err := c.get(ctx, RoutersPath, &routers); err != nil {
@@ -137,9 +118,7 @@ func (c *Client) Routers(ctx context.Context) ([]Router, error) {
 	return routers, nil
 }
 
-// get decodes one API endpoint into out. A machine that does not answer at all
-// is reported apart from one that answers with something else, because most
-// devices on a tailnet run no proxy and that is not a fault.
+// get decodes one API endpoint into out.
 func (c *Client) get(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
@@ -166,27 +145,13 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 // forwarding, and the rules that were refused.
 type Result struct {
 	Routes []Route
-	// Rejected holds rules that named a hostname but were not safely
-	// constrained, so a caller can say what it refused rather than dropping it
-	// silently. A rule we cannot be confident about is exactly the one not to
-	// copy.
+	// Rejected holds rules refused for not being host-constrained.
 	Rejected []string
 }
 
-// Routes keeps the routers that name a hostname a machine serves itself.
-//
-// Routers are dropped when they are disabled, when they belong to the proxy's
-// own dashboard and API, when they carry the peer prefix, when they are the
-// HTTPS half of a pair the proxy emits once per entrypoint, and when their
-// rule matches no hostname at all.
-//
-// A rule that survives all that is still refused unless every one of its
-// top-level alternatives is constrained by a hostname. The rule is copied into
-// a local router verbatim, so an unconstrained alternative such as
-// Host(`peer.loc`) || PathPrefix(`/`) would match every request this machine
-// receives, and local precedence could not save it: the hostname extraction
-// sees only `peer.loc`, so the route that shadows every local container would
-// never be recognised as a collision.
+// Routes keeps the routers naming a hostname the machine serves itself, and
+// refuses any rule not bounded by a hostname: the rule is copied verbatim, so
+// an unbounded alternative would match every request this machine receives.
 func Routes(routers []Router) Result {
 	result := Result{Routes: make([]Route, 0, len(routers))}
 
@@ -217,15 +182,9 @@ func Routes(routers []Router) Result {
 	return result
 }
 
-// hostConstrained reports whether a rule is bounded by a hostname on every path
-// through it.
-//
-// The rule is parsed rather than scanned, because the shape that matters can sit
-// at any depth: (Host(`a.loc`) || PathPrefix(`/`)) is one top-level branch
-// containing a host, and its unconstrained alternative would still match every
-// request. An alternation is bounded only when every branch is bounded; a
-// conjunction is bounded when any branch is, since one host matcher narrows the
-// whole conjunction. A negated matcher bounds nothing.
+// hostConstrained reports whether a hostname bounds every path through a rule.
+// Parsed rather than scanned, because an unbounded alternative can sit at any
+// depth.
 func hostConstrained(rule string) bool {
 	parser := &ruleParser{rule: rule}
 
@@ -241,15 +200,14 @@ func hostConstrained(rule string) bool {
 	return constrained
 }
 
-// ruleParser is a recursive descent parser over Traefik's rule syntax. It does
-// not build a tree: the only question asked of a rule is whether every path
-// through it is bounded by a hostname, so each production answers that directly.
+// ruleParser answers one question about a rule, so each production returns
+// whether its subtree is host-bounded rather than building a tree.
 type ruleParser struct {
 	rule string
 	pos  int
 }
 
-// parseAlternation handles ||, which is bounded only when every branch is.
+// parseAlternation handles ||: bounded only when every branch is.
 func (p *ruleParser) parseAlternation() (bool, bool) {
 	constrained, ok := p.parseConjunction()
 	if !ok {
@@ -266,8 +224,7 @@ func (p *ruleParser) parseAlternation() (bool, bool) {
 	return constrained, true
 }
 
-// parseConjunction handles &&, which is bounded when any branch is: one host
-// matcher narrows everything it is combined with.
+// parseConjunction handles &&: bounded when any branch is.
 func (p *ruleParser) parseConjunction() (bool, bool) {
 	constrained, ok := p.parseMatcher()
 	if !ok {
@@ -284,8 +241,7 @@ func (p *ruleParser) parseConjunction() (bool, bool) {
 	return constrained, true
 }
 
-// parseMatcher handles a parenthesised group or a single matcher, either of
-// which may be negated. A negation bounds nothing, whatever it wraps.
+// parseMatcher handles a group or a matcher. A negation bounds nothing.
 func (p *ruleParser) parseMatcher() (bool, bool) {
 	p.skipSpace()
 
@@ -337,8 +293,7 @@ func (p *ruleParser) readName() string {
 	return p.rule[start:p.pos]
 }
 
-// readArguments consumes a matcher's argument list, which may contain
-// parentheses inside its backticked arguments.
+// readArguments consumes an argument list, parentheses inside backticks included.
 func (p *ruleParser) readArguments() bool {
 	if p.pos >= len(p.rule) || p.rule[p.pos] != '(' {
 		return false
@@ -362,10 +317,8 @@ func (p *ruleParser) skipSpace() {
 // backticks, and a single matcher can carry several.
 var backtickedPattern = regexp.MustCompile("`([^`]*)`")
 
-// ExtractHosts returns the hostnames a rule claims, in the order they appear.
-// A regular expression hostname is returned as its pattern text: comparing
-// patterns catches two machines using the same wildcard, which is the
-// collision worth reporting.
+// ExtractHosts returns the hostnames a rule claims, in the order they appear,
+// a regular expression one as its pattern text.
 func ExtractHosts(rule string) []Host {
 	var hosts []Host
 	for _, matcher := range hostMatchers(rule) {
@@ -385,13 +338,8 @@ type hostMatcherRef struct {
 	isRegexp  bool
 }
 
-// hostMatchers returns every Host and HostRegexp matcher in a rule, with the
-// argument text of each.
-//
-// The arguments are scanned rather than matched with an expression, because a
-// regular expression hostname may itself contain a parenthesis: the rule
-// HostRegexp(`^(a|b)\.loc$`) is produced by any container whose VIRTUAL_HOST is
-// a `~`-prefixed pattern, and stopping at the first `)` would truncate it.
+// hostMatchers returns every Host and HostRegexp matcher with its argument
+// text. Scanned rather than matched, since a pattern may contain a parenthesis.
 func hostMatchers(rule string) []hostMatcherRef {
 	var matchers []hostMatcherRef
 
@@ -408,10 +356,7 @@ func hostMatchers(rule string) []hostMatcherRef {
 			continue
 		}
 
-		// A negated matcher serves everything except that hostname, so it is
-		// not a claim on it. The rule is still copied whole, so routing is
-		// unaffected; only ownership would be, by recording a machine as
-		// serving the one hostname it does not.
+		// A negated matcher claims nothing: it serves everything except that name.
 		if isNegated(rule, index) {
 			continue
 		}
@@ -459,8 +404,7 @@ func closingParenthesis(rule string, from int) int {
 	return -1
 }
 
-// isNegated reports whether the matcher at index is preceded by the negation
-// operator, ignoring the whitespace Traefik allows between the two.
+// isNegated reports whether the matcher at index is preceded by !.
 func isNegated(rule string, index int) bool {
 	for i := index - 1; i >= 0; i-- {
 		switch rule[i] {

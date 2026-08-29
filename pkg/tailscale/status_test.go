@@ -44,11 +44,7 @@ func TestPeersClassifiesAndSorts(t *testing.T) {
 	}
 }
 
-// TestAnotherUserIsExcludedWhateverIsConfigured guards the trust boundary of
-// peer routing. The filter is deliberately out of reach of configuration: this
-// package reads no environment, so setting everything the service understands
-// changes nothing here. A future setting that reached this filter would fail
-// this test rather than quietly widening who may be probed.
+// The filter is out of reach of configuration: this package reads no environment.
 func TestAnotherUserIsExcludedWhateverIsConfigured(t *testing.T) {
 	for _, key := range []string{
 		"HTTP_PROXY_TAILSCALE_ENABLED",
@@ -75,9 +71,7 @@ func TestAnotherUserIsExcludedWhateverIsConfigured(t *testing.T) {
 	}
 }
 
-// Tailscale does not make hostnames unique, so a machine sharing this one's
-// hostname is a real machine with its own routes, and only an address it holds
-// identifies this machine itself.
+// Only an address identifies this machine; a hostname may be shared.
 func TestSelfIsExcludedByAddressNotByHostname(t *testing.T) {
 	peers := parseTestStatus(t, tailnetStatus).Peers()
 
@@ -98,8 +92,7 @@ func TestSelfIsExcludedByAddressNotByHostname(t *testing.T) {
 	}
 }
 
-// Two machines with one hostname keep separate identities, and their order is
-// fixed rather than depending on how the document decoded.
+// Two machines with one hostname keep separate identities, in a fixed order.
 func TestDuplicateHostnamesKeepTheirIdentities(t *testing.T) {
 	const document = `{
   "Self": {"HostName": "machine-a", "Online": true, "UserID": 1, "TailscaleIPs": ["100.64.0.1"]},

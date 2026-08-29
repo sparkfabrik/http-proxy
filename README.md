@@ -1000,6 +1000,8 @@ are polled. The command
 finds the Tailscale client on `PATH` first and inside the application bundle
 second, which is where it lives on macOS.
 
+`spark-http-proxy` creates that directory, owner only, before starting the stack. Starting the containers with `docker compose` directly instead leaves the service to create it as root, so create it yourself first if you do that.
+
 The document and the report both live in `~/.local/spark/http-proxy/state`. That
 directory is a **trust input**: the document in it decides which machines traffic
 is forwarded to, so it is created readable and writable by its owner alone. Keep

@@ -1,7 +1,6 @@
-// Package main implements tailnet peer discovery. It asks a tailnet status source
-// which machines belong to this user, reads the routing table each one already
-// publishes, and writes Traefik dynamic configuration forwarding a hostname
-// this machine does not serve to the machine that does.
+// Package main implements tailnet peer discovery: it asks a status source which
+// machines belong to this user, reads the routing table each one publishes, and
+// forwards a hostname this machine does not serve to the machine that does.
 package main
 
 import (
@@ -37,9 +36,7 @@ func main() {
 
 	d := newDiscovery(cfg, log, source, httpProbe)
 
-	// Disabled is not the same as not running: the service still clears the
-	// routes a previous enabled run left in the shared volume, so disabling it
-	// and restarting leaves no forwarded hostnames behind.
+	// Disabled still clears the routes a previous enabled run left behind.
 	if !cfg.Enabled {
 		log.Info("Peer routing is disabled",
 			"hint", "set HTTP_PROXY_TAILSCALE_ENABLED=true to enable it")
@@ -60,18 +57,14 @@ func main() {
 
 	run(ctx, d)
 
-	// Withdraw on the way out. Stopping this service has to stop the
-	// forwarding it set up, without waiting for the proxy to restart: the
-	// entrypoint's cleanup only runs at startup, so a forwarded hostname would
-	// otherwise stay reachable until then.
+	// Withdraw on the way out: the entrypoint's cleanup only runs at startup.
 	if err := d.reconcileConfigs(nil); err != nil {
 		log.Error("Failed to withdraw peer routes on shutdown", "error", err)
 	}
 	log.Info("Shutting down gracefully")
 }
 
-// newSource builds the source of tailnet status documents. Both sources produce
-// the same document, so the ownership filter downstream is one implementation.
+// newSource builds the source of tailnet status documents.
 func newSource(cfg *config.TailscaleConfig) (tailscale.Source, error) {
 	switch cfg.Source {
 	case config.TailscaleSourceSocket:
@@ -83,9 +76,8 @@ func newSource(cfg *config.TailscaleConfig) (tailscale.Source, error) {
 	}
 }
 
-// run polls until the context is cancelled. The trigger for a change is a
-// container starting on another machine, which no local event stream observes,
-// so the interval is the only way to notice it.
+// run polls until the context is cancelled: the trigger is a container starting
+// on another machine, which no local event stream observes.
 func run(ctx context.Context, d *discovery) {
 	ticker := time.NewTicker(d.config.RefreshInterval)
 	defer ticker.Stop()

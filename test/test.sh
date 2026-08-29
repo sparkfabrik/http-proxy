@@ -852,13 +852,8 @@ test_virtual_path_fallthrough() {
 }
 
 # Cleanup test containers
-# Tailnet peer routing ------------------------------------------------------
-#
-# A second Traefik inside the stack stands in for a second machine: it serves
-# its own backends and publishes its routing table on the port the discovery
-# service reads. The tailnet status document is synthetic and is read through
-# the file source, the transport macOS uses in production, so the ownership
-# filter runs during the test rather than being bypassed by it.
+# Tailnet peer routing: a second Traefik stands in for a second machine, found
+# through a synthetic status document read by the file source.
 
 peer_compose() {
     COMPOSE_PROFILES=tailscale docker compose -f compose.yml -f test/compose.peers.yml "$@"
@@ -871,12 +866,8 @@ cleanup_peer_stack() {
     rm -rf "$PEER_STATE_DIR" "$PEER_DYNAMIC_DIR" "$PEER_CONFIG_FILE" 2>/dev/null || true
 }
 
-# Write the static configuration of the second machine's proxy.
-#
-# A machine publishes its routing table on port 30000, which is a host port
-# mapping in the real thing. Inside the stack there is no host to map through,
-# so the stand-in listens on that port itself. Its file provider is the only one
-# it needs, so it is given no Docker socket at all.
+# Writes the static configuration of the stand-in proxy, which listens for
+# route queries on 30000 itself since there is no host port mapping here.
 write_peer_static_config() {
     mkdir -p "$PEER_DYNAMIC_DIR"
 
@@ -901,14 +892,11 @@ serversTransport:
 EOF
 }
 
-# Write the routing table the second machine publishes. Only http-entrypoint
-# routers are declared: the forwarding machine emits its own pair, and taking
-# one of each is what keeps a hostname from being taken twice.
+# Writes the routing table the stand-in publishes, http entrypoint only.
 write_peer_routing_table() {
     mkdir -p "$PEER_DYNAMIC_DIR"
 
-    # The stand-in declares itself the way a real machine does, since a machine
-    # that does not is deliberately not adopted.
+    # The stand-in declares itself, as a real machine does.
     cat > "${PEER_DYNAMIC_DIR}/spark-http-proxy-declaration.yaml" <<'EOF'
 http:
   middlewares:
@@ -950,9 +938,7 @@ http:
 EOF
 }
 
-# Write the tailnet status document. The owner of the second machine is the
-# argument: passing an account other than this machine's is what proves the
-# ownership filter runs on the real path.
+# Writes the tailnet status document, with the stand-in's account as argument.
 write_tailnet_status() {
     local peer_user_id="$1" peer_address="$2"
 
@@ -974,8 +960,7 @@ write_tailnet_status() {
 EOF
 }
 
-# Poll until a hostname stops answering with a body, which is how a withdrawn
-# route is proved: the route disappearing is not visible in a status code.
+# Polls until a hostname stops answering with a body.
 test_body_absent() {
     local hostname=$1 path=$2 unexpected=$3 label=$4
     local max_attempts=10
@@ -1079,18 +1064,17 @@ test_tailscale_peer_routing() {
     fi
 
     total=$((total + 1))
-    if grep -q "machine-b" "${PEER_STATE_DIR}/tailscale-peers.txt" 2>/dev/null; then
+    if [ -r "${PEER_STATE_DIR}/tailscale-peers.txt" ] && grep -q "machine-b" "${PEER_STATE_DIR}/tailscale-peers.txt" 2>/dev/null; then
         success "the discovery cycle is recorded where the command line reads it"
         passed=$((passed + 1))
     else
-        error "no peer report was written to ${PEER_STATE_DIR}/tailscale-peers.txt"
+        find "${PEER_STATE_DIR}" -maxdepth 1 -exec ls -ld {} + 2>&1 | sed 's/^/    /'
+        error "the peer report at ${PEER_STATE_DIR}/tailscale-peers.txt is missing or unreadable"
     fi
 
     write_tailnet_status 1 "$peer_address"
 
-    # Stopping peer routing alone has to stop forwarding immediately, without
-    # the proxy restarting: the entrypoint's cleanup only runs at startup, so
-    # the service withdraws its own routes as it shuts down.
+    # Stopping peer routing alone withdraws the routes without a proxy restart.
     peer_compose stop tailscale_peers || warning "could not stop the peer routing service"
     log "Peer configuration after stopping the service: $(docker exec "$TRAEFIK_PROXY_NAME" sh -c 'ls -1 /traefik/dynamic/ | grep tailscale-peer || echo none' 2>/dev/null)"
 
@@ -1143,9 +1127,7 @@ cleanup() {
     docker rm -f "$TRAEFIK_CONTAINER" "$VIRTUAL_HOST_CONTAINER" "$VIRTUAL_HOST_PORT_CONTAINER" "$MULTI_VIRTUAL_HOST_CONTAINER" "$ORPHAN_CONTAINER" "$ONEOFF_CONTAINER" "$PATH_ROOT_CONTAINER" "$PATH_MOUNTED_CONTAINER" "$WILDCARD_CONTAINER" "$WILDCARD_MOUNTED_CONTAINER" 2>/dev/null || true
 }
 
-# Take the stack down at the end of a run, volumes included. Compose names the
-# volume after the project, so a run that leaves it behind adds one more to the
-# developer's machine every time the suite is run from a new directory.
+# Takes the stack down at the end of a run, volumes included.
 teardown_stack() {
     log "Removing the test stack and its volumes..."
     COMPOSE_PROFILES=tailscale docker compose down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -1159,9 +1141,7 @@ full_cleanup_and_rebuild() {
     cleanup
     docker image prune -f >/dev/null 2>&1 || true
     log "Building Docker images..."
-    # With the profile, or the profile-gated peer routing service keeps whatever
-    # image it was last built with: docker compose build skips services whose
-    # profile is not active, silently leaving the suite testing stale code.
+    # With the profile: compose build skips services whose profile is inactive.
     COMPOSE_PROFILES=tailscale docker compose build --pull
     success "Build completed"
 }

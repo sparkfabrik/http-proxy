@@ -1,9 +1,5 @@
-# Test override for tailnet peer routing.
-#
-# The status document is synthetic and read through the file source, which is
-# the transport macOS uses in production, so the ownership filter runs during
-# the test rather than being bypassed by it. The state directory is the test's
-# own, so a run never writes into the developer's.
+# Test override: a synthetic status document read through the file source, and
+# the test's own state directory.
 services:
   tailscale_peers:
     environment:

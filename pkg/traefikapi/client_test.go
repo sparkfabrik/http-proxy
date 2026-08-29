@@ -129,10 +129,7 @@ func TestRoutersReportsUnreachableSeparately(t *testing.T) {
 	}
 }
 
-// A regular expression hostname may contain a parenthesis of its own, which a
-// scan stopping at the first `)` would truncate. The rule is copied verbatim
-// either way, but a truncated hostname would be reported under a corrupted
-// name and would never be recognised as colliding.
+// A pattern may contain a parenthesis, which must not truncate the scan.
 func TestExtractHostsKeepsAParenthesisedRegexp(t *testing.T) {
 	tests := []struct {
 		name string
@@ -155,9 +152,7 @@ func TestExtractHostsKeepsAParenthesisedRegexp(t *testing.T) {
 	}
 }
 
-// A negated matcher serves everything except that hostname. Recording it as a
-// claim would have the machine own the one hostname it does not serve, and the
-// machine that genuinely serves it dropped as a collision.
+// A negated matcher claims nothing.
 func TestExtractHostsIgnoresANegatedMatcher(t *testing.T) {
 	tests := []struct {
 		name string
@@ -190,8 +185,7 @@ func declarationHandler(body string) http.HandlerFunc {
 	}
 }
 
-// A machine is adopted only when it says it is this proxy. The port alone
-// identifies a Traefik, which an unrelated one on the tailnet also is.
+// A machine is adopted only when it says it is this proxy.
 func TestDeclares(t *testing.T) {
 	tests := []struct {
 		name string
@@ -251,10 +245,7 @@ func TestDeclaresReportsAnUnreachableMachine(t *testing.T) {
 	}
 }
 
-// A rule is copied into a local router verbatim, so an alternative that names
-// no host matches every request this machine receives. Hostname extraction sees
-// only the constrained side, so local precedence never recognises the shadowing
-// as a collision: the rule has to be refused instead.
+// An alternative naming no host would match every request, so it is refused.
 func TestRoutesRefusesAnUnconstrainedAlternative(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -52,13 +52,8 @@ services:
       - "traefik.enable=false"
     restart: unless-stopped
 
-  # Tailnet peer routing (enabled with --profile tailscale and
-  # HTTP_PROXY_TAILSCALE_ENABLED=true)
-  #
-  # The daemon socket is added by compose.tailscale-socket.yml, which
-  # spark-http-proxy passes only when the status source is the socket. A
-  # platform without one reads the status document from the state directory
-  # instead, which is mounted here either way.
+  # Tailnet peer routing, started with spark-http-proxy start-with-tailscale.
+  # The daemon socket is added by compose.tailscale-socket.yml.
   tailscale_peers:
     build:
       context: .
@@ -68,9 +63,7 @@ services:
     volumes:
       - traefik_dynamic:/traefik/dynamic
       - "${LOCAL_HOME:-$HOME}/.local/spark/http-proxy/state:/state"
-    # Run directly rather than through sh -c: the graceful withdrawal that makes
-    # stop-tailscale stop forwarding depends on SIGTERM reaching this process,
-    # and a shell forwards it only when it chooses to exec rather than fork.
+    # Run directly, so SIGTERM reaches the process and it withdraws its routes.
     command: ["/usr/local/bin/tailscale-peers"]
     environment:
       - HTTP_PROXY_TAILSCALE_ENABLED=${HTTP_PROXY_TAILSCALE_ENABLED:-false}

@@ -48,8 +48,7 @@ func TestRenderNamesCollisionsAndTheirWinner(t *testing.T) {
 	}
 }
 
-// Most machines on a tailnet are phones, routers and televisions. A report of
-// them has to read as ordinary rather than as a fault.
+// Machines without a proxy have to read as ordinary rather than as a fault.
 func TestRenderTreatsMachinesWithoutAProxyAsUsual(t *testing.T) {
 	rendered := testReport().Render()
 
@@ -61,8 +60,7 @@ func TestRenderTreatsMachinesWithoutAProxyAsUsual(t *testing.T) {
 	}
 }
 
-// A source that stopped answering must not look like a tailnet with nobody on
-// it, which is what an empty table alone would suggest.
+// A failing source must not read as an empty tailnet.
 func TestRenderLeadsWithASourceFailure(t *testing.T) {
 	report := testReport()
 	report.SourceError = "dial unix /var/run/tailscale/tailscaled.sock: no such file"
@@ -98,9 +96,7 @@ func TestRenderedStateFileSitsBesideTheStateFile(t *testing.T) {
 	}
 }
 
-// Most machines on a tailnet fail the probe, so their reason is repeated once
-// per row. The table shows the part that tells them apart; the state file keeps
-// the whole error.
+// The table shows the part that tells failures apart.
 func TestCompactReason(t *testing.T) {
 	tests := []struct {
 		name string
@@ -138,10 +134,7 @@ func TestCompactReason(t *testing.T) {
 	}
 }
 
-// The retry is shown as the wait, not as an absolute time: printed to the
-// second, an absolute retry sits beside a cycle timestamp rounded the same way,
-// so a short wait renders as the same instant as the cycle that scheduled it and
-// reads as though the backoff were not advancing.
+// The retry is shown as the wait rather than as an absolute time.
 func TestRenderShowsTheWaitBeforeTheNextAttempt(t *testing.T) {
 	cycle := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	report := &Report{
@@ -166,7 +159,7 @@ func TestRenderShowsTheWaitBeforeTheNextAttempt(t *testing.T) {
 	}
 }
 
-// A retry already in the past is not a retry. Only a future one is shown.
+// Only a future retry is shown.
 func TestRenderOmitsARetryThatIsNotAhead(t *testing.T) {
 	cycle := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	report := &Report{

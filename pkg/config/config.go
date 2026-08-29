@@ -27,43 +27,26 @@ func Load() *Config {
 	}
 }
 
-// Where the tailnet status document comes from. The document, and therefore
-// the filter applied to it, is the same in both modes; only the transport
-// differs. Every cycle that forwards to a machine has run the ownership filter
-// over a document, and there is no mode in which it does not.
+// Where the tailnet status document comes from.
 const (
 	// TailscaleSourceSocket reads the document from the daemon's unix socket.
 	TailscaleSourceSocket = "socket"
-	// TailscaleSourceFile reads a document the host writes, for a platform whose
-	// daemon exposes no socket a container can reach.
+	// TailscaleSourceFile reads a document the host writes.
 	TailscaleSourceFile = "file"
 )
 
-// Defaults for tailnet peer routing. The socket path is where the Tailscale daemon
-// listens on Linux; the state file, the status file and the dynamic directory
-// are container paths, all bind-mounted.
+// Defaults for tailnet peer routing. The paths are inside the container.
 const (
-	// A cycle is one small request per due machine, and a second only for the
-	// machines that declare themselves, so the cost is in the sweep frequency
-	// rather than in the cycle. A minute is cheap and keeps the wait short.
 	DefaultTailscaleRefreshInterval = 60 * time.Second
-	// How stale a host-written status document may be. This is deliberately not
-	// derived from the refresh interval: how fresh the document must be depends
-	// on how often the host job writes it, which the polling interval says
-	// nothing about. Ten minutes tolerates one missed run of a five minute job.
-	DefaultTailscaleStatusMaxAge = 10 * time.Minute
-	DefaultTailscaleSocket       = "/var/run/tailscale/tailscaled.sock"
-	DefaultTailscaleStatusFile   = "/state/tailscale-status.json"
-	DefaultTailscaleStateFile    = "/state/tailscale-peers.json"
-	DefaultTailscaleLocalAPIURL  = "http://http-proxy:8080"
-	DefaultTraefikDynamicDir     = "/traefik/dynamic"
+	DefaultTailscaleStatusMaxAge    = 10 * time.Minute
+	DefaultTailscaleSocket          = "/var/run/tailscale/tailscaled.sock"
+	DefaultTailscaleStatusFile      = "/state/tailscale-status.json"
+	DefaultTailscaleStateFile       = "/state/tailscale-peers.json"
+	DefaultTailscaleLocalAPIURL     = "http://http-proxy:8080"
+	DefaultTraefikDynamicDir        = "/traefik/dynamic"
 )
 
-// PeerConfig holds the configuration of the peer discovery service.
-//
-// There is deliberately no setting for which machines may be probed: a machine
-// belonging to another user is excluded by the discovery filter, which reads no
-// configuration at all.
+// TailscaleConfig holds the configuration of the tailnet peer routing service.
 type TailscaleConfig struct {
 	Enabled           bool
 	Source            string
@@ -76,8 +59,7 @@ type TailscaleConfig struct {
 	TraefikDynamicDir string
 }
 
-// LoadTailscale loads the tailnet peer routing configuration from environment
-// variables.
+// LoadTailscale loads the tailnet peer routing configuration.
 func LoadTailscale() *TailscaleConfig {
 	return &TailscaleConfig{
 		Enabled:           strings.ToLower(GetEnvOrDefault("HTTP_PROXY_TAILSCALE_ENABLED", "false")) == "true",
@@ -125,10 +107,8 @@ func GetEnvOrDefaultStringSlice(key string, defaultValue []string) []string {
 	return defaultValue
 }
 
-// getEnvOrDefaultDuration returns an environment variable parsed as a duration.
-// An unparseable or non-positive value falls back to the default rather than
-// stopping the service, so a typo slows discovery down to its usual pace
-// instead of leaving the proxy without peer routes.
+// getEnvOrDefaultDuration returns an environment variable parsed as a duration,
+// or the default when it is unset, unparseable or not positive.
 func getEnvOrDefaultDuration(key string, defaultValue time.Duration) time.Duration {
 	value := os.Getenv(key)
 	if value == "" {

@@ -12,20 +12,15 @@ import (
 // StatusPath is the local API endpoint returning the tailnet status document.
 const StatusPath = "/localapi/v0/status"
 
-// socketHost is the Host header the daemon expects on local API requests. The
-// unix socket has no meaningful authority, and the daemon rejects a request
-// carrying an unexpected one.
+// socketHost is the Host header the daemon expects on local API requests.
 const socketHost = "local-tailscaled.sock"
 
-// Source produces the tailnet status document. Only the transport differs
-// between implementations: the document, and therefore the filter applied to
-// it, is the same one everywhere.
+// Source produces the tailnet status document.
 type Source interface {
 	Status(ctx context.Context) (*Status, error)
 }
 
-// SocketSource reads the document from the daemon's local API. The socket is
-// world-readable, so no privilege is needed.
+// SocketSource reads the document from the daemon's local API.
 type SocketSource struct {
 	httpClient *http.Client
 	baseURL    string
@@ -46,7 +41,6 @@ func NewSocketSource(socketPath string, timeout time.Duration) *SocketSource {
 }
 
 // NewHTTPSource returns a source talking to baseURL with the given HTTP client.
-// Tests point it at an httptest server; production uses NewSocketSource.
 func NewHTTPSource(httpClient *http.Client, baseURL string) *SocketSource {
 	return &SocketSource{httpClient: httpClient, baseURL: baseURL}
 }
@@ -77,23 +71,19 @@ func (s *SocketSource) Status(ctx context.Context) (*Status, error) {
 	return status, nil
 }
 
-// FileSource reads a document a host wrote, for a platform whose daemon exposes
-// no socket a container can reach.
+// FileSource reads a document the host wrote.
 type FileSource struct {
 	path   string
 	maxAge time.Duration
 }
 
-// NewFileSource returns a source reading the document at path. A document older
-// than maxAge is treated as no document rather than as an empty tailnet, so a
-// host that stopped refreshing it withdraws its peers instead of freezing them.
+// NewFileSource returns a source reading the document at path, treating one
+// older than maxAge as no document.
 func NewFileSource(path string, maxAge time.Duration) *FileSource {
 	return &FileSource{path: path, maxAge: maxAge}
 }
 
-// Status reads the tailnet status document from the file the host writes. The
-// time the document was written is the file's modification time, which is what
-// the writing command sets and what a stale document is judged by.
+// Status reads the document from the file, aged by its modification time.
 func (s *FileSource) Status(context.Context) (*Status, error) {
 	info, err := os.Stat(s.path)
 	if err != nil {
