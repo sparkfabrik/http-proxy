@@ -65,7 +65,7 @@ Simply add `VIRTUAL_HOST=myapp.local` to any container or use native Traefik lab
   - [What it does](#what-it-does)
   - [Using it](#using-it)
   - [Enabling it](#enabling-it)
-  - [macOS](#macos)
+  - [macOS status document](#macos-status-document)
   - [Seeing what was found](#seeing-what-was-found)
   - [What enabling it exposes](#what-enabling-it-exposes)
 - [Metrics & Monitoring](#metrics--monitoring)
@@ -951,7 +951,6 @@ That stops **this machine forwarding to others**. Every hostname it was forwardi
 
 It does not withdraw this machine from the tailnet. Its proxy still runs, still publishes the declaration that says what it is, and still answers for its own containers, so your other machines keep discovering and reaching it. To stop that, stop the proxy itself or close the ports.
 
-
 ### Enabling it
 
 ```bash
@@ -974,7 +973,7 @@ Discovery is polling, so a container appearing on another machine takes up to
 one interval to become reachable. The interval is paced for a background daemon:
 the trigger is a person starting a container elsewhere, not a request waiting.
 
-### macOS
+### macOS status document
 
 The macOS Tailscale build exposes no unix socket a container can mount, so the
 status document is produced on the host instead. It is the same document, read

@@ -852,3 +852,43 @@ func TestAnAbsurdHostPatternIsRefused(t *testing.T) {
 		t.Errorf("compileHostPattern() error = %v, want an ordinary pattern compiled", err)
 	}
 }
+
+// The state directory holds the document that decides where traffic goes, and a
+// report naming every machine on the tailnet with its address. The README calls
+// it a trust input, so the service has to create it owner-only on the path the
+// CLI never touches: a plain docker compose up.
+func TestTheStateDirectoryIsCreatedOwnerOnly(t *testing.T) {
+	probe := &fakeProbe{routes: map[string][]traefikapi.Route{
+		"http://http-proxy:8080": nil,
+		peerURL("100.64.0.2"):    {hostRoute("app.loc")},
+	}}
+	cfg := &config.TailscaleConfig{Enabled: true, Source: config.TailscaleSourceSocket}
+
+	d := testDiscovery(t, cfg, fakeSource{document: tailnetStatus}, probe)
+	if err := os.RemoveAll(filepath.Dir(cfg.StateFile)); err != nil {
+		t.Fatalf("failed to clear the state directory: %v", err)
+	}
+
+	report := d.runCycle(t.Context())
+	if err := d.writeReport(report); err != nil {
+		t.Fatalf("writeReport() error = %v", err)
+	}
+
+	info, err := os.Stat(filepath.Dir(cfg.StateFile))
+	if err != nil {
+		t.Fatalf("state directory was not created: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Errorf("state directory mode = %o, want 700", perm)
+	}
+
+	for _, name := range []string{cfg.StateFile, renderedStateFile(cfg.StateFile)} {
+		info, err := os.Stat(name)
+		if err != nil {
+			t.Fatalf("%s was not written: %v", name, err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Errorf("%s mode = %o, want 600", name, perm)
+		}
+	}
+}

@@ -39,8 +39,18 @@ const (
 	// machine that starts running the proxy is found within a quarter of an hour.
 	maxProbeBackoff = 15 * time.Minute
 
+	// The Traefik dynamic directory is a volume Traefik has to read, so its
+	// files stay readable.
 	configFilePermissions = 0644
 	configDirPermissions  = 0755
+
+	// The state directory is a trust input rather than a scratch area: the
+	// status document in it decides which machines traffic is forwarded to, and
+	// the report names every machine on the tailnet with its address and the
+	// hostnames it serves. Owner only, whichever of the CLI and this service
+	// creates it first.
+	stateFilePermissions = 0600
+	stateDirPermissions  = 0700
 )
 
 // Outcomes reported for a machine that discovery considered.
@@ -642,7 +652,7 @@ func (d *discovery) writeConfig(fileName string, cfg *config.TraefikConfig) erro
 	if err := os.MkdirAll(d.config.TraefikDynamicDir, configDirPermissions); err != nil {
 		return fmt.Errorf("failed to create the traefik dynamic directory: %w", err)
 	}
-	return writeFileAtomically(filepath.Join(d.config.TraefikDynamicDir, fileName), data)
+	return writeFileAtomically(filepath.Join(d.config.TraefikDynamicDir, fileName), data, configFilePermissions)
 }
 
 // writeReport records the outcome of a cycle where the command line reads it.
@@ -654,21 +664,21 @@ func (d *discovery) writeReport(report *Report) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal the peer report: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(d.config.StateFile), configDirPermissions); err != nil {
+	if err := os.MkdirAll(filepath.Dir(d.config.StateFile), stateDirPermissions); err != nil {
 		return fmt.Errorf("failed to create the state directory: %w", err)
 	}
-	if err := writeFileAtomically(d.config.StateFile, data); err != nil {
+	if err := writeFileAtomically(d.config.StateFile, data, stateFilePermissions); err != nil {
 		return err
 	}
-	return writeFileAtomically(renderedStateFile(d.config.StateFile), []byte(report.Render()))
+	return writeFileAtomically(renderedStateFile(d.config.StateFile), []byte(report.Render()), stateFilePermissions)
 }
 
 // writeFileAtomically writes through a temporary file and a rename, so neither
 // the proxy watching the dynamic directory nor the command line reading the
 // state file ever observes a half-written file.
-func writeFileAtomically(path string, data []byte) error {
+func writeFileAtomically(path string, data []byte, permissions os.FileMode) error {
 	temp := path + ".tmp"
-	if err := os.WriteFile(temp, data, configFilePermissions); err != nil {
+	if err := os.WriteFile(temp, data, permissions); err != nil {
 		return fmt.Errorf("failed to write %s: %w", temp, err)
 	}
 	if err := os.Rename(temp, path); err != nil {
