@@ -838,6 +838,14 @@ cleanup() {
     docker rm -f "$TRAEFIK_CONTAINER" "$VIRTUAL_HOST_CONTAINER" "$VIRTUAL_HOST_PORT_CONTAINER" "$MULTI_VIRTUAL_HOST_CONTAINER" "$ORPHAN_CONTAINER" "$ONEOFF_CONTAINER" "$PATH_ROOT_CONTAINER" "$PATH_MOUNTED_CONTAINER" "$WILDCARD_CONTAINER" "$WILDCARD_MOUNTED_CONTAINER" 2>/dev/null || true
 }
 
+# Take the stack down at the end of a run, volumes included. Compose names the
+# volume after the project, so a run that leaves it behind adds one more to the
+# developer's machine every time the suite is run from a new directory.
+teardown_stack() {
+    log "Removing the test stack and its volumes..."
+    docker compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+}
+
 # Full stack cleanup and rebuild
 full_cleanup_and_rebuild() {
     log "Setting up HTTP proxy stack..."
@@ -990,6 +998,8 @@ main() {
     fi
 
     # Results
+    teardown_stack
+
     log "Test Results:"
     log "============="
     log "HTTP Tests: ${http_passed}/5 passed"
