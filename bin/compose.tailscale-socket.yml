@@ -1,0 +1,7 @@
+# Adds the Tailscale daemon socket to the peer routing service.
+# spark-http-proxy passes this file only when the status source is the socket.
+services:
+  tailscale_peers:
+    volumes:
+      # Both sides come from the same variable.
+      - "${HTTP_PROXY_TAILSCALE_SOCKET:-/var/run/tailscale/tailscaled.sock}:${HTTP_PROXY_TAILSCALE_SOCKET:-/var/run/tailscale/tailscaled.sock}:ro"

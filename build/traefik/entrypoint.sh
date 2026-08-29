@@ -6,6 +6,9 @@ CERTS_DIR="/traefik/certs"
 DYNAMIC_DIR="/traefik/dynamic"
 TLS_CONFIG_FILE="${DYNAMIC_DIR}/auto-tls.yml"
 
+# Outside the tailscale-peer-*.yaml glob cleared below.
+DECLARATION_FILE="spark-http-proxy-declaration.yaml"
+
 generate_tls_config() {
     echo "Scanning for certificates in ${CERTS_DIR}..."
 
@@ -85,8 +88,42 @@ EOF
     echo "TLS configuration written to ${TLS_CONFIG_FILE}"
 }
 
+# Writes the middleware that identifies this proxy to other machines.
+write_proxy_declaration() {
+    cat > "${DYNAMIC_DIR}/${DECLARATION_FILE}" << 'EOF'
+# Generated at startup, do not edit.
+http:
+  middlewares:
+    spark-http-proxy:
+      headers:
+        customResponseHeaders:
+          X-Spark-Http-Proxy: "1"
+EOF
+    echo "Wrote proxy declaration to ${DYNAMIC_DIR}/${DECLARATION_FILE}"
+}
+
+# Removes the peer routes a previous run left behind when peer routing is off.
+remove_peer_config() {
+    if [ "${HTTP_PROXY_TAILSCALE_ENABLED}" = "true" ]; then
+        return
+    fi
+
+    # The glob does not match the declaration file.
+    for peer_config in "${DYNAMIC_DIR}"/tailscale-peer-*.yaml; do
+        [ -e "${peer_config}" ] || continue
+        echo "Peer routing is disabled, removing $(basename "${peer_config}")"
+        rm -f "${peer_config}"
+    done
+}
+
+# Declare this proxy to other machines
+write_proxy_declaration
+
 # Generate TLS configuration from user certificates
 generate_tls_config
+
+# Remove peer routes left behind when peer routing is disabled
+remove_peer_config
 
 # Start Traefik with the original arguments
 echo "Starting Traefik..."

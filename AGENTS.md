@@ -16,7 +16,7 @@ Guidance for agentic coding agents working in this repository.
 Spark HTTP Proxy is a local development reverse proxy built on Traefik. It consists of:
 
 - **`bin/spark-http-proxy`** — Bash CLI wrapper (the user-facing tool)
-- **`cmd/`** — Go binaries: `dns-server`, `dinghy-layer`, `join-networks`
+- **`cmd/`** — Go binaries: `dns-server`, `dinghy-layer`, `join-networks`, `tailscale-peers`
 - **`pkg/`** — Shared Go packages (`config`, `logger`, `service`, `utils`)
 - **`build/`** — Dockerfiles for each service (traefik, prometheus, grafana, services)
 - **`bin/compose.yml`** — Production compose (GHCR pre-built images)
@@ -26,11 +26,11 @@ Spark HTTP Proxy is a local development reverse proxy built on Traefik. It consi
 
 ## Architecture: the big picture
 
-The novel part is not Traefik itself but the three sidecar Go binaries that feed
+The novel part is not Traefik itself but the four sidecar Go binaries that feed
 and surround it. Understanding their interaction requires reading across `cmd/`,
 `pkg/`, `compose.yml`, and `build/traefik/`.
 
-### The four runtime services (see `compose.yml`)
+### The five runtime services (see `compose.yml`)
 
 1. **`traefik`** (container name `http-proxy`) — the actual proxy. Runs with
    `exposedByDefault: false` (`build/traefik/traefik.yml`), so it ignores every
@@ -49,7 +49,18 @@ and surround it. Understanding their interaction requires reading across `cmd/`,
    events and **connects the `http-proxy` container to any Docker network that
    holds a manageable container**. Without it, routes resolve but traffic can't
    reach the backend. See `docs/network-joining-flow.md`.
-4. **`dns`** (`cmd/dns-server`) — built on `github.com/miekg/dns`. Resolves
+4. **`tailscale_peers`** (`cmd/tailscale-peers`) — the cross-machine layer, and
+   the only optional one: it runs behind the `tailscale` compose profile and does
+   nothing unless `HTTP_PROXY_TAILSCALE_ENABLED=true`. It reads the tailnet
+   status document from a source (`pkg/tailscale`: the daemon's unix socket, or a
+   file the host writes on macOS), probes each machine of the same account for
+   its routing table over the Traefik API on port 30000 (`pkg/traefikapi`), and
+   **writes `tailscale-peer-*.yaml` into the same `traefik_dynamic` volume**,
+   forwarding a hostname no local container serves to the machine that serves it.
+   The same-user check lives in `pkg/tailscale` alone and reads no configuration,
+   which is what keeps it from depending on the platform. See the
+   **Tailnet peer routing** section below.
+5. **`dns`** (`cmd/dns-server`) — built on `github.com/miekg/dns`. Resolves
    configured TLDs/domains (default `*.loc`) to `127.0.0.1` so no `/etc/hosts`
    editing is needed. Optionally forwards non-matching queries upstream.
    Listens on UDP+TCP 19322.
@@ -68,6 +79,11 @@ directly by Traefik's Docker provider) and `VIRTUAL_HOST` env vars (translated
 by `dinghy_layer` into files). Both require `join_networks` to have bridged the
 network first.
 
+That is the local mechanism. The cross-machine one, `tailscale_peers`, ends in
+the same volume and the same file provider, and is diagrammed in the README
+under "How the routes get there", alongside the request path that reads what
+both of them write.
+
 ### Shared Go packages (`pkg/`)
 
 - **`pkg/config`** — env-var loading (`config.go`, all `HTTP_PROXY_DNS_*` vars
@@ -80,7 +96,7 @@ network first.
   an initial full scan, then streams events with signal-based graceful shutdown.
 - **`pkg/logger`**, **`pkg/utils`** — leveled logging (`LOG_LEVEL`) and helpers.
 
-All three binaries build from the **same `build/Dockerfile`** (multi-stage) and
+All four binaries build from the **same `build/Dockerfile`** (multi-stage) and
 are selected at runtime by their `command:` in compose.
 
 ### Configuration surface
@@ -97,10 +113,91 @@ entirely, `VIRTUAL_HOST` included. That is intentional (native labels win) but
 easy to trip over by adding a middleware label alone, so the layer now warns
 when it happens.
 
+## Tailnet peer routing
+
+Off by default. The narrative is in the README; these are the constraints that
+are easy to break, and the diagram is in the architecture section above.
+
+**The ownership filter is the trust boundary.** `Status.Peers` in
+`pkg/tailscale/status.go` accepts a machine only when its `UserID` matches
+`Self.UserID`. That package reads no environment at all, deliberately: no setting
+can reach the filter. Three tests guard it, and a change that makes ownership
+configurable is a change to the capability, not an implementation detail.
+
+**A source produces a document; everything downstream is shared.** Adding a
+platform means adding a `tailscale.Source`, never a second filter. A source that
+cannot produce a document contributes nothing that cycle: an unreachable daemon
+and an empty tailnet are different states and are reported differently.
+
+**A machine is adopted only if it declares itself.** `build/traefik/entrypoint.sh`
+writes `spark-http-proxy-declaration.yaml`, a middleware named
+`traefikapi.ProxyDeclarationName` that no router references, so it changes no
+routing on the machine that publishes it. `Client.Declares` is asked before the
+routing table, so a machine that is not this proxy costs one request. The check
+fails closed, which means **both machines need this version before anything is
+forwarded**. The declaration is written unconditionally, including when peer
+routing is disabled: it says what the proxy is, not what it does. Its name must
+stay outside the `tailscale-peer-*.yaml` glob, or disabling forwarding on a
+machine would also make it undiscoverable by everyone else.
+
+**A peer rule is copied verbatim, so it has to be constrained.** `Routes` in
+`pkg/traefikapi` refuses a rule unless every top-level alternative names a host
+it is not negating: `Host(`peer.loc`) || PathPrefix(`/`)` would otherwise become
+a local router matching every request, and hostname extraction sees only
+`peer.loc`, so local precedence would never recognise the shadowing as a
+collision. A rule that does not parse confidently is refused for the same reason.
+Refusals are logged and reported rather than dropped silently.
+
+**File ownership in the dynamic directory is scoped by prefix.**
+`tailscale-peers` removes only `tailscale-peer-*.yaml` and `dinghy-layer` removes
+only `^[0-9a-f]{12}\.yaml$`, so neither can delete the other's files or the
+entrypoint's `auto-tls.yml`. That prefix is also the loop guard read back from
+peers (`traefikapi.PeerRouterPrefix`) and the glob the Traefik entrypoint clears
+when the behaviour is disabled. **All three move together.**
+
+**Disabling has to actually disable.** With the profile off the service never
+starts, so nothing would clear the files it left behind. The entrypoint removes
+them at startup unless `HTTP_PROXY_TAILSCALE_ENABLED=true`, which is why the
+Traefik service receives that variable. Startup is too late for `stop-tailscale`,
+so the service also withdraws its own routes as it shuts down: stopping peer
+routing must stop forwarding without a proxy restart.
+
+**The three timing values are independent on purpose.** The refresh interval
+(60 seconds) paces the cycle, `HTTP_PROXY_TAILSCALE_STATUS_MAX_AGE` (10 minutes)
+bounds how stale a host-written ownership document may be, and the probe backoff
+ceiling (15 minutes) bounds how long a failing machine goes unprobed. The
+staleness tolerance was once derived from the interval, which meant slowing the
+poll silently loosened a trust input. Keep them separate, and have tests drive
+the interval explicitly rather than inheriting the default.
+
+**The compose socket mount lives in `compose.tailscale-socket.yml`.** A platform
+without a daemon socket has no path to mount, and a bind mount of a missing path
+gets a directory created for it. `bin/spark-http-proxy` passes that file only
+when the source is `socket`, and builds its compose invocation as the
+`COMPOSE_FILES` array; `COMPOSE_FILE` stays a single path because Compose reads
+it as a `:`-separated list.
+
+**The state directory is a trust input**, not a scratch area: the document in it
+decides where traffic goes. It is created `0700` and the status document `0600`.
+
+**The command line reports, it does not discover.** The service renders its own
+report next to the state file (`Report.Render`), and `spark-http-proxy
+tailscale-peers` prints it. Keep it that way: a formatter in shell would be a
+second implementation of what a peer contributed, and would need a JSON parser
+this project does not depend on.
+
+**The integration test uses the file source with a synthetic status document**,
+so the ownership filter runs during the test instead of being bypassed by it. A
+second Traefik inside the stack stands in for a second machine, with its own
+static config listening on port 30000, since inside the stack there is no host
+port mapping. Build with the profile active: `docker compose build` skips
+profile-gated services, so a plain build leaves `tailscale_peers` on a stale
+image and the suite silently tests old code.
+
 ## Build Commands
 
 ```bash
-make build                  # Build all three Go binaries
+make build                  # Build the Go binaries
 make build-go-dns           # Build cmd/dns-server only
 make build-go-dinghy-layer  # Build cmd/dinghy-layer only
 make build-go-join-networks # Build cmd/join-networks only

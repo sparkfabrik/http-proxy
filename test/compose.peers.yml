@@ -1,0 +1,11 @@
+# Test override: a synthetic status document read through the file source, and
+# the test's own state directory.
+services:
+  tailscale_peers:
+    environment:
+      - HTTP_PROXY_TAILSCALE_ENABLED=true
+      - HTTP_PROXY_TAILSCALE_SOURCE=file
+      - HTTP_PROXY_TAILSCALE_REFRESH_INTERVAL=2s
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - ./test/state:/state

@@ -1,0 +1,316 @@
+package traefikapi
+
+import (
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"testing"
+	"time"
+)
+
+const routersBody = `[
+  {"name": "b-app-0@file", "provider": "file", "rule": "Host(` + "`b.loc`" + `)", "priority": 49, "entryPoints": ["http"], "status": "enabled"},
+  {"name": "a-app-0@file", "provider": "file", "rule": "Host(` + "`a.loc`" + `)", "priority": 49, "entryPoints": ["http"], "status": "enabled"}
+]`
+
+func TestRoutersSortsByName(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != RoutersPath {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(routersBody))
+	}))
+	defer server.Close()
+
+	routers, err := New(server.Client(), server.URL).Routers(t.Context())
+	if err != nil {
+		t.Fatalf("Routers() error = %v", err)
+	}
+	if len(routers) != 2 || routers[0].Name != "a-app-0@file" || routers[1].Name != "b-app-0@file" {
+		t.Fatalf("Routers() = %+v, want a-app-0@file before b-app-0@file", routers)
+	}
+}
+
+func TestRoutersErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{"not a proxy", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNotFound) }},
+		{"body is not json", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("<html>")) }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(tt.handler)
+			defer server.Close()
+
+			if _, err := New(server.Client(), server.URL).Routers(t.Context()); err == nil {
+				t.Fatal("Routers() error = nil, want an error")
+			}
+		})
+	}
+}
+
+func TestRoutes(t *testing.T) {
+	routers := []Router{
+		{Name: "app-0@file", Provider: "file", Rule: "Host(`app.loc`)", Priority: 49, EntryPoints: []string{"http"}, Status: "enabled"},
+		{Name: "app-tls-0@file", Provider: "file", Rule: "Host(`app.loc`)", Priority: 49, EntryPoints: []string{"https"}, Status: "enabled"},
+		{Name: "api-0@file", Provider: "file", Rule: "Host(`app.loc`) && (PathPrefix(`/api/`) || Path(`/api`))", Priority: 10004, EntryPoints: []string{"http"}, Status: "enabled"},
+		{Name: "dashboard@internal", Provider: "internal", Rule: "PathPrefix(`/api`)", Priority: 9, EntryPoints: []string{"http"}, Status: "enabled"},
+		{Name: "tailscale-peer-machine-b-0@file", Provider: "file", Rule: "Host(`remote.loc`)", Priority: 49, EntryPoints: []string{"http"}, Status: "enabled"},
+		{Name: "broken-0@file", Provider: "file", Rule: "Host(`nope.loc`)", Priority: 49, EntryPoints: []string{"http"}, Status: "disabled"},
+		{Name: "pathonly-0@file", Provider: "file", Rule: "PathPrefix(`/only`)", Priority: 12, EntryPoints: []string{"http"}, Status: "enabled"},
+	}
+
+	want := []Route{
+		{Rule: "Host(`app.loc`)", Priority: 49, Hosts: []Host{{Value: "app.loc"}}},
+		{Rule: "Host(`app.loc`) && (PathPrefix(`/api/`) || Path(`/api`))", Priority: 10004, Hosts: []Host{{Value: "app.loc"}}},
+	}
+
+	got := Routes(routers)
+	if !reflect.DeepEqual(got.Routes, want) {
+		t.Fatalf("Routes() = %+v, want %+v", got.Routes, want)
+	}
+	if len(got.Rejected) != 0 {
+		t.Errorf("Rejected = %v, want none", got.Rejected)
+	}
+}
+
+func TestExtractHosts(t *testing.T) {
+	tests := []struct {
+		name string
+		rule string
+		want []Host
+	}{
+		{"single host", "Host(`app.loc`)", []Host{{Value: "app.loc"}}},
+		{"several arguments", "Host(`a.loc`, `b.loc`)", []Host{{Value: "a.loc"}, {Value: "b.loc"}}},
+		{"alternation", "Host(`a.loc`) || Host(`b.loc`)", []Host{{Value: "a.loc"}, {Value: "b.loc"}}},
+		{"with a path", "Host(`app.loc`) && (PathPrefix(`/api/`) || Path(`/api`))", []Host{{Value: "app.loc"}}},
+		{"regexp host", "HostRegexp(`^.*\\.loc$`)", []Host{{Value: "^.*\\.loc$", IsRegexp: true}}},
+		{"regexp and host", "HostRegexp(`^.*\\.loc$`) || Host(`app.loc`)", []Host{{Value: "^.*\\.loc$", IsRegexp: true}, {Value: "app.loc"}}},
+		{"no host matcher", "PathPrefix(`/api`)", nil},
+		{"header matcher is not a host", "HeaderRegexp(`X-Host`, `.*`)", nil},
+		{"empty rule", "", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ExtractHosts(tt.rule); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ExtractHosts(%q) = %+v, want %+v", tt.rule, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRoutersReportsUnreachableSeparately(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url := server.URL
+	server.Close()
+
+	_, err := NewWithTimeout(url, time.Second).Routers(t.Context())
+	if !errors.Is(err, ErrUnreachable) {
+		t.Fatalf("Routers() error = %v, want it to wrap ErrUnreachable", err)
+	}
+
+	answering := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer answering.Close()
+
+	_, err = New(answering.Client(), answering.URL).Routers(t.Context())
+	if err == nil {
+		t.Fatal("Routers() error = nil, want an error")
+	}
+	if errors.Is(err, ErrUnreachable) {
+		t.Errorf("Routers() error = %v, want a machine that answered not to be reported as unreachable", err)
+	}
+}
+
+func TestExtractHostsKeepsAParenthesisedRegexp(t *testing.T) {
+	tests := []struct {
+		name string
+		rule string
+		want []Host
+	}{
+		{"grouped alternation", "HostRegexp(`^(a|b)\\.loc$`)", []Host{{Value: "^(a|b)\\.loc$", IsRegexp: true}}},
+		{"grouped with a path", "HostRegexp(`^(a|b)\\.loc$`) && (PathPrefix(`/api/`) || Path(`/api`))", []Host{{Value: "^(a|b)\\.loc$", IsRegexp: true}}},
+		{"grouped then plain", "HostRegexp(`^(a|b)\\.loc$`) || Host(`app.loc`)", []Host{{Value: "^(a|b)\\.loc$", IsRegexp: true}, {Value: "app.loc"}}},
+		{"a matcher ending in host is not one", "XHost(`nope.loc`)", nil},
+		{"a host inside another matcher's argument", "HeaderRegexp(`X-Host`, `.*`)", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ExtractHosts(tt.rule); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ExtractHosts(%q) = %+v, want %+v", tt.rule, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractHostsIgnoresANegatedMatcher(t *testing.T) {
+	tests := []struct {
+		name string
+		rule string
+		want []Host
+	}{
+		{"negated alone", "!Host(`a.loc`)", nil},
+		{"negated with a space", "! Host(`a.loc`)", nil},
+		{"negated regexp", "!HostRegexp(`^a\\.loc$`)", nil},
+		{"a claim and a negation", "Host(`a.loc`) && !Host(`b.loc`)", []Host{{Value: "a.loc"}}},
+		{"a negation and a claim", "!Host(`b.loc`) && Host(`a.loc`)", []Host{{Value: "a.loc"}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ExtractHosts(tt.rule); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ExtractHosts(%q) = %+v, want %+v", tt.rule, got, tt.want)
+			}
+		})
+	}
+}
+
+func declarationHandler(body string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != MiddlewaresPath {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(body))
+	}
+}
+
+func TestDeclares(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{
+			name: "declares itself",
+			body: `[{"name": "spark-http-proxy@file", "provider": "file", "status": "enabled", "type": "headers"}]`,
+			want: true,
+		},
+		{
+			name: "an unrelated traefik",
+			body: `[{"name": "compress@file", "provider": "file", "status": "enabled", "type": "compress"}]`,
+			want: false,
+		},
+		{
+			name: "no middlewares at all",
+			body: `[]`,
+			want: false,
+		},
+		{
+			name: "the declaration is disabled",
+			body: `[{"name": "spark-http-proxy@file", "provider": "file", "status": "disabled", "type": "headers"}]`,
+			want: false,
+		},
+		{
+			name: "a name that only looks like the declaration",
+			body: `[{"name": "spark-http-proxy-lookalike@file", "provider": "file", "status": "enabled", "type": "headers"}]`,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(declarationHandler(tt.body))
+			defer server.Close()
+
+			got, err := New(server.Client(), server.URL).Declares(t.Context())
+			if err != nil {
+				t.Fatalf("Declares() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("Declares() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeclaresReportsAnUnreachableMachine(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url := server.URL
+	server.Close()
+
+	if _, err := NewWithTimeout(url, time.Second).Declares(t.Context()); !errors.Is(err, ErrUnreachable) {
+		t.Fatalf("Declares() error = %v, want it to wrap ErrUnreachable", err)
+	}
+}
+
+func TestRoutesRefusesAnUnconstrainedAlternative(t *testing.T) {
+	tests := []struct {
+		name     string
+		rule     string
+		accepted bool
+	}{
+		{"a bare path alternative hijacks everything", "Host(`peer.loc`) || PathPrefix(`/`)", false},
+		{"an ordinary multi-host rule", "Host(`a.loc`) || Host(`b.loc`)", true},
+		{"a negated host constrains nothing", "Host(`a.loc`) || !Host(`b.loc`)", false},
+		{"a path inside a constrained branch", "Host(`app.loc`) && (PathPrefix(`/api/`) || Path(`/api`))", true},
+		{"a grouped alternation with a path", "(Host(`a.loc`) || Host(`b.loc`)) && PathPrefix(`/api/`)", true},
+		{"a regexp host on one side", "HostRegexp(`^.*\\.loc$`) || Host(`b.loc`)", true},
+		{"an alternative with a header matcher only", "Host(`a.loc`) || HeadersRegexp(`X-Any`, `.*`)", false},
+		{"unbalanced parentheses are not understood", "Host(`a.loc`) || (Host(`b.loc`)", false},
+		{"an unclosed backtick is not understood", "Host(`a.loc`) || Host(`b.loc)", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			routers := []Router{{
+				Name: "peer-0@file", Provider: "file", Rule: tt.rule,
+				Priority: 49, EntryPoints: []string{"http"}, Status: "enabled",
+			}}
+
+			got := Routes(routers)
+
+			if tt.accepted {
+				if len(got.Routes) != 1 {
+					t.Fatalf("Routes = %+v, want the rule accepted", got)
+				}
+				if len(got.Rejected) != 0 {
+					t.Errorf("Rejected = %v, want none", got.Rejected)
+				}
+				return
+			}
+			if len(got.Routes) != 0 {
+				t.Fatalf("Routes = %+v, want the rule refused", got.Routes)
+			}
+			if len(got.Rejected) != 1 || got.Rejected[0] != tt.rule {
+				t.Errorf("Rejected = %v, want the rule reported", got.Rejected)
+			}
+		})
+	}
+}
+
+func TestHostConstrained(t *testing.T) {
+	tests := []struct {
+		name string
+		rule string
+		want bool
+	}{
+		{"a plain host", "Host(`a.loc`)", true},
+		{"parenthesised hijack", "(Host(`a.loc`) || PathPrefix(`/`))", false},
+		{"doubly parenthesised hijack", "((Host(`a.loc`) || PathPrefix(`/`)))", false},
+		{"a conjunction bounds the alternation it contains", "Host(`a.loc`) && (Host(`b.loc`) || PathPrefix(`/`))", true},
+		{"every branch bounded", "Host(`a.loc`) || (Host(`b.loc`) && PathPrefix(`/x`))", true},
+		{"a negated group bounds nothing", "!(Host(`a.loc`))", false},
+		{"a negated host with a conjunction", "!Host(`a.loc`) && PathPrefix(`/x`)", false},
+		{"a host anded onto a negation", "!Host(`a.loc`) && Host(`b.loc`)", true},
+		{"a matcher that is not a host", "PathPrefix(`/`)", false},
+		{"unbalanced parentheses", "(Host(`a.loc`)", false},
+		{"trailing rubbish", "Host(`a.loc`) nonsense", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hostConstrained(tt.rule); got != tt.want {
+				t.Errorf("hostConstrained(%q) = %v, want %v", tt.rule, got, tt.want)
+			}
+		})
+	}
+}
