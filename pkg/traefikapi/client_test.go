@@ -71,8 +71,11 @@ func TestRoutes(t *testing.T) {
 	}
 
 	got := Routes(routers)
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Routes() = %+v, want %+v", got, want)
+	if !reflect.DeepEqual(got.Routes, want) {
+		t.Fatalf("Routes() = %+v, want %+v", got.Routes, want)
+	}
+	if len(got.Rejected) != 0 {
+		t.Errorf("Rejected = %v, want none", got.Rejected)
 	}
 }
 
@@ -245,5 +248,81 @@ func TestDeclaresReportsAnUnreachableMachine(t *testing.T) {
 
 	if _, err := NewWithTimeout(url, time.Second).Declares(t.Context()); !errors.Is(err, ErrUnreachable) {
 		t.Fatalf("Declares() error = %v, want it to wrap ErrUnreachable", err)
+	}
+}
+
+// A rule is copied into a local router verbatim, so an alternative that names
+// no host matches every request this machine receives. Hostname extraction sees
+// only the constrained side, so local precedence never recognises the shadowing
+// as a collision: the rule has to be refused instead.
+func TestRoutesRefusesAnUnconstrainedAlternative(t *testing.T) {
+	tests := []struct {
+		name     string
+		rule     string
+		accepted bool
+	}{
+		{"a bare path alternative hijacks everything", "Host(`peer.loc`) || PathPrefix(`/`)", false},
+		{"an ordinary multi-host rule", "Host(`a.loc`) || Host(`b.loc`)", true},
+		{"a negated host constrains nothing", "Host(`a.loc`) || !Host(`b.loc`)", false},
+		{"a path inside a constrained branch", "Host(`app.loc`) && (PathPrefix(`/api/`) || Path(`/api`))", true},
+		{"a grouped alternation with a path", "(Host(`a.loc`) || Host(`b.loc`)) && PathPrefix(`/api/`)", true},
+		{"a regexp host on one side", "HostRegexp(`^.*\\.loc$`) || Host(`b.loc`)", true},
+		{"an alternative with a header matcher only", "Host(`a.loc`) || HeadersRegexp(`X-Any`, `.*`)", false},
+		{"unbalanced parentheses are not understood", "Host(`a.loc`) || (Host(`b.loc`)", false},
+		{"an unclosed backtick is not understood", "Host(`a.loc`) || Host(`b.loc)", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			routers := []Router{{
+				Name: "peer-0@file", Provider: "file", Rule: tt.rule,
+				Priority: 49, EntryPoints: []string{"http"}, Status: "enabled",
+			}}
+
+			got := Routes(routers)
+
+			if tt.accepted {
+				if len(got.Routes) != 1 {
+					t.Fatalf("Routes = %+v, want the rule accepted", got)
+				}
+				if len(got.Rejected) != 0 {
+					t.Errorf("Rejected = %v, want none", got.Rejected)
+				}
+				return
+			}
+			if len(got.Routes) != 0 {
+				t.Fatalf("Routes = %+v, want the rule refused", got.Routes)
+			}
+			if len(got.Rejected) != 1 || got.Rejected[0] != tt.rule {
+				t.Errorf("Rejected = %v, want the rule reported", got.Rejected)
+			}
+		})
+	}
+}
+
+func TestTopLevelAlternatives(t *testing.T) {
+	tests := []struct {
+		name  string
+		rule  string
+		want  []string
+		valid bool
+	}{
+		{"no alternation", "Host(`a.loc`)", []string{"Host(`a.loc`)"}, true},
+		{"top level", "Host(`a.loc`) || Host(`b.loc`)", []string{"Host(`a.loc`) ", " Host(`b.loc`)"}, true},
+		{"nested is not top level", "Host(`a.loc`) && (Path(`/x`) || Path(`/y`))", []string{"Host(`a.loc`) && (Path(`/x`) || Path(`/y`))"}, true},
+		{"inside backticks is not an operator", "HostRegexp(`^(a||b)\\.loc$`)", []string{"HostRegexp(`^(a||b)\\.loc$`)"}, true},
+		{"unbalanced", "Host(`a.loc`))", nil, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := topLevelAlternatives(tt.rule)
+			if ok != tt.valid {
+				t.Fatalf("topLevelAlternatives() ok = %v, want %v", ok, tt.valid)
+			}
+			if tt.valid && !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("topLevelAlternatives() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

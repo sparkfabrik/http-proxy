@@ -181,6 +181,14 @@ routing is disabled: it says what the proxy is, not what it does. Its name must
 stay outside the `tailscale-peer-*.yaml` glob, or disabling forwarding on a
 machine would also make it undiscoverable by everyone else.
 
+**A peer rule is copied verbatim, so it has to be constrained.** `Routes` in
+`pkg/traefikapi` refuses a rule unless every top-level alternative names a host
+it is not negating: `Host(`peer.loc`) || PathPrefix(`/`)` would otherwise become
+a local router matching every request, and hostname extraction sees only
+`peer.loc`, so local precedence would never recognise the shadowing as a
+collision. A rule that does not parse confidently is refused for the same reason.
+Refusals are logged and reported rather than dropped silently.
+
 **File ownership in the dynamic directory is scoped by prefix.**
 `tailscale-peers` removes only `tailscale-peer-*.yaml` and `dinghy-layer` removes
 only `^[0-9a-f]{12}\.yaml$`, so neither can delete the other's files or the

@@ -57,7 +57,7 @@ const (
 const localOwner = "local"
 
 // probeFunc reads the routable routes of the proxy answering at baseURL.
-type probeFunc func(ctx context.Context, baseURL string) ([]traefikapi.Route, error)
+type probeFunc func(ctx context.Context, baseURL string) (traefikapi.Result, error)
 
 // candidate is a machine about to be probed, or the reason it is not.
 //
@@ -111,6 +111,9 @@ type PeerReport struct {
 	// backoff a repeatedly failing machine has earned.
 	RetryAt time.Time `json:"retryAt,omitzero"`
 	Hosts   []string  `json:"hosts,omitempty"`
+	// RejectedRules holds the machine's rules that were refused for not being
+	// constrained by a hostname.
+	RejectedRules []string `json:"rejectedRules,omitempty"`
 }
 
 // Collision is a hostname claimed by more than one machine, naming the machine
@@ -151,20 +154,20 @@ func newDiscovery(cfg *config.TailscaleConfig, log *logger.Logger, source tailsc
 // identifies a Traefik rather than this proxy, and an unrelated one on the
 // tailnet must not have its routes adopted. Asking first also means a machine
 // that is not this proxy costs one request rather than two.
-func httpProbe(ctx context.Context, baseURL string) ([]traefikapi.Route, error) {
+func httpProbe(ctx context.Context, baseURL string) (traefikapi.Result, error) {
 	client := traefikapi.NewWithTimeout(baseURL, probeTimeout)
 
 	declared, err := client.Declares(ctx)
 	if err != nil {
-		return nil, err
+		return traefikapi.Result{}, err
 	}
 	if !declared {
-		return nil, traefikapi.ErrUndeclared
+		return traefikapi.Result{}, traefikapi.ErrUndeclared
 	}
 
 	routers, err := client.Routers(ctx)
 	if err != nil {
-		return nil, err
+		return traefikapi.Result{}, err
 	}
 	return traefikapi.Routes(routers), nil
 }
@@ -202,15 +205,20 @@ func (d *discovery) runCycle(ctx context.Context) *Report {
 
 	keep := make(map[string]struct{}, len(owned))
 	for _, result := range owned {
-		if len(result.routes) == 0 {
+		if len(result.routes) == 0 || result.slug == "" {
 			continue
 		}
 		fileName := peerConfigFileName(result.slug)
+
+		// Reserved before the write, not after. A transient write failure must
+		// not have reconciliation remove the last good configuration for a
+		// machine whose ownership was verified: withdrawing is for ownership
+		// that could not be checked, not for a disk error.
+		keep[fileName] = struct{}{}
+
 		if err := d.writeConfig(fileName, peerTraefikConfig(result.slug, result.address, result.routes)); err != nil {
 			d.logger.Error("Failed to write peer configuration", "error", err, "peer", result.name)
-			continue
 		}
-		keep[fileName] = struct{}{}
 	}
 
 	if err := d.reconcileConfigs(keep); err != nil {
@@ -285,10 +293,11 @@ func sortCandidates(candidates []candidate) []candidate {
 // probeResult is what one machine gave this cycle.
 type probeResult struct {
 	candidate
-	status  string
-	reason  string
-	retryAt time.Time
-	routes  []traefikapi.Route
+	status   string
+	reason   string
+	retryAt  time.Time
+	routes   []traefikapi.Route
+	rejected []string
 }
 
 func (d *discovery) probeCandidates(ctx context.Context, candidates []candidate) []probeResult {
@@ -315,14 +324,20 @@ func (d *discovery) probeCandidate(ctx context.Context, c candidate) probeResult
 		}
 	}
 
-	routes, err := d.probe(ctx, fmt.Sprintf("http://%s:%d", c.address, peerAPIPort))
+	result, err := d.probe(ctx, fmt.Sprintf("http://%s:%d", c.address, peerAPIPort))
 	if err != nil {
 		status := d.recordFailure(c, err)
 		return probeResult{candidate: c, status: status, reason: err.Error(), retryAt: d.states[c.id].nextAttempt.UTC()}
 	}
 
+	for _, rule := range result.Rejected {
+		d.logger.Warn("Refusing a peer rule that is not constrained by a hostname",
+			"peer", c.name, "address", c.address, "rule", rule,
+			"hint", "every alternative of the rule has to name a host, or it would match requests this machine serves")
+	}
+
 	delete(d.states, c.id)
-	return probeResult{candidate: c, status: statusOK, routes: routes}
+	return probeResult{candidate: c, status: statusOK, routes: result.Routes, rejected: result.Rejected}
 }
 
 // recordFailure pushes a failing machine further out on each consecutive
@@ -444,13 +459,13 @@ func claimedElsewhere(hosts []string, localHosts map[string]struct{}, owners map
 // filter that keeps a machine from offering what it does not serve itself, so
 // the routes written by the previous cycle do not read as locally served.
 func (d *discovery) localHosts(ctx context.Context) (map[string]struct{}, error) {
-	routes, err := d.probe(ctx, d.config.LocalAPIURL)
+	result, err := d.probe(ctx, d.config.LocalAPIURL)
 	if err != nil {
 		return nil, err
 	}
 
 	hosts := make(map[string]struct{})
-	for _, route := range routes {
+	for _, route := range result.Routes {
 		for _, host := range route.Hosts {
 			hosts[host] = struct{}{}
 		}
@@ -514,12 +529,26 @@ func peerSlug(name string) string {
 // would otherwise overwrite the first's file and lose its routes silently. The
 // address disambiguates, being unique on a tailnet by construction.
 func uniqueSlug(taken map[string]string, id, name, address string) string {
-	slug := peerSlug(name)
-	if holder, used := taken[slug]; used && holder != id {
-		slug = slug + "-" + peerSlug(address)
+	candidates := []string{peerSlug(name), peerSlug(name) + "-" + peerSlug(address)}
+
+	// A third machine can normalise onto the disambiguated name too, so the
+	// search continues rather than stopping at the address. It is bounded by
+	// the number of machines already holding a slug, since each attempt can
+	// collide with at most one of them.
+	for i := 2; i <= len(taken)+2; i++ {
+		candidates = append(candidates, fmt.Sprintf("%s-%s-%d", peerSlug(name), peerSlug(address), i))
 	}
-	taken[slug] = id
-	return slug
+
+	for _, slug := range candidates {
+		if holder, used := taken[slug]; !used || holder == id {
+			taken[slug] = id
+			return slug
+		}
+	}
+
+	// Unreachable with the bound above, and a machine without a file is better
+	// than two machines sharing one.
+	return ""
 }
 
 func peerConfigFileName(slug string) string {
@@ -640,12 +669,13 @@ func peerReports(results []probeResult, owned []ownedRoutes) []PeerReport {
 	reports := make([]PeerReport, 0, len(results))
 	for _, result := range results {
 		reports = append(reports, PeerReport{
-			Name:    result.name,
-			Address: result.address,
-			Status:  result.status,
-			Reason:  result.reason,
-			RetryAt: result.retryAt,
-			Hosts:   hosts[result.id],
+			Name:          result.name,
+			Address:       result.address,
+			Status:        result.status,
+			Reason:        result.reason,
+			RetryAt:       result.retryAt,
+			Hosts:         hosts[result.id],
+			RejectedRules: result.rejected,
 		})
 	}
 	return reports

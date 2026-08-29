@@ -149,14 +149,34 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 	return nil
 }
 
+// Result is what a machine's routing table reduces to: the routes worth
+// forwarding, and the rules that were refused.
+type Result struct {
+	Routes []Route
+	// Rejected holds rules that named a hostname but were not safely
+	// constrained, so a caller can say what it refused rather than dropping it
+	// silently. A rule we cannot be confident about is exactly the one not to
+	// copy.
+	Rejected []string
+}
+
 // Routes keeps the routers that name a hostname a machine serves itself.
 //
 // Routers are dropped when they are disabled, when they belong to the proxy's
 // own dashboard and API, when they carry the peer prefix, when they are the
 // HTTPS half of a pair the proxy emits once per entrypoint, and when their
 // rule matches no hostname at all.
-func Routes(routers []Router) []Route {
-	routes := make([]Route, 0, len(routers))
+//
+// A rule that survives all that is still refused unless every one of its
+// top-level alternatives is constrained by a hostname. The rule is copied into
+// a local router verbatim, so an unconstrained alternative such as
+// Host(`peer.loc`) || PathPrefix(`/`) would match every request this machine
+// receives, and local precedence could not save it: the hostname extraction
+// sees only `peer.loc`, so the route that shadows every local container would
+// never be recognised as a collision.
+func Routes(routers []Router) Result {
+	result := Result{Routes: make([]Route, 0, len(routers))}
+
 	for _, router := range routers {
 		if router.Status != "enabled" {
 			continue
@@ -174,9 +194,68 @@ func Routes(routers []Router) []Route {
 		if len(hosts) == 0 {
 			continue
 		}
-		routes = append(routes, Route{Rule: router.Rule, Priority: router.Priority, Hosts: hosts})
+		if !hostConstrained(router.Rule) {
+			result.Rejected = append(result.Rejected, router.Rule)
+			continue
+		}
+		result.Routes = append(result.Routes, Route{Rule: router.Rule, Priority: router.Priority, Hosts: hosts})
 	}
-	return routes
+
+	return result
+}
+
+// hostConstrained reports whether every top-level alternative of a rule is
+// narrowed by a hostname it is not negating. A rule that cannot be parsed
+// confidently, with unbalanced parentheses or backticks, is not constrained.
+func hostConstrained(rule string) bool {
+	branches, ok := topLevelAlternatives(rule)
+	if !ok {
+		return false
+	}
+
+	for _, branch := range branches {
+		if len(ExtractHosts(branch)) == 0 {
+			return false
+		}
+	}
+	return len(branches) > 0
+}
+
+// topLevelAlternatives splits a rule on the || operators that are not inside
+// parentheses or backticks. It reports false when the rule does not parse.
+func topLevelAlternatives(rule string) ([]string, bool) {
+	var branches []string
+	depth, start, quoted := 0, 0, false
+
+	for i := 0; i < len(rule); i++ {
+		switch rule[i] {
+		case '`':
+			quoted = !quoted
+		case '(':
+			if !quoted {
+				depth++
+			}
+		case ')':
+			if !quoted {
+				depth--
+				if depth < 0 {
+					return nil, false
+				}
+			}
+		case '|':
+			if quoted || depth != 0 || i+1 >= len(rule) || rule[i+1] != '|' {
+				continue
+			}
+			branches = append(branches, rule[start:i])
+			i++
+			start = i + 1
+		}
+	}
+
+	if quoted || depth != 0 {
+		return nil, false
+	}
+	return append(branches, rule[start:]), true
 }
 
 // backtickedPattern finds the arguments of a matcher. Traefik quotes them with

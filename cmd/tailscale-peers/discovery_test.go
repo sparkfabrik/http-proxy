@@ -58,21 +58,22 @@ func (f fakeSource) Status(context.Context) (*tailscale.Status, error) {
 // fakeProbe answers per base URL, so a machine that runs no proxy is expressed
 // by having no entry rather than by a flag.
 type fakeProbe struct {
-	routes map[string][]traefikapi.Route
-	errs   map[string]error
-	calls  []string
+	routes   map[string][]traefikapi.Route
+	rejected map[string][]string
+	errs     map[string]error
+	calls    []string
 }
 
-func (f *fakeProbe) probe(_ context.Context, baseURL string) ([]traefikapi.Route, error) {
+func (f *fakeProbe) probe(_ context.Context, baseURL string) (traefikapi.Result, error) {
 	f.calls = append(f.calls, baseURL)
 	if err, failing := f.errs[baseURL]; failing {
-		return nil, err
+		return traefikapi.Result{}, err
 	}
 	routes, found := f.routes[baseURL]
 	if !found {
-		return nil, fmt.Errorf("%w: connection refused", traefikapi.ErrUnreachable)
+		return traefikapi.Result{}, fmt.Errorf("%w: connection refused", traefikapi.ErrUnreachable)
 	}
-	return routes, nil
+	return traefikapi.Result{Routes: routes, Rejected: f.rejected[baseURL]}, nil
 }
 
 func hostRoute(host string) traefikapi.Route {
@@ -661,5 +662,94 @@ func TestShutdownWithdrawsEveryPeerRoute(t *testing.T) {
 	}
 	if _, err := os.Stat(written); !os.IsNotExist(err) {
 		t.Errorf("%s survived shutdown, want every forwarded hostname withdrawn", written)
+	}
+}
+
+// A machine offering a rule that could not be accepted is reported, so a
+// misconfiguration on the other machine is visible rather than silent.
+func TestRefusedRulesAreReported(t *testing.T) {
+	probe := &fakeProbe{
+		routes: map[string][]traefikapi.Route{
+			"http://http-proxy:8080": nil,
+			peerURL("100.64.0.2"):    {hostRoute("app.loc")},
+		},
+		rejected: map[string][]string{
+			peerURL("100.64.0.2"): {"Host(`peer.loc`) || PathPrefix(`/`)"},
+		},
+	}
+	cfg := &config.TailscaleConfig{Enabled: true, Source: config.TailscaleSourceSocket}
+
+	d := testDiscovery(t, cfg, fakeSource{document: tailnetStatus}, probe)
+	report := d.runCycle(t.Context())
+
+	var reported bool
+	for _, peer := range report.Peers {
+		if peer.Name == "machine-b" && len(peer.RejectedRules) == 1 {
+			reported = true
+		}
+	}
+	if !reported {
+		t.Fatalf("Peers = %+v, want the refused rule reported", report.Peers)
+	}
+	if !strings.Contains(report.Render(), "Rules refused for not naming a host") {
+		t.Errorf("the rendered report does not mention the refusal:\n%s", report.Render())
+	}
+}
+
+// A write that fails must not have reconciliation delete the last good
+// configuration: withdrawing is for ownership that could not be checked.
+func TestAFailedWriteKeepsThePreviousConfiguration(t *testing.T) {
+	probe := &fakeProbe{routes: map[string][]traefikapi.Route{
+		"http://http-proxy:8080": nil,
+		peerURL("100.64.0.2"):    {hostRoute("app.loc")},
+	}}
+	cfg := &config.TailscaleConfig{Enabled: true, Source: config.TailscaleSourceSocket}
+
+	d := testDiscovery(t, cfg, fakeSource{document: tailnetStatus}, probe)
+	d.runCycle(t.Context())
+
+	written := filepath.Join(cfg.TraefikDynamicDir, "tailscale-peer-machine-b.yaml")
+	if _, err := os.Stat(written); err != nil {
+		t.Fatalf("expected the first cycle to write %s: %v", written, err)
+	}
+
+	// A directory where the temporary file has to go makes the write fail
+	// without touching the file already there.
+	if err := os.Mkdir(written+".tmp", 0o755); err != nil {
+		t.Fatalf("failed to block the write: %v", err)
+	}
+
+	d.now = func() time.Time { return time.Now().Add(time.Hour) }
+	d.runCycle(t.Context())
+
+	if _, err := os.Stat(written); err != nil {
+		t.Errorf("%s was removed after a failed write: %v", written, err)
+	}
+}
+
+// Two machines can share a hostname, and a third can normalise onto the name a
+// second one was given to tell it apart. Each still gets its own file.
+func TestSlugsStayUniqueWhenTheDisambiguationCollides(t *testing.T) {
+	taken := map[string]string{}
+
+	first := uniqueSlug(taken, "id-1", "machine-b", "100.64.0.10")
+	second := uniqueSlug(taken, "id-2", "machine-b", "100.64.0.20")
+	// A machine literally named after the second one's disambiguated slug.
+	third := uniqueSlug(taken, "id-3", "machine-b-100-64-0-20", "100.64.0.30")
+
+	slugs := map[string]bool{first: true, second: true, third: true}
+	if len(slugs) != 3 {
+		t.Fatalf("slugs = %q, %q, %q, want three distinct names", first, second, third)
+	}
+	for _, slug := range []string{first, second, third} {
+		if slug == "" {
+			t.Fatal("a machine was left without a slug")
+		}
+	}
+
+	// Stable across repeated resolution of the same machines.
+	again := map[string]string{}
+	if uniqueSlug(again, "id-1", "machine-b", "100.64.0.10") != first {
+		t.Error("the first machine's slug is not stable")
 	}
 }

@@ -44,6 +44,13 @@ func (r *Report) Render() string {
 	b.WriteString("\n")
 	b.WriteString(renderSummary(r.Peers))
 
+	if rejected := rejectedRules(r.Peers); len(rejected) > 0 {
+		b.WriteString("\nRules refused for not naming a host on every alternative:\n")
+		for _, line := range rejected {
+			fmt.Fprintf(&b, "  %s\n", line)
+		}
+	}
+
 	if len(r.Collisions) > 0 {
 		b.WriteString("\nHostnames claimed more than once:\n")
 		for _, collision := range r.Collisions {
@@ -52,6 +59,19 @@ func (r *Report) Render() string {
 	}
 
 	return b.String()
+}
+
+// rejectedRules lists the rules refused this cycle, named by the machine that
+// offered them. A refusal is a misconfiguration on the other machine, so it has
+// to be visible rather than silent.
+func rejectedRules(peers []PeerReport) []string {
+	var lines []string
+	for _, peer := range peers {
+		for _, rule := range peer.RejectedRules {
+			lines = append(lines, fmt.Sprintf("%s: %s", peer.Name, rule))
+		}
+	}
+	return lines
 }
 
 func renderTable(peers []PeerReport, cycle time.Time) string {
