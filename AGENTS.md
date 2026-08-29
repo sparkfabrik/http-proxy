@@ -79,56 +79,10 @@ directly by Traefik's Docker provider) and `VIRTUAL_HOST` env vars (translated
 by `dinghy_layer` into files). Both require `join_networks` to have bridged the
 network first.
 
-The diagram above is the local mechanism: containers on this machine. The one
-below is the cross-machine mechanism, `tailscale_peers`, which ends in the same
-volume and the same file provider. Together they are every way a route reaches
-Traefik.
-
-```mermaid
-graph TB
-    subgraph sources["Status document, one transport per platform"]
-        direction LR
-        sock["tailscaled unix socket<br/>Linux"]
-        file["status file written by the host<br/>macOS"]
-    end
-
-    own{"Same account,<br/>and online?"}
-    declares{"Declares itself<br/>as this proxy?"}
-    read["Read the machine's routing table"]
-    local{"Served by a local<br/>container?"}
-    write["Write tailscale-peer-machine.yaml"]
-    dyn[("Traefik dynamic directory")]
-    proxy["Local proxy, file provider"]
-
-    skipped(["skipped, with the reason"])
-    foreign(["not this proxy"])
-    collision(["local wins, collision reported"])
-
-    sources -->|"every cycle"| own
-    own -->|"no"| skipped
-    own -->|"yes"| declares
-    declares -->|"no"| foreign
-    declares -->|"yes"| read
-    read --> local
-    local -->|"yes"| collision
-    local -->|"no"| write
-    write --> dyn
-    dyn -.->|"watched, no restart"| proxy
-
-    classDef reject fill:#f6d6d6,stroke:#a33,color:#000
-    classDef accept fill:#d6f0d9,stroke:#1a7f37,color:#000
-    class skipped,foreign,collision reject
-    class write,dyn accept
-    style sources fill:#eef6ff,stroke:#1f6feb,color:#000
-```
-
-**Reading the diagram.** One arrow leaves the sources group because either
-transport feeds the same filter: the platform decides how the document arrives,
-never what it is checked against. Diamonds are decisions, the three red terminals
-are the three statuses `tailscale-peers` reports, and green is what gets written.
-The dotted edge is where this service stops and Traefik takes over, watching the
-directory with no restart. The request path that reads what both of them write is
-in the README.
+That is the local mechanism. The cross-machine one, `tailscale_peers`, ends in
+the same volume and the same file provider, and is diagrammed in the README
+under "How the routes get there", alongside the request path that reads what
+both of them write.
 
 ### Shared Go packages (`pkg/`)
 
