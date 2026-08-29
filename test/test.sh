@@ -1647,6 +1647,12 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     exit 0
 fi
 
+# Sourcing this file defines its functions and runs nothing, so one of them can
+# be exercised on its own without the suite touching the machine.
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    return 0
+fi
+
 # Run tests and capture exit code
 main "$@"
 exit_code=$?
