@@ -114,12 +114,35 @@ TAILSCALE_ENABLED_ORIGIN="$(stack_origin tailscale "${HTTP_PROXY_TAILSCALE_ENABL
 METRICS_ENABLED="$(resolve_stack metrics "${HTTP_PROXY_METRICS_ENABLED:-}")"
 METRICS_ENABLED_ORIGIN="$(stack_origin metrics "${HTTP_PROXY_METRICS_ENABLED:-}")"
 
-TAILSCALE_SOURCE="${HTTP_PROXY_TAILSCALE_SOURCE:-socket}"
+TAILSCALE_SOCKET="${HTTP_PROXY_TAILSCALE_SOCKET:-/var/run/tailscale/tailscaled.sock}"
+
+# Sets the source from the host: the daemon socket if it is there, the
+# host-written document if it is not. An explicit setting overrides both.
+# Assigns rather than echoes, so the origin survives.
+resolve_tailscale_source() {
+  if [[ -n "${HTTP_PROXY_TAILSCALE_SOURCE:-}" ]]; then
+    TAILSCALE_SOURCE="${HTTP_PROXY_TAILSCALE_SOURCE}"
+    TAILSCALE_SOURCE_ORIGIN="the environment"
+  elif [[ -S "${TAILSCALE_SOCKET}" ]]; then
+    TAILSCALE_SOURCE="socket"
+    TAILSCALE_SOURCE_ORIGIN="the daemon socket at ${TAILSCALE_SOCKET}"
+  else
+    TAILSCALE_SOURCE="file"
+    TAILSCALE_SOURCE_ORIGIN="no daemon socket at ${TAILSCALE_SOCKET}"
+  fi
+}
+
+TAILSCALE_SOURCE=""
+TAILSCALE_SOURCE_ORIGIN=""
+resolve_tailscale_source
 STATE_DIR="${CONFIG_DIR}/state"
 TAILSCALE_STATUS_FILE="${STATE_DIR}/tailscale-status.json"
 TAILSCALE_STATE_FILE="${STATE_DIR}/tailscale-peers.json"
 TAILSCALE_RENDERED_FILE="${STATE_DIR}/tailscale-peers.txt"
 TAILSCALE_SOCKET_OVERRIDE="$(dirname "${COMPOSE_FILE}")/compose.tailscale-socket.yml"
+TAILSCALE_STATUS_LOG="${STATE_DIR}/tailscale-status.log"
+STATUS_AGENT_LABEL="com.sparkfabrik.http-proxy.tailscale-status"
+STATUS_AGENT_PLIST="${HOME}/Library/LaunchAgents/${STATUS_AGENT_LABEL}.plist"
 
 # Extra compose files. COMPOSE_FILE holds a single path.
 COMPOSE_FILES=("-f" "${COMPOSE_FILE}")
@@ -135,6 +158,7 @@ apply_optional_stacks() {
 
   if [[ "${TAILSCALE_ENABLED}" == "true" ]]; then
     export HTTP_PROXY_TAILSCALE_ENABLED=true
+    export HTTP_PROXY_TAILSCALE_SOURCE="${TAILSCALE_SOURCE}"
     profiles="${profiles:+${profiles},}tailscale"
 
     # Adds the socket mount, which lives in its own file.
@@ -396,7 +420,7 @@ show_config() {
   echo "Tailnet peer routing:"
   echo "  Peer routing: ${TAILSCALE_ENABLED} (from ${TAILSCALE_ENABLED_ORIGIN})"
   echo "  Monitoring: ${METRICS_ENABLED} (from ${METRICS_ENABLED_ORIGIN})"
-  echo "  HTTP_PROXY_TAILSCALE_SOURCE: ${TAILSCALE_SOURCE} (default: socket)"
+  echo "  Peer routing source: ${TAILSCALE_SOURCE} (from ${TAILSCALE_SOURCE_ORIGIN})"
   echo "  HTTP_PROXY_TAILSCALE_REFRESH_INTERVAL: ${HTTP_PROXY_TAILSCALE_REFRESH_INTERVAL:-60s} (default: 60s)"
   echo "  HTTP_PROXY_TAILSCALE_STATUS_MAX_AGE: ${HTTP_PROXY_TAILSCALE_STATUS_MAX_AGE:-10m} (default: 10m)"
   echo "  HTTP_PROXY_TAILSCALE_SOCKET: ${HTTP_PROXY_TAILSCALE_SOCKET:-/var/run/tailscale/tailscaled.sock}"
@@ -540,7 +564,7 @@ show_detailed_help() {
   echo ""
   echo "  Enable tailnet peer routing (off by default):"
   echo "    HTTP_PROXY_TAILSCALE_ENABLED=true      # Forward a hostname served by another machine"
-  echo "    HTTP_PROXY_TAILSCALE_SOURCE=socket     # socket (default, Linux) or file (macOS)"
+  echo "    HTTP_PROXY_TAILSCALE_SOURCE=socket     # override; detected from the host by default"
   echo "    HTTP_PROXY_TAILSCALE_REFRESH_INTERVAL=60s # how often peers are re-read"
   echo "    HTTP_PROXY_TAILSCALE_SOCKET=/var/run/tailscale/tailscaled.sock"
   echo ""
@@ -845,6 +869,102 @@ resolve_tailscale_client() {
   return 1
 }
 
+# Converts a duration such as 10m, 600s or 1h into seconds.
+duration_seconds() {
+  local number="${1%[smh]}" unit="${1##*[0-9]}"
+
+  [[ "${number}" =~ ^[0-9]+$ ]] || { echo 0; return 0; }
+  case "${unit}" in
+    h) echo $((number * 3600)) ;;
+    m) echo $((number * 60)) ;;
+    *) echo "${number}" ;;
+  esac
+}
+
+# Seconds between status refreshes: half the staleness tolerance, at least 60,
+# so a missed run still leaves the document inside the tolerance.
+status_refresh_interval() {
+  local tolerance
+  tolerance="$(duration_seconds "${HTTP_PROXY_TAILSCALE_STATUS_MAX_AGE:-10m}")"
+
+  local interval=$((tolerance / 2))
+  [[ "${interval}" -lt 60 ]] && interval=60
+  echo "${interval}"
+}
+
+# Installs the launchd agent that keeps the status document fresh on macOS.
+install_status_agent() {
+  local tolerance interval
+  tolerance="$(duration_seconds "${HTTP_PROXY_TAILSCALE_STATUS_MAX_AGE:-10m}")"
+  interval="$(status_refresh_interval)"
+
+  if [[ "${tolerance}" -lt 120 ]]; then
+    log_warning "HTTP_PROXY_TAILSCALE_STATUS_MAX_AGE is ${tolerance}s, which no refresh interval can keep up with"
+    log_info "Raise it to at least 2m, or refresh the document yourself"
+    return 0
+  fi
+
+  if ! resolve_tailscale_client >/dev/null; then
+    log_warning "Not installing the status refresh: the Tailscale client was not found"
+    log_info "Install Tailscale, then run ${0} start-with-tailscale again"
+    return 0
+  fi
+
+  ensure_state_dir
+  mkdir -p "$(dirname "${STATUS_AGENT_PLIST}")"
+  : >"${TAILSCALE_STATUS_LOG}"
+
+  cat >"${STATUS_AGENT_PLIST}" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${STATUS_AGENT_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${SCRIPT_DIR}/$(basename "${SOURCE}")</string>
+    <string>tailscale-status</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>${interval}</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardErrorPath</key>
+  <string>${TAILSCALE_STATUS_LOG}</string>
+</dict>
+</plist>
+EOF
+
+  launchctl bootout "gui/$(id -u)/${STATUS_AGENT_LABEL}" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$(id -u)" "${STATUS_AGENT_PLIST}" >/dev/null 2>&1 ||
+    launchctl load -w "${STATUS_AGENT_PLIST}" >/dev/null 2>&1 ||
+    log_warning "Could not load ${STATUS_AGENT_LABEL}; run it yourself with ${0} tailscale-status"
+
+  log_success "Status refresh installed, every ${interval}s"
+}
+
+# Removes the launchd agent.
+remove_status_agent() {
+  [[ -f "${STATUS_AGENT_PLIST}" ]] || return 0
+
+  launchctl bootout "gui/$(id -u)/${STATUS_AGENT_LABEL}" >/dev/null 2>&1 ||
+    launchctl unload -w "${STATUS_AGENT_PLIST}" >/dev/null 2>&1 || true
+  rm -f "${STATUS_AGENT_PLIST}"
+  log_info "Status refresh removed"
+}
+
+# Installs or removes the agent according to the platform and the source.
+apply_status_agent() {
+  [[ "${OSTYPE}" == darwin* ]] || return 0
+
+  if [[ "${TAILSCALE_ENABLED}" == "true" && "${TAILSCALE_SOURCE}" == "file" ]]; then
+    install_status_agent
+  else
+    remove_status_agent
+  fi
+}
+
 # Writes the tailnet status document the file source reads, through a rename.
 write_tailscale_status() {
   local client temp
@@ -887,6 +1007,7 @@ start_with_tailscale() {
     apply_optional_stacks
     ensure_state_dir
     refresh_tailscale_status_if_needed
+    apply_status_agent
     recreate_stack
 }
 
@@ -894,6 +1015,8 @@ start_with_tailscale() {
 stop_tailscale() {
     log_info "Stopping tailnet peer routing..."
     clear_stack tailscale
+    TAILSCALE_ENABLED=false
+    apply_status_agent
     dc_tailscale stop tailscale_peers >/dev/null 2>&1 || true
     dc_tailscale rm -f tailscale_peers >/dev/null 2>&1 || true
 
@@ -948,6 +1071,7 @@ show_tailscale_peers() {
     # The proxy is up and discovery has not written in a while.
     log_warning "This report is more than a minute old, so discovery may have stopped"
     echo "   Check the service with: ${0} logs tailscale_peers"
+    [[ -s "${TAILSCALE_STATUS_LOG}" ]] && echo "   The status refresh reported errors in ${TAILSCALE_STATUS_LOG}"
     echo ""
   fi
 
@@ -1435,6 +1559,7 @@ stop-metrics)
   ;;
 clean)
   log_info "Stopping all services and cleaning volumes..."
+  remove_status_agent
   dc_all down -v
   log_success "All services stopped and volumes removed"
   ;;
@@ -1444,6 +1569,7 @@ destroy)
   echo
   if [[ $REPLY =~ ^[Yy]$ ]]; then
     log_info "Destroying all HTTP proxy resources..."
+    remove_status_agent
     dc_all down --volumes --rmi all --remove-orphans
     log_success "All HTTP proxy resources destroyed"
   else

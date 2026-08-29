@@ -902,16 +902,17 @@ spark-http-proxy start-with-tailscale
 Do the same on your other machine. Nothing else is configured: no peer list, no
 addresses, no changes to any project.
 
-**On macOS there is one extra step.** The macOS Tailscale build exposes no unix
-socket a container can mount, so the host writes the status document instead:
+**macOS needs no extra step.** The macOS Tailscale build exposes no unix socket
+a container can mount, so the host writes the status document instead. The CLI
+detects that by looking for the socket, installs a launchd agent that keeps the
+document current, and removes the agent when peer routing is stopped. The
+command is the same one:
 
 ```bash
-HTTP_PROXY_TAILSCALE_SOURCE=file spark-http-proxy start-with-tailscale
+spark-http-proxy start-with-tailscale
 ```
 
-`start-with-tailscale` writes that document once. Keep it current with a
-scheduled job running one command, otherwise discovery goes stale and stops
-adopting peers:
+To refresh the document yourself, or from your own scheduler:
 
 ```bash
 spark-http-proxy tailscale-status
@@ -964,14 +965,14 @@ HTTP_PROXY_TAILSCALE_ENABLED=true spark-http-proxy start
 Do the same on the other machine, and their hostnames become mutually reachable.
 Disabling it and restarting removes every forwarded hostname.
 
-| Variable                                | Default                              | Meaning                                                                           |
-| --------------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------- |
-| `HTTP_PROXY_TAILSCALE_ENABLED`          | `false`                              | Turns the behaviour on                                                            |
-| `HTTP_PROXY_TAILSCALE_SOURCE`           | `socket`                             | Where the tailnet status document comes from: `socket` or `file`                  |
-| `HTTP_PROXY_TAILSCALE_REFRESH_INTERVAL` | `60s`                                | How often peers are re-read                                                       |
-| `HTTP_PROXY_TAILSCALE_STATUS_MAX_AGE`   | `10m`                                | How old a host-written status document may be before it is treated as no document |
-| `HTTP_PROXY_TAILSCALE_SOCKET`           | `/var/run/tailscale/tailscaled.sock` | The daemon socket, for the `socket` source                                        |
-| `HTTP_PROXY_TAILSCALE_STATUS_FILE`      | `/state/tailscale-status.json`       | The status document, for the `file` source                                        |
+| Variable                                | Default                              | Meaning                                                                                                                              |
+| --------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `HTTP_PROXY_TAILSCALE_ENABLED`          | `false`                              | Turns the behaviour on                                                                                                               |
+| `HTTP_PROXY_TAILSCALE_SOURCE`           | detected                             | Where the tailnet status document comes from: `socket` or `file`. Detected from whether the daemon socket exists; set it to override |
+| `HTTP_PROXY_TAILSCALE_REFRESH_INTERVAL` | `60s`                                | How often peers are re-read                                                                                                          |
+| `HTTP_PROXY_TAILSCALE_STATUS_MAX_AGE`   | `10m`                                | How old a host-written status document may be before it is treated as no document                                                    |
+| `HTTP_PROXY_TAILSCALE_SOCKET`           | `/var/run/tailscale/tailscaled.sock` | The daemon socket, for the `socket` source                                                                                           |
+| `HTTP_PROXY_TAILSCALE_STATUS_FILE`      | `/state/tailscale-status.json`       | The status document, for the `file` source                                                                                           |
 
 Discovery is polling, so a container appearing on another machine takes up to
 one interval to become reachable. The interval is paced for a background daemon:
@@ -985,16 +986,29 @@ by the same filter: this is the same discovery over a different transport, not a
 weaker mode.
 
 ```bash
-HTTP_PROXY_TAILSCALE_ENABLED=true HTTP_PROXY_TAILSCALE_SOURCE=file spark-http-proxy start
+spark-http-proxy start-with-tailscale
 ```
 
-`start` writes the document. Keeping it current is one command on a schedule:
+The source is detected rather than configured: the CLI uses the daemon socket
+when it is present and the host-written document when it is not, so macOS needs
+no flag and cannot be started against a socket it does not have.
+
+Keeping the document current is a launchd agent,
+`com.sparkfabrik.http-proxy.tailscale-status`, installed with peer routing and
+removed by `stop-tailscale`, `clean` and `destroy`. It runs
+`spark-http-proxy tailscale-status` every half of the staleness tolerance, so 5
+minutes by default, and writes only failures to
+`~/.local/spark/http-proxy/state/tailscale-status.log`. Setting the tolerance
+below 2 minutes leaves no interval that can keep up, so the agent is not
+installed and the CLI says so.
+
+Run the refresh yourself with:
 
 ```bash
 spark-http-proxy tailscale-status
 ```
 
-Schedule that command every 5 minutes. A document older than
+A document older than
 `HTTP_PROXY_TAILSCALE_STATUS_MAX_AGE`, 10 minutes by default, is treated as no
 document rather than as an empty tailnet, so a machine that stops refreshing it
 withdraws its peers instead of forwarding to machines that may have gone away.
@@ -1003,6 +1017,10 @@ document must be depends on how often the host writes it, not on how often peers
 are polled. The command
 finds the Tailscale client on `PATH` first and inside the application bundle
 second, which is where it lives on macOS.
+
+On macOS, disable peer routing with `stop-tailscale` before removing the proxy
+itself: an agent left behind points at a binary that is gone, and launchd keeps
+reporting it.
 
 `spark-http-proxy` creates that directory, owner only, before starting the stack. Starting the containers with `docker compose` directly instead leaves the service to create it as root, so create it yourself first if you do that.
 

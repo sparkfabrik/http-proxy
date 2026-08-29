@@ -1180,6 +1180,34 @@ test_tailscale_peer_routing() {
 
     write_tailnet_status 1 "$peer_address"
 
+    # The source follows the socket the host has, not a setting.
+    local absent_socket="${PEER_CLI_HOME}/no-such-socket"
+
+    total=$((total + 1))
+    if HTTP_PROXY_TAILSCALE_SOCKET="${absent_socket}" peer_cli show-config 2>/dev/null | grep -q "Peer routing source: file"; then
+        success "the source is the file when the host has no daemon socket"
+        passed=$((passed + 1))
+    else
+        error "the source did not fall back to the file with no socket present"
+    fi
+
+    total=$((total + 1))
+    if HTTP_PROXY_TAILSCALE_SOCKET=/var/run/tailscale/tailscaled.sock peer_cli show-config 2>/dev/null | grep -q "Peer routing source: socket"; then
+        success "the source is the socket when the host has one"
+        passed=$((passed + 1))
+    else
+        error "the source did not resolve to the socket with one present"
+    fi
+
+    total=$((total + 1))
+    if HTTP_PROXY_TAILSCALE_SOCKET="${absent_socket}" HTTP_PROXY_TAILSCALE_SOURCE=socket \
+        peer_cli show-config 2>/dev/null | grep -q "Peer routing source: socket"; then
+        success "an explicit source overrides what the host has"
+        passed=$((passed + 1))
+    else
+        error "the explicit source was not honoured"
+    fi
+
     # A cleared entry must leave the rest of the record readable, and must
     # leave the line boundary a later record appends after.
     local record="${PEER_CLI_HOME}/.local/spark/http-proxy/optional-stacks"

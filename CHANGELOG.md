@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The tailnet status source is detected from the host rather than defaulting to the daemon socket, so macOS starts against the host-written document without a flag and cannot be started against a socket it does not have. `HTTP_PROXY_TAILSCALE_SOURCE` still overrides it ([#128](https://github.com/sparkfabrik/http-proxy/issues/128))
+- macOS installs a launchd agent that keeps the status document current, at half the staleness tolerance, removed by `stop-tailscale`, `clean` and `destroy`. Peer routing there previously worked only until the document went stale ([#128](https://github.com/sparkfabrik/http-proxy/issues/128))
+
 - An optional stacks record the CLI cannot read is left alone rather than deleted, and the rewrite is owner-only
 - Clearing one optional stack from the record no longer corrupts it. The rewrite dropped the final newline, so the next stack recorded was appended to the previous line and both became unreadable, leaving every stack disabled
 - The resolved compose profiles are exported even when no optional stack is on, so an inherited `COMPOSE_PROFILES` cannot start a stack that is switched off
