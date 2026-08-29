@@ -1068,6 +1068,23 @@ STUB
         error "an install that loaded the label did not report success"
     fi
 
+    # An agent left loaded by a failed bootout is still the old one, so a
+    # bootstrap that does nothing must not read as a successful install.
+    run_agent_install yes >/dev/null 2>&1
+    total=$((total + 1))
+    if HOME="${home}" PATH="${stub_dir}:/usr/bin:/bin" \
+        HTTP_PROXY_TAILSCALE_AGENT_PATH="${stub_dir}:/usr/bin:/bin" \
+        LAUNCHCTL_STUB_LOADED="${home}/loaded" \
+        LAUNCHCTL_STUB_BOOTSTRAP_LOADS=no \
+        LAUNCHCTL_STUB_BOOTOUT_UNLOADS=no \
+        DEFS="${defs}" \
+        bash -c '. "${DEFS}"; install_status_agent' 2>&1 | grep -q "Could not"; then
+        success "an install over an agent that will not unload reports failure"
+        passed=$((passed + 1))
+    else
+        error "an install over a stale loaded agent reported success"
+    fi
+
     local first second
     run_agent_install yes "${stub_dir}:/usr/bin:/bin" >/dev/null 2>&1
     first="$(cat "${plist}")"
@@ -1112,11 +1129,11 @@ STUB
     # A label still loaded after bootout must not be reported as removed.
     run_agent_install yes >/dev/null 2>&1
     total=$((total + 1))
-    if run_removal "${home}/loaded" no | grep -q "still loaded"; then
-        success "removal that leaves the label loaded says so"
+    if run_removal "${home}/loaded" no | grep -q "still loaded" && [ -e "${plist}" ]; then
+        success "removal that leaves the label loaded says so and keeps the plist"
         passed=$((passed + 1))
     else
-        error "removal reported success with the label still loaded"
+        error "removal lost the plist or reported success with the label still loaded"
     fi
 
     rm -rf "${home}" "${defs}"
