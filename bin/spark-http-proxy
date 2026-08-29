@@ -922,9 +922,13 @@ install_status_agent() {
   mkdir -p "$(dirname "${STATUS_AGENT_PLIST}")"
   : >"${TAILSCALE_STATUS_LOG}"
 
-  local program log
+  local program log agent_path
   program="$(xml_escape "${SCRIPT_DIR}/$(basename "${SOURCE}")")"
   log="$(xml_escape "${TAILSCALE_STATUS_LOG}")"
+
+  # launchd runs with a restricted PATH, so the agent carries the one that
+  # found the client at install time.
+  agent_path="$(xml_escape "${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}")"
 
   cat >"${STATUS_AGENT_PLIST}" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -938,6 +942,11 @@ install_status_agent() {
     <string>${program}</string>
     <string>tailscale-status</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>${agent_path}</string>
+  </dict>
   <key>StartInterval</key>
   <integer>${interval}</integer>
   <key>RunAtLoad</key>
