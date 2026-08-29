@@ -1191,12 +1191,38 @@ test_tailscale_peer_routing() {
         error "the source did not fall back to the file with no socket present"
     fi
 
+    # A real unix socket, so the assertion tests its own fixture rather than
+    # whatever the host happens to have. Bound through a chdir because AF_UNIX
+    # paths are limited to about 100 characters.
+    local fake_socket="${PEER_CLI_HOME}/tailscaled.sock"
+    rm -f "${fake_socket}"
+    python3 -c "
+import os, socket, sys
+path = sys.argv[1]
+os.chdir(os.path.dirname(path))
+s = socket.socket(socket.AF_UNIX)
+s.bind(os.path.basename(path))
+" "${fake_socket}"
+
     total=$((total + 1))
-    if HTTP_PROXY_TAILSCALE_SOCKET=/var/run/tailscale/tailscaled.sock peer_cli show-config 2>/dev/null | grep -q "Peer routing source: socket"; then
+    if HTTP_PROXY_TAILSCALE_SOCKET="${fake_socket}" peer_cli show-config 2>/dev/null | grep -q "Peer routing source: socket"; then
         success "the source is the socket when the host has one"
         passed=$((passed + 1))
     else
         error "the source did not resolve to the socket with one present"
+    fi
+
+    # A regular file at the socket path is not a socket: a bind mount of a
+    # missing path leaves a directory or a file there.
+    local not_a_socket="${PEER_CLI_HOME}/not-a-socket"
+    : >"${not_a_socket}"
+
+    total=$((total + 1))
+    if HTTP_PROXY_TAILSCALE_SOCKET="${not_a_socket}" peer_cli show-config 2>/dev/null | grep -q "Peer routing source: file"; then
+        success "a regular file at the socket path is not treated as a socket"
+        passed=$((passed + 1))
+    else
+        error "a regular file at the socket path was treated as a socket"
     fi
 
     total=$((total + 1))
