@@ -35,7 +35,9 @@ const (
 	probeTimeout = 2 * time.Second
 
 	// maxProbeBackoff caps how far a repeatedly failing machine is pushed out.
-	maxProbeBackoff = 5 * time.Minute
+	// With the default cycle the waits run 1, 2, 4, 8 then 15 minutes, so a
+	// machine that starts running the proxy is found within a quarter of an hour.
+	maxProbeBackoff = 15 * time.Minute
 
 	configFilePermissions = 0644
 	configDirPermissions  = 0755

@@ -43,12 +43,20 @@ const (
 // listens on Linux; the state file, the status file and the dynamic directory
 // are container paths, all bind-mounted.
 const (
-	DefaultTailscaleRefreshInterval = 10 * time.Second
-	DefaultTailscaleSocket          = "/var/run/tailscale/tailscaled.sock"
-	DefaultTailscaleStatusFile      = "/state/tailscale-status.json"
-	DefaultTailscaleStateFile       = "/state/tailscale-peers.json"
-	DefaultTailscaleLocalAPIURL     = "http://http-proxy:8080"
-	DefaultTraefikDynamicDir        = "/traefik/dynamic"
+	// A cycle is one small request per due machine, and a second only for the
+	// machines that declare themselves, so the cost is in the sweep frequency
+	// rather than in the cycle. A minute is cheap and keeps the wait short.
+	DefaultTailscaleRefreshInterval = 60 * time.Second
+	// How stale a host-written status document may be. This is deliberately not
+	// derived from the refresh interval: how fresh the document must be depends
+	// on how often the host job writes it, which the polling interval says
+	// nothing about. Ten minutes tolerates one missed run of a five minute job.
+	DefaultTailscaleStatusMaxAge = 10 * time.Minute
+	DefaultTailscaleSocket       = "/var/run/tailscale/tailscaled.sock"
+	DefaultTailscaleStatusFile   = "/state/tailscale-status.json"
+	DefaultTailscaleStateFile    = "/state/tailscale-peers.json"
+	DefaultTailscaleLocalAPIURL  = "http://http-proxy:8080"
+	DefaultTraefikDynamicDir     = "/traefik/dynamic"
 )
 
 // PeerConfig holds the configuration of the peer discovery service.
@@ -60,6 +68,7 @@ type TailscaleConfig struct {
 	Enabled           bool
 	Source            string
 	RefreshInterval   time.Duration
+	StatusMaxAge      time.Duration
 	TailscaleSocket   string
 	StatusFile        string
 	StateFile         string
@@ -74,6 +83,7 @@ func LoadTailscale() *TailscaleConfig {
 		Enabled:           strings.ToLower(GetEnvOrDefault("HTTP_PROXY_TAILSCALE_ENABLED", "false")) == "true",
 		Source:            strings.ToLower(GetEnvOrDefault("HTTP_PROXY_TAILSCALE_SOURCE", TailscaleSourceSocket)),
 		RefreshInterval:   getEnvOrDefaultDuration("HTTP_PROXY_TAILSCALE_REFRESH_INTERVAL", DefaultTailscaleRefreshInterval),
+		StatusMaxAge:      getEnvOrDefaultDuration("HTTP_PROXY_TAILSCALE_STATUS_MAX_AGE", DefaultTailscaleStatusMaxAge),
 		TailscaleSocket:   GetEnvOrDefault("HTTP_PROXY_TAILSCALE_SOCKET", DefaultTailscaleSocket),
 		StatusFile:        GetEnvOrDefault("HTTP_PROXY_TAILSCALE_STATUS_FILE", DefaultTailscaleStatusFile),
 		StateFile:         GetEnvOrDefault("HTTP_PROXY_TAILSCALE_STATE_FILE", DefaultTailscaleStateFile),

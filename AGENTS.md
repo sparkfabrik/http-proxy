@@ -108,6 +108,125 @@ entirely, `VIRTUAL_HOST` included. That is intentional (native labels win) but
 easy to trip over by adding a middleware label alone, so the layer now warns
 when it happens.
 
+## Tailnet peer routing
+
+Off by default, and the pieces are spread across the tree, so the constraints are
+worth knowing before touching any of them.
+
+```mermaid
+graph TB
+    subgraph sources["Status document, one transport per platform"]
+        direction LR
+        sock["tailscaled unix socket<br/>Linux"]
+        file["status file written by the host<br/>macOS"]
+    end
+
+    own{"Same account,<br/>and online?"}
+    declares{"Declares itself<br/>as this proxy?"}
+    read["Read the machine's routing table"]
+    local{"Served by a local<br/>container?"}
+    write["Write tailscale-peer-machine.yaml"]
+    dyn[("Traefik dynamic directory")]
+    proxy["Local proxy, file provider"]
+
+    skipped(["skipped, with the reason"])
+    foreign(["not this proxy"])
+    collision(["local wins, collision reported"])
+
+    sources -->|"every cycle"| own
+    own -->|"no"| skipped
+    own -->|"yes"| declares
+    declares -->|"no"| foreign
+    declares -->|"yes"| read
+    read --> local
+    local -->|"yes"| collision
+    local -->|"no"| write
+    write --> dyn
+    dyn -.->|"watched, no restart"| proxy
+
+    classDef reject fill:#f6d6d6,stroke:#a33,color:#000
+    classDef accept fill:#d6f0d9,stroke:#1a7f37,color:#000
+    class skipped,foreign,collision reject
+    class write,dyn accept
+    style sources fill:#eef6ff,stroke:#1f6feb,color:#000
+```
+
+**Reading the diagram.** One arrow leaves the sources group because either
+transport feeds the same filter: the platform decides how the document arrives,
+never what it is checked against. Diamonds are decisions, the three red terminals
+are the three statuses `tailscale-peers` reports, and green is what gets written.
+The dotted edge is where this service stops and Traefik takes over, watching the
+directory with no restart. The request path that reads what this writes is in the
+README.
+
+**The ownership filter is the trust boundary.** `Status.Peers` in
+`pkg/tailscale/status.go` accepts a machine only when its `UserID` matches
+`Self.UserID`. That package reads no environment at all, deliberately: no setting
+can reach the filter. Three tests guard it, and a change that makes ownership
+configurable is a change to the capability, not an implementation detail.
+
+**A source produces a document; everything downstream is shared.** Adding a
+platform means adding a `tailscale.Source`, never a second filter. A source that
+cannot produce a document contributes nothing that cycle: an unreachable daemon
+and an empty tailnet are different states and are reported differently.
+
+**A machine is adopted only if it declares itself.** `build/traefik/entrypoint.sh`
+writes `spark-http-proxy-declaration.yaml`, a middleware named
+`traefikapi.ProxyDeclarationName` that no router references, so it changes no
+routing on the machine that publishes it. `Client.Declares` is asked before the
+routing table, so a machine that is not this proxy costs one request. The check
+fails closed, which means **both machines need this version before anything is
+forwarded**. The declaration is written unconditionally, including when peer
+routing is disabled: it says what the proxy is, not what it does. Its name must
+stay outside the `tailscale-peer-*.yaml` glob, or disabling forwarding on a
+machine would also make it undiscoverable by everyone else.
+
+**File ownership in the dynamic directory is scoped by prefix.**
+`tailscale-peers` removes only `tailscale-peer-*.yaml` and `dinghy-layer` removes
+only `^[0-9a-f]{12}\.yaml$`, so neither can delete the other's files or the
+entrypoint's `auto-tls.yml`. That prefix is also the loop guard read back from
+peers (`traefikapi.PeerRouterPrefix`) and the glob the Traefik entrypoint clears
+when the behaviour is disabled. **All three move together.**
+
+**Disabling has to actually disable.** With the profile off the service never
+starts, so nothing would clear the files it left behind. The entrypoint removes
+them at startup unless `HTTP_PROXY_TAILSCALE_ENABLED=true`, which is why the
+Traefik service receives that variable. Startup is too late for `stop-tailscale`,
+so the service also withdraws its own routes as it shuts down: stopping peer
+routing must stop forwarding without a proxy restart.
+
+**The three timing values are independent on purpose.** The refresh interval
+(60 seconds) paces the cycle, `HTTP_PROXY_TAILSCALE_STATUS_MAX_AGE` (10 minutes)
+bounds how stale a host-written ownership document may be, and the probe backoff
+ceiling (15 minutes) bounds how long a failing machine goes unprobed. The
+staleness tolerance was once derived from the interval, which meant slowing the
+poll silently loosened a trust input. Keep them separate, and have tests drive
+the interval explicitly rather than inheriting the default.
+
+**The compose socket mount lives in `compose.tailscale-socket.yml`.** A platform
+without a daemon socket has no path to mount, and a bind mount of a missing path
+gets a directory created for it. `bin/spark-http-proxy` passes that file only
+when the source is `socket`, and builds its compose invocation as the
+`COMPOSE_FILES` array; `COMPOSE_FILE` stays a single path because Compose reads
+it as a `:`-separated list.
+
+**The state directory is a trust input**, not a scratch area: the document in it
+decides where traffic goes. It is created `0700` and the status document `0600`.
+
+**The command line reports, it does not discover.** The service renders its own
+report next to the state file (`Report.Render`), and `spark-http-proxy
+tailscale-peers` prints it. Keep it that way: a formatter in shell would be a
+second implementation of what a peer contributed, and would need a JSON parser
+this project does not depend on.
+
+**The integration test uses the file source with a synthetic status document**,
+so the ownership filter runs during the test instead of being bypassed by it. A
+second Traefik inside the stack stands in for a second machine, with its own
+static config listening on port 30000, since inside the stack there is no host
+port mapping. Build with the profile active: `docker compose build` skips
+profile-gated services, so a plain build leaves `tailscale_peers` on a stale
+image and the suite silently tests old code.
+
 ## Build Commands
 
 ```bash

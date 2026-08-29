@@ -55,7 +55,8 @@ func main() {
 
 	log.Info("Starting peer discovery",
 		"source", cfg.Source,
-		"refresh_interval", cfg.RefreshInterval.String())
+		"refresh_interval", cfg.RefreshInterval.String(),
+		"status_max_age", cfg.StatusMaxAge.String())
 
 	run(ctx, d)
 
@@ -76,17 +77,10 @@ func newSource(cfg *config.TailscaleConfig) (tailscale.Source, error) {
 	case config.TailscaleSourceSocket:
 		return tailscale.NewSocketSource(cfg.TailscaleSocket, probeTimeout), nil
 	case config.TailscaleSourceFile:
-		return tailscale.NewFileSource(cfg.StatusFile, statusMaxAge(cfg.RefreshInterval)), nil
+		return tailscale.NewFileSource(cfg.StatusFile, cfg.StatusMaxAge), nil
 	default:
 		return nil, fmt.Errorf("unknown peer source %q", cfg.Source)
 	}
-}
-
-// statusMaxAge is how old a host-written document may be before it is treated
-// as no document. A few refresh intervals absorbs a slow writer, while a
-// suspended machine stops forwarding to peers that have since gone away.
-func statusMaxAge(refreshInterval time.Duration) time.Duration {
-	return max(5*refreshInterval, time.Minute)
 }
 
 // run polls until the context is cancelled. The trigger for a change is a

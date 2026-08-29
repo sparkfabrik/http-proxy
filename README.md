@@ -812,6 +812,84 @@ forwarding any hostname it does not serve locally to `http://<peer>:80` with the
   check fails closed, so **both machines need this version or newer before
   anything is forwarded**.
 
+#### How a request finds the right machine
+
+```mermaid
+sequenceDiagram
+    participant B as Browser on machine A
+    participant D as DNS server on machine A
+    participant PA as Proxy on machine A
+    participant CA as Container on machine A
+    participant PB as Proxy on machine B
+    participant CB as Container on machine B
+
+    B->>D: where is app.loc?
+    D-->>B: 127.0.0.1, as it does for every name
+    Note over B,PA: HTTPS terminates here, with machine A's own certificates
+    B->>PA: GET / (Host: app.loc)
+
+    alt a local container serves app.loc
+        PA->>CA: GET / (Host: app.loc)
+        CA-->>PA: 200
+    else no local container serves it
+        Note over PA,PB: plain HTTP inside the tailnet, Host header unchanged
+        PA->>PB: GET / (Host: app.loc)
+        PB->>CB: GET / (Host: app.loc)
+        CB-->>PB: 200
+        PB-->>PA: 200
+    end
+
+    PA-->>B: 200
+```
+
+**Reading the diagram.** The browser always talks to its own machine's proxy, because DNS answers `127.0.0.1` for every name it handles, including names this machine knows nothing about. Solid arrows are requests, dashed arrows are responses. The `alt` block is the precedence rule: a local container answers when there is one, and only otherwise does the request leave the machine. The two notes mark the properties that are otherwise invisible: HTTPS terminates on the machine the browser is talking to, and the `Host` header crosses the tailnet unchanged, so the second machine's proxy performs the final match itself.
+
+#### How the routes get there
+
+The request path above reads configuration that a separate loop writes. They are different stories at different speeds, and conflating them is what makes the timing confusing.
+
+```mermaid
+graph TB
+    subgraph sources["Status document, one transport per platform"]
+        direction LR
+        sock["tailscaled unix socket<br/>Linux"]
+        file["status file written by the host<br/>macOS"]
+    end
+
+    own{"Same account,<br/>and online?"}
+    declares{"Declares itself<br/>as this proxy?"}
+    read["Read the machine's routing table"]
+    local{"Served by a local<br/>container?"}
+    write["Write tailscale-peer-machine.yaml"]
+    dyn[("Traefik dynamic directory")]
+    proxy["Local proxy, file provider"]
+
+    skipped(["skipped, with the reason"])
+    foreign(["not this proxy"])
+    collision(["local wins, collision reported"])
+
+    sources -->|"every cycle"| own
+    own -->|"no"| skipped
+    own -->|"yes"| declares
+    declares -->|"no"| foreign
+    declares -->|"yes"| read
+    read --> local
+    local -->|"yes"| collision
+    local -->|"no"| write
+    write --> dyn
+    dyn -.->|"watched, no restart"| proxy
+
+    classDef reject fill:#f6d6d6,stroke:#a33,color:#000
+    classDef accept fill:#d6f0d9,stroke:#1a7f37,color:#000
+    class skipped,foreign,collision reject
+    class write,dyn accept
+    style sources fill:#eef6ff,stroke:#1f6feb,color:#000
+```
+
+**Reading the diagram.** The blue group is the status document, and the single arrow leaving it means either transport feeds the same filter: the platform decides how the document arrives, never what it is checked against. Diamonds are decisions, red rounded boxes are the three ways a machine contributes nothing, and they are the three statuses `tailscale-peers` reports. Green is what gets written and where. The dotted edge is the seam with the diagram above: the cycle writes a file, the proxy watches the directory, and nothing restarts.
+
+**How long it takes.** A hostname appearing on another machine becomes reachable on the next cycle, so up to a minute by default, and the same again for one to disappear after it stops being served. Change it with `HTTP_PROXY_TAILSCALE_REFRESH_INTERVAL`. A cycle is one small request per due machine, so the cost is in how often the tailnet is swept rather than in the sweep itself.
+
 ### Using it
 
 Start the proxy with peer routing on, the same way you would start it with
@@ -882,16 +960,18 @@ HTTP_PROXY_TAILSCALE_ENABLED=true spark-http-proxy start
 Do the same on the other machine, and their hostnames become mutually reachable.
 Disabling it and restarting removes every forwarded hostname.
 
-| Variable                                | Default                              | Meaning                                                          |
-| --------------------------------------- | ------------------------------------ | ---------------------------------------------------------------- |
-| `HTTP_PROXY_TAILSCALE_ENABLED`          | `false`                              | Turns the behaviour on                                           |
-| `HTTP_PROXY_TAILSCALE_SOURCE`           | `socket`                             | Where the tailnet status document comes from: `socket` or `file` |
-| `HTTP_PROXY_TAILSCALE_REFRESH_INTERVAL` | `10s`                                | How often peers are re-read                                      |
-| `HTTP_PROXY_TAILSCALE_SOCKET`           | `/var/run/tailscale/tailscaled.sock` | The daemon socket, for the `socket` source                       |
-| `HTTP_PROXY_TAILSCALE_STATUS_FILE`      | `/state/tailscale-status.json`       | The status document, for the `file` source                       |
+| Variable                                | Default                              | Meaning                                                                           |
+| --------------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------- |
+| `HTTP_PROXY_TAILSCALE_ENABLED`          | `false`                              | Turns the behaviour on                                                            |
+| `HTTP_PROXY_TAILSCALE_SOURCE`           | `socket`                             | Where the tailnet status document comes from: `socket` or `file`                  |
+| `HTTP_PROXY_TAILSCALE_REFRESH_INTERVAL` | `60s`                                | How often peers are re-read                                                       |
+| `HTTP_PROXY_TAILSCALE_STATUS_MAX_AGE`   | `10m`                                | How old a host-written status document may be before it is treated as no document |
+| `HTTP_PROXY_TAILSCALE_SOCKET`           | `/var/run/tailscale/tailscaled.sock` | The daemon socket, for the `socket` source                                        |
+| `HTTP_PROXY_TAILSCALE_STATUS_FILE`      | `/state/tailscale-status.json`       | The status document, for the `file` source                                        |
 
 Discovery is polling, so a container appearing on another machine takes up to
-one interval to become reachable.
+one interval to become reachable. The interval is paced for a background daemon:
+the trigger is a person starting a container elsewhere, not a request waiting.
 
 ### macOS
 
@@ -910,9 +990,13 @@ HTTP_PROXY_TAILSCALE_ENABLED=true HTTP_PROXY_TAILSCALE_SOURCE=file spark-http-pr
 spark-http-proxy tailscale-status
 ```
 
-A document older than a few refresh intervals is treated as no document rather
-than as an empty tailnet, so a machine that stops refreshing it withdraws its
-peers instead of forwarding to machines that may have gone away. The command
+Schedule that command every 5 minutes. A document older than
+`HTTP_PROXY_TAILSCALE_STATUS_MAX_AGE`, 10 minutes by default, is treated as no
+document rather than as an empty tailnet, so a machine that stops refreshing it
+withdraws its peers instead of forwarding to machines that may have gone away.
+That tolerance is deliberately separate from the refresh interval: how fresh the
+document must be depends on how often the host writes it, not on how often peers
+are polled. The command
 finds the Tailscale client on `PATH` first and inside the application bundle
 second, which is where it lives on macOS.
 
