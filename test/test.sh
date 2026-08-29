@@ -74,6 +74,8 @@ LOCAL_SHARED_BODY="body-from-local-shared-container"
 PEER_STATE_DIR="test/state"
 PEER_DYNAMIC_DIR="test/peer-dynamic"
 PEER_CONFIG_FILE="test/peer-traefik.yml"
+PEER_MERGED_COMPOSE="test/compose.merged.yml"
+PEER_CLI_HOME="test/clihome"
 TRAEFIK_PROXY_NAME="http-proxy"
 
 # Bodies that identify which container answered. A mounted path cannot be
@@ -863,7 +865,8 @@ cleanup_peer_stack() {
     peer_compose rm -sf tailscale_peers >/dev/null 2>&1 || true
     docker rm -f "$PEER_PROXY_CONTAINER" "$PEER_ROOT_CONTAINER" "$PEER_API_CONTAINER" \
         "$PEER_SHARED_CONTAINER" "$LOCAL_SHARED_CONTAINER" >/dev/null 2>&1 || true
-    rm -rf "$PEER_STATE_DIR" "$PEER_DYNAMIC_DIR" "$PEER_CONFIG_FILE" 2>/dev/null || true
+    rm -rf "$PEER_STATE_DIR" "$PEER_DYNAMIC_DIR" "$PEER_CONFIG_FILE" \
+        "$PEER_MERGED_COMPOSE" "$PEER_CLI_HOME" 2>/dev/null || true
 }
 
 # Writes the static configuration of the stand-in proxy, which serves route
@@ -958,6 +961,27 @@ write_tailnet_status() {
   }
 }
 EOF
+}
+
+# Runs the CLI against the test stack, with its own home and a merged compose
+# file carrying the test's peer routing settings.
+peer_cli() {
+    HOME="$(pwd)/${PEER_CLI_HOME}" \
+    COMPOSE_FILE="$(pwd)/${PEER_MERGED_COMPOSE}" \
+    COMPOSE_PROJECT_NAME="$(basename "$(pwd)")" \
+        bin/spark-http-proxy "$@"
+}
+
+# Gives the CLI a home whose state directory is the one the service writes to.
+prepare_peer_cli_home() {
+    rm -rf "$PEER_CLI_HOME"
+    mkdir -p "${PEER_CLI_HOME}/.local/spark/http-proxy"
+    ln -s "$(pwd)/${PEER_STATE_DIR}" "${PEER_CLI_HOME}/.local/spark/http-proxy/state"
+    printf 'true\n' >"${PEER_CLI_HOME}/.local/spark/http-proxy/tailscale-enabled"
+    # Both profiles active, so the rendered file keeps every service and the
+    # CLI's own resolution decides which of them a command brings up.
+    COMPOSE_PROFILES=tailscale,metrics docker compose -f compose.yml -f test/compose.peers.yml \
+        config >"$PEER_MERGED_COMPOSE" 2>/dev/null
 }
 
 # Polls until a hostname stops answering with a body.
@@ -1074,6 +1098,61 @@ test_tailscale_peer_routing() {
 
     write_tailnet_status 1 "$peer_address"
 
+    # The recorded state, not the caller's environment, is what a later command
+    # and a stack recreation read.
+    prepare_peer_cli_home
+
+    total=$((total + 1))
+    if peer_cli tailscale-peers 2>&1 | grep -q "machine-b"; then
+        success "the command reports peers with no variable in the environment"
+        passed=$((passed + 1))
+    else
+        error "the command did not report peers from the recorded state"
+    fi
+
+    # The profile a lifecycle command would bring up, without bringing it up.
+    total=$((total + 1))
+    if peer_cli config --services 2>/dev/null | grep -q "tailscale_peers"; then
+        success "a recreation addresses peer routing from the recorded state"
+        passed=$((passed + 1))
+    else
+        error "a recreation would not address peer routing"
+    fi
+
+    printf 'metrics=true\n' >>"${PEER_CLI_HOME}/.local/spark/http-proxy/optional-stacks"
+
+    total=$((total + 1))
+    if peer_cli config --services 2>/dev/null | grep -q "prometheus"; then
+        success "a recreation keeps monitoring, which a plain start used to destroy"
+        passed=$((passed + 1))
+    else
+        error "a recreation would destroy monitoring, as it did before the record"
+    fi
+
+    local peers_before
+    peers_before="$(docker inspect -f '{{.Id}}' "$(basename "$(pwd)")-tailscale_peers-1" 2>/dev/null || echo none)"
+
+    peer_cli up -d --force-recreate >/dev/null 2>&1 || warning "the CLI recreate reported an error"
+    wait_with_message "$SLEEP_PROXY_CONFIG" "for the stack to come back"
+
+    total=$((total + 1))
+    if [ "$(docker inspect -f '{{.Id}}' "$(basename "$(pwd)")-tailscale_peers-1" 2>/dev/null || echo none)" != "$peers_before" ]; then
+        success "recreating the stack recreates peer routing, so an upgrade reaches it"
+        passed=$((passed + 1))
+    else
+        error "peer routing was left on its old container, as an upgrade used to leave it"
+    fi
+
+    peer_cli stop-metrics >/dev/null 2>&1 || true
+
+    total=$((total + 1))
+    if peer_cli config --services 2>/dev/null | grep -q "prometheus"; then
+        error "stopping monitoring left it in the recorded state"
+    else
+        success "stopping monitoring clears it from the recorded state"
+        passed=$((passed + 1))
+    fi
+
     # Stopping peer routing alone withdraws the routes without a proxy restart.
     peer_compose stop tailscale_peers || warning "could not stop the peer routing service"
     log "Peer configuration after stopping the service: $(docker exec "$TRAEFIK_PROXY_NAME" sh -c 'ls -1 /traefik/dynamic/ | grep tailscale-peer || echo none' 2>/dev/null)"
@@ -1100,6 +1179,30 @@ test_tailscale_peer_routing() {
     fi
 
     write_tailnet_status 1 "$peer_address"
+
+    # clean addresses every recorded stack, so nothing is left behind for a
+    # later start to find in an unknown state.
+    peer_cli clean >/dev/null 2>&1 || warning "the CLI clean reported an error"
+
+    total=$((total + 1))
+    if docker ps --filter "label=com.docker.compose.project=$(basename "$(pwd)")" \
+        --format '{{.Names}}' | grep -q "tailscale_peers"; then
+        error "clean left the peer routing container running"
+    else
+        success "clean removes the peer routing container"
+        passed=$((passed + 1))
+    fi
+
+    peer_compose up -d >/dev/null 2>&1
+    wait_with_message "$SLEEP_STACK_START" "for the stack to come back after clean"
+    write_tailnet_status 1 "$peer_address"
+    wait_with_message "$SLEEP_PROXY_CONFIG" "for peer routing to settle"
+
+    total=$((total + 1))
+    if test_body "$PEER_HOSTNAME" "" "$PEER_ROOT_BODY" \
+        "the stack forwards again after clean and a fresh start"; then
+        passed=$((passed + 1))
+    fi
 
     # A machine that goes away takes its hostnames with it.
     docker rm -f "$PEER_PROXY_CONTAINER" >/dev/null 2>&1 || true

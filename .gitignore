@@ -1,3 +1,10 @@
 join-networks.tar.gz
 .env
 Copilot-Processing.md
+
+# Written by the integration suite
+test/state/
+test/clihome/
+test/peer-dynamic/
+test/peer-traefik.yml
+test/compose.merged.yml
