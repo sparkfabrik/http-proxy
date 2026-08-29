@@ -1180,6 +1180,47 @@ test_tailscale_peer_routing() {
 
     write_tailnet_status 1 "$peer_address"
 
+    # A cleared entry must leave the rest of the record readable, and must
+    # leave the line boundary a later record appends after.
+    local record="${PEER_CLI_HOME}/.local/spark/http-proxy/optional-stacks"
+    printf 'tailscale=true\nmetrics=true\n' >"${record}"
+    peer_cli stop-metrics >/dev/null 2>&1 || true
+
+    total=$((total + 1))
+    if ! grep -qx "tailscale=true" "${record}" 2>/dev/null; then
+        error "clearing one entry lost the other: $(tr '\n' ' ' <"${record}" 2>/dev/null)"
+    elif [ -n "$(tail -c1 "${record}")" ]; then
+        error "clearing one entry left the record without its final newline, so the next record concatenates"
+    else
+        success "clearing one entry leaves the record intact"
+        passed=$((passed + 1))
+    fi
+
+    # An unreadable record is left alone rather than deleted.
+    printf 'tailscale=true\nmetrics=true\n' >"${record}"
+    chmod 000 "${record}"
+    peer_cli stop-metrics >/dev/null 2>&1 || true
+    chmod 644 "${record}" 2>/dev/null || true
+
+    total=$((total + 1))
+    if [ -f "${record}" ] && grep -qx "tailscale=true" "${record}" && grep -qx "metrics=true" "${record}"; then
+        success "an unreadable record is left alone rather than deleted"
+        passed=$((passed + 1))
+    else
+        error "an unreadable record was destroyed: $(tr '\n' ' ' <"${record}" 2>&1)"
+    fi
+
+    printf 'tailscale=true\n' >"${record}"
+    printf 'metrics=true\n' >>"${record}"
+
+    total=$((total + 1))
+    if grep -qx "tailscale=true" "${record}" && grep -qx "metrics=true" "${record}"; then
+        success "a record written after a clear is readable"
+        passed=$((passed + 1))
+    else
+        error "the record was corrupted: $(tr '\n' ' ' <"${record}")"
+    fi
+
     # clean addresses every recorded stack, so nothing is left behind for a
     # later start to find in an unknown state.
     peer_cli clean >/dev/null 2>&1 || warning "the CLI clean reported an error"

@@ -58,13 +58,27 @@ record_stack() {
   printf '%s=true\n' "$1" >>"${OPTIONAL_STACKS_FILE}"
 }
 
-# Removes an optional stack from the record.
+# Removes an optional stack from the record, keeping every line boundary.
 clear_stack() {
   [[ -f "${OPTIONAL_STACKS_FILE}" ]] || return 0
-  local remaining
-  remaining="$(grep -vx "${1}=true" "${OPTIONAL_STACKS_FILE}" || true)"
-  printf '%s' "${remaining}" >"${OPTIONAL_STACKS_FILE}"
-  [[ -s "${OPTIONAL_STACKS_FILE}" ]] || rm -f "${OPTIONAL_STACKS_FILE}"
+
+  local temp status=0
+  temp="$(mktemp "${OPTIONAL_STACKS_FILE}.XXXXXX")"
+  grep -vx "${1}=true" "${OPTIONAL_STACKS_FILE}" >"${temp}" || status=$?
+
+  # grep exits 1 when nothing matched and 2 when it failed, so a record it
+  # could not read is left as it is.
+  if [[ "${status}" -gt 1 ]]; then
+    rm -f "${temp}"
+    log_warning "Could not read ${OPTIONAL_STACKS_FILE}, leaving it unchanged"
+    return "${status}"
+  fi
+
+  if [[ -s "${temp}" ]]; then
+    mv "${temp}" "${OPTIONAL_STACKS_FILE}"
+  else
+    rm -f "${temp}" "${OPTIONAL_STACKS_FILE}"
+  fi
 }
 
 # Resolves an optional stack: an explicit variable, then the record, then off.
@@ -134,9 +148,7 @@ apply_optional_stacks() {
     fi
   fi
 
-  if [[ -n "${profiles}" ]]; then
-    export COMPOSE_PROFILES="${profiles}"
-  fi
+  export COMPOSE_PROFILES="${profiles}"
 }
 
 apply_optional_stacks
@@ -870,28 +882,9 @@ refresh_tailscale_status_if_needed() {
 
 # Starts the proxy with peer routing on.
 start_with_tailscale() {
-    export HTTP_PROXY_TAILSCALE_ENABLED=true
     TAILSCALE_ENABLED=true
     record_stack tailscale
     apply_optional_stacks
-
-    # Skipped when the block at the top already added it.
-    if [[ ",${COMPOSE_PROFILES:-}," != *",tailscale,"* ]]; then
-        COMPOSE_PROFILES="${COMPOSE_PROFILES:+${COMPOSE_PROFILES},}tailscale"
-        export COMPOSE_PROFILES
-    fi
-
-    if [[ "${TAILSCALE_SOURCE}" == "socket" && -f "${TAILSCALE_SOCKET_OVERRIDE}" ]]; then
-        local already_added=false
-        local entry
-        for entry in "${COMPOSE_FILES[@]}"; do
-            [[ "${entry}" == "${TAILSCALE_SOCKET_OVERRIDE}" ]] && already_added=true
-        done
-        if [[ "${already_added}" == "false" ]]; then
-            COMPOSE_FILES+=("-f" "${TAILSCALE_SOCKET_OVERRIDE}")
-        fi
-    fi
-
     ensure_state_dir
     refresh_tailscale_status_if_needed
     recreate_stack
