@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The tailnet status source is detected from the host rather than defaulting to the daemon socket, so macOS starts against the host-written document without a flag and cannot be started against a socket it does not have. `HTTP_PROXY_TAILSCALE_SOURCE` still overrides it ([#128](https://github.com/sparkfabrik/http-proxy/issues/128))
+- A staleness tolerance written with a leading zero, such as `05m`, no longer aborts the command it is passed to. Bash read it as octal, so the natural way to write five minutes failed with `value too great for base` ([#128](https://github.com/sparkfabrik/http-proxy/issues/128))
 - macOS installs a launchd agent that keeps the status document current, at half the staleness tolerance, removed by `stop-tailscale`, `clean` and `destroy`. Peer routing there previously worked only until the document went stale ([#128](https://github.com/sparkfabrik/http-proxy/issues/128))
 
 - An optional stacks record the CLI cannot read is left alone rather than deleted, and the rewrite is owner-only
