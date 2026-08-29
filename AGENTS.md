@@ -186,6 +186,15 @@ tailscale-peers` prints it. Keep it that way: a formatter in shell would be a
 second implementation of what a peer contributed, and would need a JSON parser
 this project does not depend on.
 
+**A test that names a host path is testing the host.** Point every fixture at
+something the test created under its own directory, never at `/var/run`, `~` or
+an installed binary: an assertion naming `/var/run/tailscale/tailscaled.sock`
+passed on a developer machine running Tailscale and proved nothing, and one
+resolving the `tailscale` client found `/usr/bin/tailscale` and never exercised
+the refusal it was written for. Both would have passed against code that ignored
+their input entirely. Where the fixture has to be a real object, such as a unix
+socket, create it: `python3` can bind one, and it outlives the process.
+
 **The integration test uses the file source with a synthetic status document**,
 so the ownership filter runs during the test instead of being bypassed by it. A
 second Traefik inside the stack stands in for a second machine, with its own

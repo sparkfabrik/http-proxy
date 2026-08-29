@@ -25,12 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `spark-http-proxy` writes errors and warnings to stderr rather than stdout, so a caller capturing its output no longer captures its error text
+
 - Warn instead of staying silent when a container's routing variables are ignored: when it carries any `traefik.` label, which makes the layer skip it entirely, and when `VIRTUAL_PATH` is set without `VIRTUAL_HOST`. Both were debug-level, so invisible at the default log level ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
 - Warn when two containers claim the same host and path, naming both, since which of them answers is otherwise arbitrary. Detected across container events, not only at startup ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
 - `generate-mkcert` and `remove-cert` reject an argument containing a path, pointing at the hostname instead. A certificate covers a hostname, and a container mounted under a path is served by its host's certificate ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
 - `self-test` now verifies end-to-end routing instead of only DNS liveness: it starts a throwaway container with `VIRTUAL_HOST`, asserts DNS resolves the test domain to the configured target IP, and that the proxy serves it over both HTTP and HTTPS (with retries while routes propagate), then cleans up. Exits non-zero with a per-check report on failure ([#104](https://github.com/sparkfabrik/http-proxy/issues/104))
 
 ### Fixed
+
+- The tailnet status source is detected from the host rather than defaulting to the daemon socket, so macOS starts against the host-written document without a flag and cannot be started against a socket it does not have. `HTTP_PROXY_TAILSCALE_SOURCE` still overrides it ([#128](https://github.com/sparkfabrik/http-proxy/issues/128))
+- A staleness tolerance written with a leading zero, such as `05m`, no longer aborts the command it is passed to. Bash read it as octal, so the natural way to write five minutes failed with `value too great for base` ([#128](https://github.com/sparkfabrik/http-proxy/issues/128))
+- macOS installs a launchd agent that keeps the status document current, at half the staleness tolerance, removed by `stop-tailscale`, `clean` and `destroy`. Peer routing there previously worked only until the document went stale ([#128](https://github.com/sparkfabrik/http-proxy/issues/128))
 
 - An optional stacks record the CLI cannot read is left alone rather than deleted, and the rewrite is owner-only
 - Clearing one optional stack from the record no longer corrupts it. The rewrite dropped the final newline, so the next stack recorded was appended to the previous line and both became unreadable, leaving every stack disabled
