@@ -41,6 +41,11 @@ A hostname served by a local container SHALL be answered locally, whether or not
 - **THEN** the request is answered by the local container
 - **AND** the collision is reported
 
+#### Scenario: A peer wildcard covering a local hostname loses to it
+
+- **WHEN** a peer machine serves a wildcard hostname that covers a hostname a local container serves
+- **THEN** the local container answers, the peer's wildcard is not used, and the collision is reported
+
 #### Scenario: Local routing is unchanged
 
 - **WHEN** every hostname a machine is asked for is served by one of its own containers
@@ -124,6 +129,27 @@ The declaration SHALL be made whether or not the declaring machine forwards to p
 
 - **WHEN** a machine runs a version of this proxy that predates the declaration
 - **THEN** it contributes nothing rather than being adopted on the strength of the port alone
+
+### Requirement: A peer route is used only when a hostname bounds it
+
+A peer's routing rule is copied verbatim into a local router, so it SHALL be used only when every path through it is bounded by a hostname the rule is not negating. A rule that cannot be parsed with confidence SHALL NOT be used.
+
+A rule that is refused SHALL be reported, since it is a misconfiguration on the machine that offered it.
+
+#### Scenario: An unbounded alternative is refused
+
+- **WHEN** a peer offers a rule whose alternatives are not all bounded by a hostname, such as one naming a host or matching every path
+- **THEN** the rule is not used, however deeply the alternative is nested, and the refusal is reported
+
+#### Scenario: A rule bounded by a hostname is used
+
+- **WHEN** a peer offers a rule where a hostname bounds every path through it, including one that also matches a path
+- **THEN** the rule is used unchanged
+
+#### Scenario: An unreadable rule is refused
+
+- **WHEN** a peer offers a rule that cannot be parsed
+- **THEN** the rule is not used and the refusal is reported
 
 ### Requirement: A forwarded hostname is never forwarded onward
 
