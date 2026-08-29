@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An optional stacks record the CLI cannot read is left alone rather than deleted, and the rewrite is owner-only
+- Clearing one optional stack from the record no longer corrupts it. The rewrite dropped the final newline, so the next stack recorded was appended to the previous line and both became unreadable, leaving every stack disabled
+- The resolved compose profiles are exported even when no optional stack is on, so an inherited `COMPOSE_PROFILES` cannot start a stack that is switched off
+
 - `spark-http-proxy` records which optional stacks are on, so peer routing and monitoring both survive `start`, `restart` and `upgrade`, and every command reports them from any shell. Previously peer routing was read from the caller's environment and monitoring was inferred from a running container, so a plain `start` dropped monitoring and a `restart` from a fresh shell dropped peer routing ([#124](https://github.com/sparkfabrik/http-proxy/issues/124))
 - A stack that is already running when nothing is recorded is recorded on the next command, so upgrading to this version does not turn it off ([#124](https://github.com/sparkfabrik/http-proxy/issues/124))
 - `tailscale-peers`, `status`, `grafana` and `prometheus` distinguish an optional stack being switched off from its services not running ([#124](https://github.com/sparkfabrik/http-proxy/issues/124))
