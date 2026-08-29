@@ -16,7 +16,7 @@ Guidance for agentic coding agents working in this repository.
 Spark HTTP Proxy is a local development reverse proxy built on Traefik. It consists of:
 
 - **`bin/spark-http-proxy`** — Bash CLI wrapper (the user-facing tool)
-- **`cmd/`** — Go binaries: `dns-server`, `dinghy-layer`, `join-networks`
+- **`cmd/`** — Go binaries: `dns-server`, `dinghy-layer`, `join-networks`, `tailscale-peers`
 - **`pkg/`** — Shared Go packages (`config`, `logger`, `service`, `utils`)
 - **`build/`** — Dockerfiles for each service (traefik, prometheus, grafana, services)
 - **`bin/compose.yml`** — Production compose (GHCR pre-built images)
@@ -26,11 +26,11 @@ Spark HTTP Proxy is a local development reverse proxy built on Traefik. It consi
 
 ## Architecture: the big picture
 
-The novel part is not Traefik itself but the three sidecar Go binaries that feed
+The novel part is not Traefik itself but the four sidecar Go binaries that feed
 and surround it. Understanding their interaction requires reading across `cmd/`,
 `pkg/`, `compose.yml`, and `build/traefik/`.
 
-### The four runtime services (see `compose.yml`)
+### The five runtime services (see `compose.yml`)
 
 1. **`traefik`** (container name `http-proxy`) — the actual proxy. Runs with
    `exposedByDefault: false` (`build/traefik/traefik.yml`), so it ignores every
@@ -49,7 +49,18 @@ and surround it. Understanding their interaction requires reading across `cmd/`,
    events and **connects the `http-proxy` container to any Docker network that
    holds a manageable container**. Without it, routes resolve but traffic can't
    reach the backend. See `docs/network-joining-flow.md`.
-4. **`dns`** (`cmd/dns-server`) — built on `github.com/miekg/dns`. Resolves
+4. **`tailscale_peers`** (`cmd/tailscale-peers`) — the cross-machine layer, and
+   the only optional one: it runs behind the `tailscale` compose profile and does
+   nothing unless `HTTP_PROXY_TAILSCALE_ENABLED=true`. It reads the tailnet
+   status document from a source (`pkg/tailscale`: the daemon's unix socket, or a
+   file the host writes on macOS), probes each machine of the same account for
+   its routing table over the Traefik API on port 30000 (`pkg/traefikapi`), and
+   **writes `tailscale-peer-*.yaml` into the same `traefik_dynamic` volume**,
+   forwarding a hostname no local container serves to the machine that serves it.
+   The same-user check lives in `pkg/tailscale` alone and reads no configuration,
+   which is what keeps it from depending on the platform. See the
+   **Tailnet peer routing** section below.
+5. **`dns`** (`cmd/dns-server`) — built on `github.com/miekg/dns`. Resolves
    configured TLDs/domains (default `*.loc`) to `127.0.0.1` so no `/etc/hosts`
    editing is needed. Optionally forwards non-matching queries upstream.
    Listens on UDP+TCP 19322.
@@ -80,7 +91,7 @@ network first.
   an initial full scan, then streams events with signal-based graceful shutdown.
 - **`pkg/logger`**, **`pkg/utils`** — leveled logging (`LOG_LEVEL`) and helpers.
 
-All three binaries build from the **same `build/Dockerfile`** (multi-stage) and
+All four binaries build from the **same `build/Dockerfile`** (multi-stage) and
 are selected at runtime by their `command:` in compose.
 
 ### Configuration surface
@@ -100,7 +111,7 @@ when it happens.
 ## Build Commands
 
 ```bash
-make build                  # Build all three Go binaries
+make build                  # Build the Go binaries
 make build-go-dns           # Build cmd/dns-server only
 make build-go-dinghy-layer  # Build cmd/dinghy-layer only
 make build-go-join-networks # Build cmd/join-networks only

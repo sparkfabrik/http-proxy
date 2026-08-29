@@ -58,6 +58,24 @@ ONEOFF_HOSTNAME="app7.${TEST_DOMAIN}"
 PATH_HOSTNAME="app8.${TEST_DOMAIN}"
 WILDCARD_HOSTNAME="app9.wild.${TEST_DOMAIN}"
 
+# Tailnet peer routing: a second proxy inside the stack standing in for a
+# second machine, with its own backends behind it.
+PEER_PROXY_CONTAINER="test-peer-proxy"
+PEER_ROOT_CONTAINER="test-peer-root-app"
+PEER_API_CONTAINER="test-peer-api-app"
+PEER_SHARED_CONTAINER="test-peer-shared-app"
+LOCAL_SHARED_CONTAINER="test-local-shared-app"
+PEER_HOSTNAME="peer1.${TEST_DOMAIN}"
+PEER_SHARED_HOSTNAME="peer2.${TEST_DOMAIN}"
+PEER_ROOT_BODY="body-from-peer-root-container"
+PEER_API_BODY="body-from-peer-mounted-container"
+PEER_SHARED_BODY="body-from-peer-shared-container"
+LOCAL_SHARED_BODY="body-from-local-shared-container"
+PEER_STATE_DIR="test/state"
+PEER_DYNAMIC_DIR="test/peer-dynamic"
+PEER_CONFIG_FILE="test/peer-traefik.yml"
+TRAEFIK_PROXY_NAME="http-proxy"
+
 # Bodies that identify which container answered. A mounted path cannot be
 # checked by status code: when its route is missing the request falls through to
 # the container serving the hostname, which answers 200 from the wrong place.
@@ -834,7 +852,294 @@ test_virtual_path_fallthrough() {
 }
 
 # Cleanup test containers
+# Tailnet peer routing ------------------------------------------------------
+#
+# A second Traefik inside the stack stands in for a second machine: it serves
+# its own backends and publishes its routing table on the port the discovery
+# service reads. The tailnet status document is synthetic and is read through
+# the file source, the transport macOS uses in production, so the ownership
+# filter runs during the test rather than being bypassed by it.
+
+peer_compose() {
+    COMPOSE_PROFILES=tailscale docker compose -f compose.yml -f test/compose.peers.yml "$@"
+}
+
+cleanup_peer_stack() {
+    peer_compose rm -sf tailscale_peers >/dev/null 2>&1 || true
+    docker rm -f "$PEER_PROXY_CONTAINER" "$PEER_ROOT_CONTAINER" "$PEER_API_CONTAINER" \
+        "$PEER_SHARED_CONTAINER" "$LOCAL_SHARED_CONTAINER" >/dev/null 2>&1 || true
+    rm -rf "$PEER_STATE_DIR" "$PEER_DYNAMIC_DIR" "$PEER_CONFIG_FILE" 2>/dev/null || true
+}
+
+# Write the static configuration of the second machine's proxy.
+#
+# A machine publishes its routing table on port 30000, which is a host port
+# mapping in the real thing. Inside the stack there is no host to map through,
+# so the stand-in listens on that port itself. Its file provider is the only one
+# it needs, so it is given no Docker socket at all.
+write_peer_static_config() {
+    mkdir -p "$PEER_DYNAMIC_DIR"
+
+    cat > "${PEER_CONFIG_FILE}" <<EOF
+api:
+  dashboard: true
+  insecure: true
+
+entryPoints:
+  http:
+    address: ":80"
+  traefik:
+    address: ":30000"
+
+providers:
+  file:
+    directory: "/traefik/dynamic"
+    watch: true
+
+serversTransport:
+  insecureSkipVerify: true
+EOF
+}
+
+# Write the routing table the second machine publishes. Only http-entrypoint
+# routers are declared: the forwarding machine emits its own pair, and taking
+# one of each is what keeps a hostname from being taken twice.
+write_peer_routing_table() {
+    mkdir -p "$PEER_DYNAMIC_DIR"
+
+    # The stand-in declares itself the way a real machine does, since a machine
+    # that does not is deliberately not adopted.
+    cat > "${PEER_DYNAMIC_DIR}/spark-http-proxy-declaration.yaml" <<'EOF'
+http:
+  middlewares:
+    spark-http-proxy:
+      headers:
+        customResponseHeaders:
+          X-Spark-Http-Proxy: "1"
+EOF
+
+    cat > "${PEER_DYNAMIC_DIR}/peer-machine.yaml" <<EOF
+http:
+  routers:
+    remote-0:
+      rule: "Host(\`${PEER_HOSTNAME}\`)"
+      service: remote
+      entryPoints: [http]
+    remote-api-0:
+      rule: "Host(\`${PEER_HOSTNAME}\`) && (PathPrefix(\`/api/\`) || Path(\`/api\`))"
+      priority: 10004
+      service: remote-api
+      entryPoints: [http]
+    shared-0:
+      rule: "Host(\`${PEER_SHARED_HOSTNAME}\`)"
+      service: shared
+      entryPoints: [http]
+  services:
+    remote:
+      loadBalancer:
+        servers:
+          - url: "http://${PEER_ROOT_CONTAINER}:80"
+    remote-api:
+      loadBalancer:
+        servers:
+          - url: "http://${PEER_API_CONTAINER}:80"
+    shared:
+      loadBalancer:
+        servers:
+          - url: "http://${PEER_SHARED_CONTAINER}:80"
+EOF
+}
+
+# Write the tailnet status document. The owner of the second machine is the
+# argument: passing an account other than this machine's is what proves the
+# ownership filter runs on the real path.
+write_tailnet_status() {
+    local peer_user_id="$1" peer_address="$2"
+
+    mkdir -p "$PEER_STATE_DIR"
+    chmod 700 "$PEER_STATE_DIR"
+
+    cat > "${PEER_STATE_DIR}/tailscale-status.json" <<EOF
+{
+  "Self": {"HostName": "machine-a", "Online": true, "UserID": 1, "TailscaleIPs": ["100.64.0.1"]},
+  "Peer": {
+    "nodekey:machine-b": {
+      "HostName": "machine-b",
+      "Online": true,
+      "UserID": ${peer_user_id},
+      "TailscaleIPs": ["${peer_address}"]
+    }
+  }
+}
+EOF
+}
+
+# Poll until a hostname stops answering with a body, which is how a withdrawn
+# route is proved: the route disappearing is not visible in a status code.
+test_body_absent() {
+    local hostname=$1 path=$2 unexpected=$3 label=$4
+    local max_attempts=10
+    local attempt=1
+    local body=""
+
+    log "Testing ${label}..."
+
+    while [ $attempt -le $max_attempts ]; do
+        body="$(curl -s -L \
+            --resolve "${hostname}:${HTTP_PORT}:127.0.0.1" \
+            "http://${hostname}${path}" 2>/dev/null || true)"
+        if [ "$body" != "$unexpected" ]; then
+            success "${label}"
+            return 0
+        fi
+        wait_with_message "$SLEEP_CONFIG_RESTORE" "for the route to be withdrawn"
+        attempt=$((attempt + 1))
+    done
+
+    error "${label} (still answering with '${unexpected}')"
+    return 1
+}
+
+test_tailscale_peer_routing() {
+    local passed=0 total=0
+    local traefik_image peer_address
+
+    log "Testing tailnet peer routing..."
+
+    traefik_image="$(docker inspect -f '{{.Config.Image}}' http-proxy 2>/dev/null || true)"
+    if [ -z "$traefik_image" ]; then
+        error "Cannot determine the Traefik image, is the stack running?"
+        return 1
+    fi
+
+    # The second machine's backends, reachable from its proxy by container name.
+    run_body_container "$PEER_ROOT_CONTAINER" "$PEER_ROOT_BODY" --network http-proxy_default
+    run_body_container "$PEER_API_CONTAINER" "$PEER_API_BODY" --network http-proxy_default
+    run_body_container "$PEER_SHARED_CONTAINER" "$PEER_SHARED_BODY" --network http-proxy_default
+
+    # The same hostname served locally, to prove the local container wins.
+    run_body_container "$LOCAL_SHARED_CONTAINER" "$LOCAL_SHARED_BODY" \
+        --env "VIRTUAL_HOST=${PEER_SHARED_HOSTNAME}"
+
+    write_peer_static_config
+    write_peer_routing_table
+
+    docker run -d --name "$PEER_PROXY_CONTAINER" \
+        --network http-proxy_default \
+        -v "$(pwd)/${PEER_CONFIG_FILE}:/etc/traefik/traefik.yml:ro" \
+        -v "$(pwd)/${PEER_DYNAMIC_DIR}:/traefik/dynamic" \
+        "$traefik_image" >/dev/null
+
+    wait_with_message "$SLEEP_PROXY_CONFIG" "for the second machine's proxy to start"
+
+    peer_address="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$PEER_PROXY_CONTAINER")"
+    if [ -z "$peer_address" ]; then
+        error "Cannot determine the second machine's address"
+        return 1
+    fi
+
+    # A machine belonging to another account must contribute nothing, however
+    # reachable it is.
+    write_tailnet_status 2 "$peer_address"
+    peer_compose up -d tailscale_peers >/dev/null 2>&1
+    wait_with_message "$SLEEP_PROXY_CONFIG" "for a discovery cycle to run"
+
+    total=$((total + 1))
+    if test_body_absent "$PEER_HOSTNAME" "" "$PEER_ROOT_BODY" \
+        "a machine belonging to another account contributes nothing"; then
+        passed=$((passed + 1))
+    fi
+
+    # The same machine, now on this account.
+    write_tailnet_status 1 "$peer_address"
+    wait_with_message "$SLEEP_PROXY_CONFIG" "for the peer's routes to be picked up"
+
+    total=$((total + 1))
+    if test_body "$PEER_HOSTNAME" "" "$PEER_ROOT_BODY" \
+        "a hostname served only by the second machine is answered by its container"; then
+        passed=$((passed + 1))
+    fi
+
+    total=$((total + 1))
+    if test_body_https "$PEER_HOSTNAME" "" "$PEER_ROOT_BODY" \
+        "the same hostname over HTTPS, terminated locally"; then
+        passed=$((passed + 1))
+    fi
+
+    total=$((total + 1))
+    if test_body "$PEER_HOSTNAME" "/api" "$PEER_API_BODY" \
+        "a path mounted on the second machine is reached through its path"; then
+        passed=$((passed + 1))
+    fi
+
+    total=$((total + 1))
+    if test_body "$PEER_SHARED_HOSTNAME" "" "$LOCAL_SHARED_BODY" \
+        "a hostname served both locally and remotely is answered locally"; then
+        passed=$((passed + 1))
+    fi
+
+    total=$((total + 1))
+    if grep -q "machine-b" "${PEER_STATE_DIR}/tailscale-peers.txt" 2>/dev/null; then
+        success "the discovery cycle is recorded where the command line reads it"
+        passed=$((passed + 1))
+    else
+        error "no peer report was written to ${PEER_STATE_DIR}/tailscale-peers.txt"
+    fi
+
+    write_tailnet_status 1 "$peer_address"
+
+    # Stopping peer routing alone has to stop forwarding immediately, without
+    # the proxy restarting: the entrypoint's cleanup only runs at startup, so
+    # the service withdraws its own routes as it shuts down.
+    peer_compose stop tailscale_peers || warning "could not stop the peer routing service"
+    log "Peer configuration after stopping the service: $(docker exec "$TRAEFIK_PROXY_NAME" sh -c 'ls -1 /traefik/dynamic/ | grep tailscale-peer || echo none' 2>/dev/null)"
+
+    total=$((total + 1))
+    if test_body_absent "$PEER_HOSTNAME" "" "$PEER_ROOT_BODY" \
+        "stopping peer routing alone withdraws the forwarded hostname"; then
+        passed=$((passed + 1))
+    fi
+
+    total=$((total + 1))
+    if test_body "$PEER_SHARED_HOSTNAME" "" "$LOCAL_SHARED_BODY" \
+        "the proxy keeps serving its own containers with peer routing stopped"; then
+        passed=$((passed + 1))
+    fi
+
+    peer_compose start tailscale_peers >/dev/null 2>&1 || true
+    wait_with_message "$SLEEP_PROXY_CONFIG" "for peer routing to come back"
+
+    total=$((total + 1))
+    if test_body "$PEER_HOSTNAME" "" "$PEER_ROOT_BODY" \
+        "starting peer routing again restores the forwarded hostname"; then
+        passed=$((passed + 1))
+    fi
+
+    write_tailnet_status 1 "$peer_address"
+
+    # A machine that goes away takes its hostnames with it.
+    docker rm -f "$PEER_PROXY_CONTAINER" >/dev/null 2>&1 || true
+
+    total=$((total + 1))
+    if test_body_absent "$PEER_HOSTNAME" "" "$PEER_ROOT_BODY" \
+        "stopping the second machine withdraws its hostnames"; then
+        passed=$((passed + 1))
+    fi
+
+    total=$((total + 1))
+    if test_body "$PEER_SHARED_HOSTNAME" "" "$LOCAL_SHARED_BODY" \
+        "the local container keeps answering after the peer goes away"; then
+        passed=$((passed + 1))
+    fi
+
+    cleanup_peer_stack
+
+    log "Tailnet peer routing: ${passed}/${total} passed"
+    [ "$passed" -eq "$total" ]
+}
+
 cleanup() {
+    cleanup_peer_stack
     docker rm -f "$TRAEFIK_CONTAINER" "$VIRTUAL_HOST_CONTAINER" "$VIRTUAL_HOST_PORT_CONTAINER" "$MULTI_VIRTUAL_HOST_CONTAINER" "$ORPHAN_CONTAINER" "$ONEOFF_CONTAINER" "$PATH_ROOT_CONTAINER" "$PATH_MOUNTED_CONTAINER" "$WILDCARD_CONTAINER" "$WILDCARD_MOUNTED_CONTAINER" 2>/dev/null || true
 }
 
@@ -843,18 +1148,21 @@ cleanup() {
 # developer's machine every time the suite is run from a new directory.
 teardown_stack() {
     log "Removing the test stack and its volumes..."
-    docker compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+    COMPOSE_PROFILES=tailscale docker compose down --volumes --remove-orphans >/dev/null 2>&1 || true
 }
 
 # Full stack cleanup and rebuild
 full_cleanup_and_rebuild() {
     log "Setting up HTTP proxy stack..."
     cd "$(dirname "$0")/.."
-    docker compose down --volumes --remove-orphans 2>/dev/null || true
+    COMPOSE_PROFILES=tailscale docker compose down --volumes --remove-orphans 2>/dev/null || true
     cleanup
     docker image prune -f >/dev/null 2>&1 || true
     log "Building Docker images..."
-    docker compose build --pull
+    # With the profile, or the profile-gated peer routing service keeps whatever
+    # image it was last built with: docker compose build skips services whose
+    # profile is not active, silently leaving the suite testing stale code.
+    COMPOSE_PROFILES=tailscale docker compose build --pull
     success "Build completed"
 }
 
@@ -977,6 +1285,14 @@ main() {
     local vpath_fallthrough_passed=0
     test_virtual_path_fallthrough && vpath_fallthrough_passed=1
     [ "$vpath_fallthrough_passed" -eq 1 ] && passed=$((passed + 1))
+
+    # Tailnet peer routing: brings up a second proxy of its own, and removes it
+    # again, so it neither depends on nor disturbs the suites around it.
+    log "Testing tailnet peer routing..."
+    total=$((total + 1))
+    local peers_passed=0
+    test_tailscale_peer_routing && peers_passed=1
+    [ "$peers_passed" -eq 1 ] && passed=$((passed + 1))
 
     # DNS Tests (if dig available)
     if command -v dig >/dev/null 2>&1; then

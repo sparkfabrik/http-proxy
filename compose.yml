@@ -52,6 +52,37 @@ services:
       - "traefik.enable=false"
     restart: unless-stopped
 
+  # Tailnet peer routing (enabled with --profile tailscale and
+  # HTTP_PROXY_TAILSCALE_ENABLED=true)
+  #
+  # The daemon socket is added by compose.tailscale-socket.yml, which
+  # spark-http-proxy passes only when the status source is the socket. A
+  # platform without one reads the status document from the state directory
+  # instead, which is mounted here either way.
+  tailscale_peers:
+    build:
+      context: .
+      dockerfile: build/Dockerfile
+      args:
+        GIT_VERSION: ${GIT_VERSION:-unknown}
+    volumes:
+      - traefik_dynamic:/traefik/dynamic
+      - "${LOCAL_HOME:-$HOME}/.local/spark/http-proxy/state:/state"
+    command: ["sh", "-c", "/usr/local/bin/tailscale-peers"]
+    environment:
+      - HTTP_PROXY_TAILSCALE_ENABLED=${HTTP_PROXY_TAILSCALE_ENABLED:-false}
+      - HTTP_PROXY_TAILSCALE_SOURCE=${HTTP_PROXY_TAILSCALE_SOURCE:-socket}
+      - HTTP_PROXY_TAILSCALE_REFRESH_INTERVAL=${HTTP_PROXY_TAILSCALE_REFRESH_INTERVAL:-10s}
+      - HTTP_PROXY_TAILSCALE_SOCKET=${HTTP_PROXY_TAILSCALE_SOCKET:-/var/run/tailscale/tailscaled.sock}
+      - HTTP_PROXY_TAILSCALE_STATUS_FILE=${HTTP_PROXY_TAILSCALE_STATUS_FILE:-/state/tailscale-status.json}
+      - HTTP_PROXY_TAILSCALE_STATE_FILE=${HTTP_PROXY_TAILSCALE_STATE_FILE:-/state/tailscale-peers.json}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    labels:
+      - "traefik.enable=false"
+    restart: unless-stopped
+    profiles:
+      - tailscale
+
   traefik:
     build:
       context: ./build/traefik
@@ -69,6 +100,8 @@ services:
       - "${LOCAL_HOME:-$HOME}/.local/spark/http-proxy/certs:/traefik/certs:ro"
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      # Read by the entrypoint, which clears peer routes when they are disabled
+      - HTTP_PROXY_TAILSCALE_ENABLED=${HTTP_PROXY_TAILSCALE_ENABLED:-false}
     labels:
       - "traefik.enable=false"
     restart: unless-stopped

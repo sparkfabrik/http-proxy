@@ -61,6 +61,13 @@ Simply add `VIRTUAL_HOST=myapp.local` to any container or use native Traefik lab
     - [Linux (systemd-resolved)](#linux-systemd-resolved)
     - [macOS](#macos)
     - [Manual Testing](#manual-testing)
+- [Tailnet Peer Routing](#tailnet-peer-routing)
+  - [What it does](#what-it-does)
+  - [Using it](#using-it)
+  - [Enabling it](#enabling-it)
+  - [macOS](#macos)
+  - [Seeing what was found](#seeing-what-was-found)
+  - [What enabling it exposes](#what-enabling-it-exposes)
 - [Metrics & Monitoring](#metrics--monitoring)
   - [Grafana Dashboard](#grafana-dashboard)
   - [Traefik Dashboard](#traefik-dashboard)
@@ -71,6 +78,7 @@ Simply add `VIRTUAL_HOST=myapp.local` to any container or use native Traefik lab
 - 🌐 **Built-in DNS Server** - Resolves custom domains (`.loc`, `.dev`, etc.) to localhost, eliminating manual `/etc/hosts` editing
 - 🌍 **Dynamic Network Management** - Automatically joins Docker networks containing manageable containers for seamless routing
 - 🔐 **Automatic HTTPS Support** - Provides both HTTP and HTTPS routes with auto-generated certificates and mkcert integration for trusted local certificates
+- 🕸️ **Tailnet Peer Routing** - Optional: a hostname served by a container on one of your machines is reachable, under the same name, from your other machines on the same Tailscale tailnet
 - 📊 **Monitoring Ready** - Optional Prometheus metrics and Grafana dashboards for traffic monitoring and performance analysis
 
 > **Note**: We thank the [codekitchen/dinghy-http-proxy](https://github.com/codekitchen/dinghy-http-proxy) project for the inspiration and for serving us well over the years. Spark HTTP Proxy includes a compatibility layer that supports the `VIRTUAL_HOST` and `VIRTUAL_PORT` environment variables from the original project, while providing enhanced functionality for broader use cases and improved maintainability.
@@ -627,10 +635,10 @@ This HTTP proxy provides compatibility with the original [dinghy-http-proxy](htt
 [nginx-proxy](https://github.com/nginx-proxy/nginx-proxy), which uses it for the
 same purpose:
 
-| Variable       | Support         | Description                                              |
-| -------------- | --------------- | -------------------------------------------------------- |
-| `VIRTUAL_PATH` | ✅ **Full**     | Mount a container under a path of its `VIRTUAL_HOST`      |
-| `VIRTUAL_DEST` | ❌ **None**     | Rewriting the path before the backend sees it             |
+| Variable       | Support     | Description                                          |
+| -------------- | ----------- | ---------------------------------------------------- |
+| `VIRTUAL_PATH` | ✅ **Full** | Mount a container under a path of its `VIRTUAL_HOST` |
+| `VIRTUAL_DEST` | ❌ **None** | Rewriting the path before the backend sees it        |
 
 Without `VIRTUAL_DEST` the request reaches the backend unchanged, which matches
 both nginx-proxy's own default and how an ingress forwards a path prefix.
@@ -757,6 +765,205 @@ nslookup myapp.loc 127.0.0.1 19322
 # Test with curl (using custom DNS)
 curl --dns-servers 127.0.0.1:19322 http://myapp.loc
 ```
+
+## Tailnet Peer Routing
+
+A developer with more than one machine runs one proxy per machine, and each
+proxy only sees its own Docker socket. A container exposed as `app.loc` on the
+desktop does not exist as far as the laptop is concerned. Peer routing makes
+that hostname mean the same thing on every machine you own.
+
+It is **off by default**, because it changes what a proxy answers for names it
+does not serve itself. Read [What enabling it exposes](#what-enabling-it-exposes)
+before turning it on.
+
+### What it does
+
+A fourth sidecar service asks the local Tailscale daemon which machines belong
+to your account and are online, reads each one's routing table from the Traefik
+API it already publishes on port 30000, and writes Traefik configuration
+forwarding any hostname it does not serve locally to `http://<peer>:80` with the
+`Host` header preserved.
+
+- **Nothing new is installed on the other machine.** Running the proxy there is
+  enough to be discoverable.
+- **DNS does not change.** Every machine still answers `127.0.0.1`, and the
+  local proxy decides whether a request is served here or forwarded.
+- **A local container always wins.** A hostname served locally is answered
+  locally and never forwarded, and the collision is reported.
+- **Encryption terminates locally**, with the certificates already installed on
+  the machine the browser is talking to. No certificate authority is shared
+  between machines, and the hop between machines travels inside WireGuard. The
+  consequence is that this machine needs a certificate covering a hostname it
+  does not itself serve. A wildcard covers one label level, so `*.spark.loc`
+  covers `app.spark.loc` but not `app.client.spark.loc`, and a forwarded
+  hostname outside the wildcard you hold produces a browser warning until you
+  run `spark-http-proxy generate-mkcert` for it. Improving this is tracked in
+  [#118](https://github.com/sparkfabrik/http-proxy/issues/118).
+- **Only your own machines are used.** A machine is used when the Tailscale
+  status document says it belongs to the same account as this one. That check
+  runs on every cycle, over the same document whatever platform produced it, and
+  no setting turns it off or widens it.
+- **A forwarded hostname is never forwarded onward**, so two machines cannot
+  bounce a request between them.
+- **Only this proxy is adopted.** Port 30000 identifies a Traefik, and a tailnet
+  may carry an unrelated one. Every Spark HTTP Proxy publishes a declaration of
+  itself, and a machine whose declaration is absent contributes nothing. The
+  check fails closed, so **both machines need this version or newer before
+  anything is forwarded**.
+
+### Using it
+
+Start the proxy with peer routing on, the same way you would start it with
+monitoring:
+
+```bash
+spark-http-proxy start-with-tailscale
+```
+
+Do the same on your other machine. Nothing else is configured: no peer list, no
+addresses, no changes to any project.
+
+**On macOS there is one extra step.** The macOS Tailscale build exposes no unix
+socket a container can mount, so the host writes the status document instead:
+
+```bash
+HTTP_PROXY_TAILSCALE_SOURCE=file spark-http-proxy start-with-tailscale
+```
+
+`start-with-tailscale` writes that document once. Keep it current with a
+scheduled job running one command, otherwise discovery goes stale and stops
+adopting peers:
+
+```bash
+spark-http-proxy tailscale-status
+```
+
+**See what was found.** This reports the proxy's most recent cycle rather than
+going looking itself:
+
+```console
+$ spark-http-proxy tailscale-peers
+Tailnet peers, from the cycle at 2026-01-02T09:15:04Z
+Source: socket, tailnet status produced at 2026-01-02T09:15:04Z
+
+MACHINE     ADDRESS         STATUS       DETAIL
+machine-a   100.100.0.11    ok           app.loc, api.loc
+machine-b   100.100.0.12    not this proxy  answered, but does not declare itself
+router      100.100.0.20    unreachable  connection refused
+tv          100.100.0.31    skipped      offline
+phone       100.100.0.32    skipped      offline
+
+5 machines considered, 1 machine forwarding 2 hostnames.
+1 machine did not answer as a proxy, which is usual on a tailnet carrying phones, routers and the like.
+1 machine answered but did not declare itself as this proxy, so its routes were not used.
+2 machines excluded, with the reason in the table.
+```
+
+Most rows on a real tailnet are phones, routers and televisions. They are
+expected, not a fault. Add `--json` for the same information machine-readably.
+
+**Turn it off again** without stopping the proxy:
+
+```bash
+spark-http-proxy stop-tailscale
+```
+
+Every forwarded hostname is withdrawn immediately, and the machine keeps serving
+its own containers. Your other machines stop reaching this one's hostnames, and
+this one still reaches theirs only if you start it again.
+
+### Enabling it
+
+```bash
+HTTP_PROXY_TAILSCALE_ENABLED=true spark-http-proxy start
+```
+
+Do the same on the other machine, and their hostnames become mutually reachable.
+Disabling it and restarting removes every forwarded hostname.
+
+| Variable                                | Default                              | Meaning                                                          |
+| --------------------------------------- | ------------------------------------ | ---------------------------------------------------------------- |
+| `HTTP_PROXY_TAILSCALE_ENABLED`          | `false`                              | Turns the behaviour on                                           |
+| `HTTP_PROXY_TAILSCALE_SOURCE`           | `socket`                             | Where the tailnet status document comes from: `socket` or `file` |
+| `HTTP_PROXY_TAILSCALE_REFRESH_INTERVAL` | `10s`                                | How often peers are re-read                                      |
+| `HTTP_PROXY_TAILSCALE_SOCKET`           | `/var/run/tailscale/tailscaled.sock` | The daemon socket, for the `socket` source                       |
+| `HTTP_PROXY_TAILSCALE_STATUS_FILE`      | `/state/tailscale-status.json`       | The status document, for the `file` source                       |
+
+Discovery is polling, so a container appearing on another machine takes up to
+one interval to become reachable.
+
+### macOS
+
+The macOS Tailscale build exposes no unix socket a container can mount, so the
+status document is produced on the host instead. It is the same document, read
+by the same filter: this is the same discovery over a different transport, not a
+weaker mode.
+
+```bash
+HTTP_PROXY_TAILSCALE_ENABLED=true HTTP_PROXY_TAILSCALE_SOURCE=file spark-http-proxy start
+```
+
+`start` writes the document. Keeping it current is one command on a schedule:
+
+```bash
+spark-http-proxy tailscale-status
+```
+
+A document older than a few refresh intervals is treated as no document rather
+than as an empty tailnet, so a machine that stops refreshing it withdraws its
+peers instead of forwarding to machines that may have gone away. The command
+finds the Tailscale client on `PATH` first and inside the application bundle
+second, which is where it lives on macOS.
+
+The document and the report both live in `~/.local/spark/http-proxy/state`. That
+directory is a **trust input**: the document in it decides which machines traffic
+is forwarded to, so it is created readable and writable by its owner alone. Keep
+it that way.
+
+### Seeing what was found
+
+```bash
+spark-http-proxy tailscale-peers
+spark-http-proxy tailscale-peers --json
+```
+
+Every machine discovery considered is listed, including the ones that gave
+nothing, with the reason:
+
+| Status        | Meaning                                                        |
+| ------------- | -------------------------------------------------------------- |
+| `ok`          | probed, and its hostnames are being forwarded                  |
+| `no proxy`    | answered, but not with a routing table                         |
+| `unreachable` | did not answer within the probe timeout, currently backing off |
+| `skipped`     | found on the tailnet but excluded, with the reason given       |
+
+Most machines on a tailnet are phones, routers and televisions, so `unreachable`
+and `no proxy` rows are the ordinary case rather than a fault. The command
+reports the proxy's most recent cycle rather than performing discovery of its
+own, so it cannot disagree with what the proxy is doing, and it still answers
+when the proxy is stopped, saying that what it shows is not current.
+
+### What enabling it exposes
+
+- **Your local development containers become reachable from your other
+  devices.** Those containers usually have no authentication of any kind. This
+  is the point of the feature, and it is worth being deliberate about.
+- **The proxy's ports are published on all interfaces**, so 80, 443 and 30000
+  are reachable from any network the machine is on, not only from the tailnet.
+  That is true today, before enabling anything here, but this feature makes it
+  load-bearing. Narrow it by binding the published ports to the tailnet address,
+  by editing the `ports:` entries in your compose file, or by firewalling them.
+- **A machine is adopted only if it declares itself as this proxy**, so an
+  unrelated Traefik on the tailnet is not treated as a source of routes. The
+  declaration is not a secret and not an authentication mechanism: anything that
+  can reach port 30000 can publish one. It separates this proxy from other
+  software, not trusted machines from untrusted ones. What limits forwarding to
+  your own machines is the Tailscale account check.
+- **The route registry is an unauthenticated read-only API.** Port 30000 is the
+  Traefik API, and any device that can reach it can enumerate the project
+  hostnames this machine serves. It discloses hostnames and routing rules, not
+  request contents.
 
 ## Metrics & Monitoring
 

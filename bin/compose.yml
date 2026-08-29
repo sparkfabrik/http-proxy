@@ -8,6 +8,9 @@
 #   With Monitoring (Prometheus + Grafana):
 #     docker compose --profile metrics up -d
 #
+#   With tailnet peer routing:
+#     HTTP_PROXY_TAILSCALE_ENABLED=true docker compose --profile tailscale up -d
+#
 #   With specific image tag:
 #     HTTP_PROXY_DOCKER_IMAGE_TAG=v1.2.3 docker compose up -d
 #
@@ -61,6 +64,33 @@ services:
       - "traefik.enable=false"
     restart: always
 
+  # Tailnet peer routing (enabled with --profile tailscale and
+  # HTTP_PROXY_TAILSCALE_ENABLED=true)
+  #
+  # The daemon socket is added by compose.tailscale-socket.yml, which
+  # spark-http-proxy passes only when the status source is the socket. A
+  # platform without one reads the status document from the state directory
+  # instead, which is mounted here either way.
+  tailscale_peers:
+    image: ghcr.io/sparkfabrik/http-proxy-services:${HTTP_PROXY_DOCKER_IMAGE_TAG:-latest}
+    volumes:
+      - traefik_dynamic:/traefik/dynamic
+      - "${HOME}/.local/spark/http-proxy/state:/state"
+    command: ["sh", "-c", "/usr/local/bin/tailscale-peers"]
+    environment:
+      - HTTP_PROXY_TAILSCALE_ENABLED=${HTTP_PROXY_TAILSCALE_ENABLED:-false}
+      - HTTP_PROXY_TAILSCALE_SOURCE=${HTTP_PROXY_TAILSCALE_SOURCE:-socket}
+      - HTTP_PROXY_TAILSCALE_REFRESH_INTERVAL=${HTTP_PROXY_TAILSCALE_REFRESH_INTERVAL:-10s}
+      - HTTP_PROXY_TAILSCALE_SOCKET=${HTTP_PROXY_TAILSCALE_SOCKET:-/var/run/tailscale/tailscaled.sock}
+      - HTTP_PROXY_TAILSCALE_STATUS_FILE=${HTTP_PROXY_TAILSCALE_STATUS_FILE:-/state/tailscale-status.json}
+      - HTTP_PROXY_TAILSCALE_STATE_FILE=${HTTP_PROXY_TAILSCALE_STATE_FILE:-/state/tailscale-peers.json}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    labels:
+      - "traefik.enable=false"
+    restart: always
+    profiles:
+      - tailscale
+
   traefik:
     image: ghcr.io/sparkfabrik/http-proxy-traefik:${HTTP_PROXY_DOCKER_IMAGE_TAG:-latest}
     container_name: http-proxy
@@ -74,6 +104,8 @@ services:
       - "${HOME}/.local/spark/http-proxy/certs:/traefik/certs:ro"
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      # Read by the entrypoint, which clears peer routes when they are disabled
+      - HTTP_PROXY_TAILSCALE_ENABLED=${HTTP_PROXY_TAILSCALE_ENABLED:-false}
     labels:
       - "traefik.enable=false"
     restart: always

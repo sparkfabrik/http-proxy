@@ -1,0 +1,11 @@
+# Adds the Tailscale daemon socket to the peer routing service.
+#
+# It is a separate file because compose cannot leave a mount out conditionally,
+# and a platform whose daemon exposes no socket has no path to mount: a bind
+# mount of a missing path gets a directory created for it, and the status source
+# would then report a broken daemon rather than a platform that has none.
+# spark-http-proxy passes this file only when the status source is the socket.
+services:
+  tailscale_peers:
+    volumes:
+      - "${HTTP_PROXY_TAILSCALE_SOCKET:-/var/run/tailscale/tailscaled.sock}:/var/run/tailscale/tailscaled.sock:ro"
