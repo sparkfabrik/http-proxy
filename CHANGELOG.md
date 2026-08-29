@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `spark-http-proxy` writes errors and warnings to stderr rather than stdout, so a caller capturing its output no longer captures its error text
+
 - Warn instead of staying silent when a container's routing variables are ignored: when it carries any `traefik.` label, which makes the layer skip it entirely, and when `VIRTUAL_PATH` is set without `VIRTUAL_HOST`. Both were debug-level, so invisible at the default log level ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
 - Warn when two containers claim the same host and path, naming both, since which of them answers is otherwise arbitrary. Detected across container events, not only at startup ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
 - `generate-mkcert` and `remove-cert` reject an argument containing a path, pointing at the hostname instead. A certificate covers a hostname, and a container mounted under a path is served by its host's certificate ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))

@@ -36,8 +36,8 @@ discover_compose_file() {
 # Logging functions
 log_info() { echo "ℹ  $1"; }
 log_success() { echo "✅ $1"; }
-log_error() { echo "❌ $1"; }
-log_warning() { echo "⚠️  $1"; }
+log_error() { echo "❌ $1" >&2; }
+log_warning() { echo "⚠️  $1" >&2; }
 
 # Configuration
 export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-http-proxy}
