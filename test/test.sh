@@ -1014,12 +1014,15 @@ test_body_absent() {
 # than about the host.
 test_status_agent() {
     local passed=0 total=0
-    local home stub_dir plist
+    local home stub_dir plist defs
     home="$(mktemp -d)"
-    local defs="bin/.status-agent-defs"
-    sed '/^case "$1" in/,$d' bin/spark-http-proxy >"${defs}"
     stub_dir="${home}/stubs"
-    mkdir -p "${stub_dir}" "${home}/Library/LaunchAgents"
+
+    # The definitions are written inside bin/ so the CLI resolves its own
+    # directory, and with it the compose file, as it does when run for real.
+    defs="bin/.status-agent-defs"
+    sed '/^case "$1" in/,$d' bin/spark-http-proxy >"${defs}"
+    mkdir -p "${stub_dir}"
     plist="${home}/Library/LaunchAgents/com.sparkfabrik.http-proxy.tailscale-status.plist"
 
     # A client the installer can resolve, in a directory the agent PATH names.
@@ -1034,13 +1037,11 @@ case "${1}" in
 print) [ -f "${LAUNCHCTL_STUB_LOADED}" ] ;;
 bootstrap) [ "${LAUNCHCTL_STUB_BOOTSTRAP_LOADS}" = "yes" ] && : >"${LAUNCHCTL_STUB_LOADED}"; exit 0 ;;
 bootout) [ "${LAUNCHCTL_STUB_BOOTOUT_UNLOADS:-yes}" = "yes" ] && rm -f "${LAUNCHCTL_STUB_LOADED}"; exit 0 ;;
-*) exit 0 ;;
 esac
 STUB
     chmod +x "${stub_dir}/launchctl"
 
-    # The second argument is the PATH the installing shell carries, which the
-    # previous code copied into the plist.
+    # The second argument is the PATH the installing shell carries.
     run_agent_install() {
         HOME="${home}" \
             PATH="${2:-${stub_dir}:/usr/bin:/bin}" \
@@ -1051,8 +1052,6 @@ STUB
             bash -c '. "${DEFS}"; install_status_agent' 2>&1
     }
 
-    # A launchctl that exits 0 without loading anything is the case the previous
-    # code could not detect.
     total=$((total + 1))
     if run_agent_install no | grep -q "Could not load"; then
         success "an install that loads nothing reports failure"

@@ -143,7 +143,6 @@ TAILSCALE_SOCKET_OVERRIDE="$(dirname "${COMPOSE_FILE}")/compose.tailscale-socket
 TAILSCALE_STATUS_LOG="${STATE_DIR}/tailscale-status.log"
 STATUS_AGENT_LABEL="com.sparkfabrik.http-proxy.tailscale-status"
 STATUS_AGENT_PLIST="${HOME}/Library/LaunchAgents/${STATUS_AGENT_LABEL}.plist"
-# The PATH the launchd agent runs with, fixed rather than inherited from the installing shell.
 STATUS_AGENT_PATH="${HTTP_PROXY_TAILSCALE_AGENT_PATH:-/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 
 # Extra compose files. COMPOSE_FILE holds a single path.
