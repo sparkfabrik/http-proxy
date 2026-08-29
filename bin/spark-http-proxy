@@ -892,6 +892,11 @@ status_refresh_interval() {
   echo "${interval}"
 }
 
+# Escapes the characters that would make a plist invalid XML.
+xml_escape() {
+  printf '%s' "${1}" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
 # Installs the launchd agent that keeps the status document fresh on macOS.
 install_status_agent() {
   local tolerance interval
@@ -914,6 +919,10 @@ install_status_agent() {
   mkdir -p "$(dirname "${STATUS_AGENT_PLIST}")"
   : >"${TAILSCALE_STATUS_LOG}"
 
+  local program log
+  program="$(xml_escape "${SCRIPT_DIR}/$(basename "${SOURCE}")")"
+  log="$(xml_escape "${TAILSCALE_STATUS_LOG}")"
+
   cat >"${STATUS_AGENT_PLIST}" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -923,7 +932,7 @@ install_status_agent() {
   <string>${STATUS_AGENT_LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${SCRIPT_DIR}/$(basename "${SOURCE}")</string>
+    <string>${program}</string>
     <string>tailscale-status</string>
   </array>
   <key>StartInterval</key>
@@ -931,7 +940,7 @@ install_status_agent() {
   <key>RunAtLoad</key>
   <true/>
   <key>StandardErrorPath</key>
-  <string>${TAILSCALE_STATUS_LOG}</string>
+  <string>${log}</string>
 </dict>
 </plist>
 EOF
