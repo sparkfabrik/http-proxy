@@ -973,6 +973,7 @@ Disabling it and restarting removes every forwarded hostname.
 | `HTTP_PROXY_TAILSCALE_STATUS_MAX_AGE`   | `10m`                                | How old a host-written status document may be before it is treated as no document                                                    |
 | `HTTP_PROXY_TAILSCALE_SOCKET`           | `/var/run/tailscale/tailscaled.sock` | The daemon socket, for the `socket` source                                                                                           |
 | `HTTP_PROXY_TAILSCALE_STATUS_FILE`      | `/state/tailscale-status.json`       | The status document, for the `file` source                                                                                           |
+| `HTTP_PROXY_TAILSCALE_AGENT_PATH`       | standard system and Homebrew paths   | The `PATH` the macOS refresh agent runs with, for a Tailscale client installed somewhere else                                        |
 
 Discovery is polling, so a container appearing on another machine takes up to
 one interval to become reachable. The interval is paced for a background daemon:

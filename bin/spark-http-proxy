@@ -143,6 +143,7 @@ TAILSCALE_SOCKET_OVERRIDE="$(dirname "${COMPOSE_FILE}")/compose.tailscale-socket
 TAILSCALE_STATUS_LOG="${STATE_DIR}/tailscale-status.log"
 STATUS_AGENT_LABEL="com.sparkfabrik.http-proxy.tailscale-status"
 STATUS_AGENT_PLIST="${HOME}/Library/LaunchAgents/${STATUS_AGENT_LABEL}.plist"
+STATUS_AGENT_PATH="${HTTP_PROXY_TAILSCALE_AGENT_PATH:-/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 
 # Extra compose files. COMPOSE_FILE holds a single path.
 COMPOSE_FILES=("-f" "${COMPOSE_FILE}")
@@ -900,6 +901,11 @@ xml_escape() {
   printf '%s' "${1}" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
 }
 
+# Answers whether launchd currently holds the status agent.
+status_agent_loaded() {
+  launchctl print "gui/$(id -u)/${STATUS_AGENT_LABEL}" >/dev/null 2>&1
+}
+
 # Installs the launchd agent that keeps the status document fresh on macOS.
 install_status_agent() {
   local tolerance interval
@@ -912,9 +918,9 @@ install_status_agent() {
     return 0
   fi
 
-  if ! resolve_tailscale_client >/dev/null; then
+  if ! (PATH="${STATUS_AGENT_PATH}"; resolve_tailscale_client >/dev/null); then
     log_warning "Not installing the status refresh: the Tailscale client was not found"
-    log_info "Install Tailscale, then run ${0} start-with-tailscale again"
+    log_info "Looked in ${STATUS_AGENT_PATH} and in /Applications/Tailscale.app/Contents/MacOS/Tailscale"
     return 0
   fi
 
@@ -926,9 +932,7 @@ install_status_agent() {
   program="$(xml_escape "${SCRIPT_DIR}/$(basename "${SOURCE}")")"
   log="$(xml_escape "${TAILSCALE_STATUS_LOG}")"
 
-  # launchd runs with a restricted PATH, so the agent carries the one that
-  # found the client at install time.
-  agent_path="$(xml_escape "${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}")"
+  agent_path="$(xml_escape "${STATUS_AGENT_PATH}")"
 
   cat >"${STATUS_AGENT_PLIST}" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -959,21 +963,42 @@ EOF
 
   launchctl bootout "gui/$(id -u)/${STATUS_AGENT_LABEL}" >/dev/null 2>&1 || true
 
-  if launchctl bootstrap "gui/$(id -u)" "${STATUS_AGENT_PLIST}" >/dev/null 2>&1 ||
-    launchctl load -w "${STATUS_AGENT_PLIST}" >/dev/null 2>&1; then
-    log_success "Status refresh installed, every ${interval}s"
-  else
-    log_warning "Could not load ${STATUS_AGENT_LABEL}; run it yourself with ${0} tailscale-status"
+  # A label still loaded here belongs to the previous agent, and would answer
+  # for the new one below.
+  if status_agent_loaded; then
+    log_warning "Could not unload the previous ${STATUS_AGENT_LABEL}; the refresh still runs the old one"
+    return 0
   fi
+
+  launchctl bootstrap "gui/$(id -u)" "${STATUS_AGENT_PLIST}" >/dev/null 2>&1 || true
+
+  if ! status_agent_loaded; then
+    log_warning "Could not load ${STATUS_AGENT_LABEL}; run it yourself with ${0} tailscale-status"
+    return 0
+  fi
+
+  log_success "Status refresh installed, every ${interval}s"
 }
 
 # Removes the launchd agent.
 remove_status_agent() {
   [[ -f "${STATUS_AGENT_PLIST}" ]] || return 0
 
-  launchctl bootout "gui/$(id -u)/${STATUS_AGENT_LABEL}" >/dev/null 2>&1 ||
-    launchctl unload -w "${STATUS_AGENT_PLIST}" >/dev/null 2>&1 || true
+  launchctl bootout "gui/$(id -u)/${STATUS_AGENT_LABEL}" >/dev/null 2>&1 || true
+
+  # The plist stays while the agent does, so a later removal tries again.
+  if status_agent_loaded; then
+    log_warning "${STATUS_AGENT_LABEL} is still loaded; unload it with: launchctl bootout gui/$(id -u)/${STATUS_AGENT_LABEL}"
+    return 0
+  fi
+
   rm -f "${STATUS_AGENT_PLIST}"
+
+  if [[ -e "${STATUS_AGENT_PLIST}" ]]; then
+    log_warning "Could not delete ${STATUS_AGENT_PLIST}"
+    return 0
+  fi
+
   log_info "Status refresh removed"
 }
 
