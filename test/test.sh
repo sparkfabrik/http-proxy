@@ -1036,7 +1036,11 @@ test_status_agent() {
 case "${1}" in
 print) [ -f "${LAUNCHCTL_STUB_LOADED}" ] ;;
 bootstrap) [ "${LAUNCHCTL_STUB_BOOTSTRAP_LOADS}" = "yes" ] && : >"${LAUNCHCTL_STUB_LOADED}"; exit 0 ;;
-bootout) [ "${LAUNCHCTL_STUB_BOOTOUT_UNLOADS:-yes}" = "yes" ] && rm -f "${LAUNCHCTL_STUB_LOADED}"; exit 0 ;;
+bootout)
+  [ "${LAUNCHCTL_STUB_BOOTOUT_UNLOADS:-yes}" = "yes" ] && rm -f "${LAUNCHCTL_STUB_LOADED}"
+  [ "${LAUNCHCTL_STUB_BOOTOUT_FAILS:-no}" = "yes" ] && exit 1
+  exit 0
+  ;;
 esac
 STUB
     chmod +x "${stub_dir}/launchctl"
@@ -1066,6 +1070,23 @@ STUB
         passed=$((passed + 1))
     else
         error "an install that loaded the label did not report success"
+    fi
+
+    # A machine with no agent yet: bootout fails because there is nothing to
+    # boot out, which must not stop the first install.
+    rm -f "${home}/loaded"
+    total=$((total + 1))
+    if HOME="${home}" PATH="${stub_dir}:/usr/bin:/bin" \
+        HTTP_PROXY_TAILSCALE_AGENT_PATH="${stub_dir}:/usr/bin:/bin" \
+        LAUNCHCTL_STUB_LOADED="${home}/loaded" \
+        LAUNCHCTL_STUB_BOOTSTRAP_LOADS=yes \
+        LAUNCHCTL_STUB_BOOTOUT_FAILS=yes \
+        DEFS="${defs}" \
+        bash -c '. "${DEFS}"; install_status_agent' 2>&1 | grep -q "Status refresh installed"; then
+        success "the first install proceeds when bootout has nothing to unload"
+        passed=$((passed + 1))
+    else
+        error "a failed bootout stopped the first install"
     fi
 
     # An agent left loaded by a failed bootout is still the old one, so a
