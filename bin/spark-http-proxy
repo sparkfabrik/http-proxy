@@ -874,6 +874,9 @@ duration_seconds() {
   local number="${1%[smh]}" unit="${1##*[0-9]}"
 
   [[ "${number}" =~ ^[0-9]+$ ]] || { echo 0; return 0; }
+
+  # Base 10 explicitly: bash reads a leading zero as octal, so 08m would fail.
+  number=$((10#${number}))
   case "${unit}" in
     h) echo $((number * 3600)) ;;
     m) echo $((number * 60)) ;;
@@ -946,11 +949,13 @@ install_status_agent() {
 EOF
 
   launchctl bootout "gui/$(id -u)/${STATUS_AGENT_LABEL}" >/dev/null 2>&1 || true
-  launchctl bootstrap "gui/$(id -u)" "${STATUS_AGENT_PLIST}" >/dev/null 2>&1 ||
-    launchctl load -w "${STATUS_AGENT_PLIST}" >/dev/null 2>&1 ||
-    log_warning "Could not load ${STATUS_AGENT_LABEL}; run it yourself with ${0} tailscale-status"
 
-  log_success "Status refresh installed, every ${interval}s"
+  if launchctl bootstrap "gui/$(id -u)" "${STATUS_AGENT_PLIST}" >/dev/null 2>&1 ||
+    launchctl load -w "${STATUS_AGENT_PLIST}" >/dev/null 2>&1; then
+    log_success "Status refresh installed, every ${interval}s"
+  else
+    log_warning "Could not load ${STATUS_AGENT_LABEL}; run it yourself with ${0} tailscale-status"
+  fi
 }
 
 # Removes the launchd agent.
