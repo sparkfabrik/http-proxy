@@ -108,7 +108,7 @@ remove_peer_config() {
         return
     fi
 
-    # The glob must never match the declaration file.
+    # The glob does not match the declaration file.
     for peer_config in "${DYNAMIC_DIR}"/tailscale-peer-*.yaml; do
         [ -e "${peer_config}" ] || continue
         echo "Peer routing is disabled, removing $(basename "${peer_config}")"

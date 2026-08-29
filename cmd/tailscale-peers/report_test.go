@@ -48,7 +48,6 @@ func TestRenderNamesCollisionsAndTheirWinner(t *testing.T) {
 	}
 }
 
-// Machines without a proxy have to read as ordinary rather than as a fault.
 func TestRenderTreatsMachinesWithoutAProxyAsUsual(t *testing.T) {
 	rendered := testReport().Render()
 
@@ -60,7 +59,6 @@ func TestRenderTreatsMachinesWithoutAProxyAsUsual(t *testing.T) {
 	}
 }
 
-// A failing source must not read as an empty tailnet.
 func TestRenderLeadsWithASourceFailure(t *testing.T) {
 	report := testReport()
 	report.SourceError = "dial unix /var/run/tailscale/tailscaled.sock: no such file"
@@ -96,7 +94,6 @@ func TestRenderedStateFileSitsBesideTheStateFile(t *testing.T) {
 	}
 }
 
-// The table shows the part that tells failures apart.
 func TestCompactReason(t *testing.T) {
 	tests := []struct {
 		name string
@@ -134,7 +131,6 @@ func TestCompactReason(t *testing.T) {
 	}
 }
 
-// The retry is shown as the wait rather than as an absolute time.
 func TestRenderShowsTheWaitBeforeTheNextAttempt(t *testing.T) {
 	cycle := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	report := &Report{
@@ -159,7 +155,6 @@ func TestRenderShowsTheWaitBeforeTheNextAttempt(t *testing.T) {
 	}
 }
 
-// Only a future retry is shown.
 func TestRenderOmitsARetryThatIsNotAhead(t *testing.T) {
 	cycle := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	report := &Report{

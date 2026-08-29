@@ -29,14 +29,14 @@ const (
 
 	probeTimeout = 2 * time.Second
 
-	// maxProbeBackoff gives waits of 1, 2, 4, 8 then 15 minutes.
+	// maxProbeBackoff caps the wait, which runs 1, 2, 4, 8 then 15 minutes.
 	maxProbeBackoff = 15 * time.Minute
 
 	// Traefik has to read the dynamic directory.
 	configFilePermissions = 0644
 	configDirPermissions  = 0755
 
-	// The directory keeps the state private; the files stay readable.
+	// Private directory, readable files.
 	stateFilePermissions = 0644
 	stateDirPermissions  = 0700
 )
@@ -56,8 +56,8 @@ const localOwner = "local"
 // probeFunc reads the routable routes of the proxy answering at baseURL.
 type probeFunc func(ctx context.Context, baseURL string) (traefikapi.Result, error)
 
-// candidate is a machine about to be probed, or the reason it is not. Keyed by
-// node key, since several machines may share a hostname.
+// candidate is a machine about to be probed, or the reason it is not, keyed by
+// node key, which is unique per machine.
 type candidate struct {
 	id         string
 	name       string
@@ -130,8 +130,7 @@ func newDiscovery(cfg *config.TailscaleConfig, log *logger.Logger, source tailsc
 	}
 }
 
-// httpProbe reads a proxy's routing table, after asking the machine what it is:
-// port 30000 identifies a Traefik rather than this proxy.
+// httpProbe asks the machine what it is, then reads its routing table.
 func httpProbe(ctx context.Context, baseURL string) (traefikapi.Result, error) {
 	client := traefikapi.NewWithTimeout(baseURL, probeTimeout)
 
@@ -165,8 +164,7 @@ func (d *discovery) runCycle(ctx context.Context) *Report {
 		report.SourceError = sourceErr.Error()
 	}
 
-	// Without the local routing table a cycle could forward a hostname this
-	// machine serves, so it writes nothing and keeps the previous files.
+	// Writes nothing and keeps the previous files without the local table.
 	local, err := d.localHosts(ctx)
 	if err != nil {
 		report.LocalError = err.Error()
@@ -205,8 +203,7 @@ func (d *discovery) runCycle(ctx context.Context) *Report {
 }
 
 // discover returns the machines to consider and when their document was
-// produced. No document means no candidates: nothing is forwarded to a machine
-// whose ownership was not checked on that cycle.
+// produced, and returns none when the source produces no document.
 func (d *discovery) discover(ctx context.Context) ([]candidate, time.Time, error) {
 	status, err := d.source.Status(ctx)
 	if err != nil {
@@ -228,7 +225,7 @@ func (d *discovery) discover(ctx context.Context) ([]candidate, time.Time, error
 	return sortCandidates(candidates), status.UpdatedAt.UTC(), nil
 }
 
-// reportSourceFailure says a source is failing once, then stops repeating it.
+// reportSourceFailure logs a failing source once, then stops repeating it.
 func (d *discovery) reportSourceFailure(err error) {
 	if d.sourceFailing {
 		d.logger.Debug("Peer source is still failing", "error", err)
@@ -247,8 +244,7 @@ func (d *discovery) reportSourceRecovery() {
 	d.logger.Info("Peer discovery recovered", "source", d.config.Source)
 }
 
-// sortCandidates orders by name then identity, so which of two machines
-// claiming a hostname keeps it is fixed rather than depending on the cycle.
+// sortCandidates orders machines by name, then by identity.
 func sortCandidates(candidates []candidate) []candidate {
 	slices.SortStableFunc(candidates, func(a, b candidate) int {
 		return cmp.Or(cmp.Compare(a.name, b.name), cmp.Compare(a.id, b.id))
@@ -361,7 +357,7 @@ type owner struct {
 }
 
 // resolveOwnership drops routes for a hostname already served and reports each
-// drop. Local wins over every machine; among machines, the first in name order.
+// drop, giving it to the local machine, then to the first peer in name order.
 func resolveOwnership(results []probeResult, local *localRoutes) ([]ownedRoutes, []Collision) {
 	owners := make(map[string]owner)
 	slugs := make(map[string]string)
@@ -400,8 +396,8 @@ func resolveOwnership(results []probeResult, local *localRoutes) ([]ownedRoutes,
 	return owned, collisions
 }
 
-// claimedElsewhere reports the first hostname another machine already serves.
-// A machine's own second claim is not a collision: a mounted path makes two.
+// claimedElsewhere reports the first hostname another machine already serves,
+// counting a machine's own second claim as its own.
 func claimedElsewhere(hosts []traefikapi.Host, local *localRoutes, owners map[string]owner, machineID string) (string, string, bool) {
 	for _, host := range hosts {
 		if local != nil && local.serves(host) {
@@ -419,7 +415,7 @@ func claimedElsewhere(hosts []traefikapi.Host, local *localRoutes, owners map[st
 type localRoutes struct {
 	literals map[string]struct{}
 	patterns []*regexp.Regexp
-	// patternText catches a peer offering the same wildcard verbatim.
+	// patternText matches a peer offering the same wildcard verbatim.
 	patternText map[string]struct{}
 }
 
@@ -430,7 +426,7 @@ func (l *localRoutes) serves(host traefikapi.Host) bool {
 		if _, taken := l.patternText[host.Value]; taken {
 			return true
 		}
-		// A pattern is never equal to a hostname, so it has to be matched.
+		// Matches the pattern against each hostname.
 		pattern, err := compileHostPattern(host.Value)
 		if err != nil {
 			return false
@@ -463,7 +459,7 @@ func compileHostPattern(pattern string) (*regexp.Regexp, error) {
 }
 
 // localHosts returns what the local containers serve, read from the local
-// proxy's API. The peer prefix keeps a previous cycle's routes out of it.
+// proxy's API, without the routes a previous cycle forwarded.
 func (d *discovery) localHosts(ctx context.Context) (*localRoutes, error) {
 	result, err := d.probe(ctx, d.config.LocalAPIURL)
 	if err != nil {
@@ -502,8 +498,7 @@ func peerTraefikConfig(slug, address string, routes []traefikapi.Route) *config.
 	serviceName := traefikapi.PeerRouterPrefix + slug
 
 	for i, route := range routes {
-		// Copied rather than rebuilt, so a path-mounted rule and the peer's own
-		// ordering both survive.
+		// Copies the peer's rule and priority unchanged.
 		traefikConfig.HTTP.Routers[fmt.Sprintf("%s-%d", serviceName, i)] = &config.Router{
 			Rule:        route.Rule,
 			Service:     serviceName,
@@ -541,13 +536,11 @@ func peerSlug(name string) string {
 	return slug
 }
 
-// uniqueSlug keeps two machines that reduce to one slug in separate files:
-// hostnames are not unique, and the second would overwrite the first.
+// uniqueSlug gives each machine a distinct slug, falling back to its address.
 func uniqueSlug(taken map[string]string, id, name, address string) string {
 	candidates := []string{peerSlug(name), peerSlug(name) + "-" + peerSlug(address)}
 
-	// A third machine can normalise onto the disambiguated name too. Bounded by
-	// the machines already holding a slug.
+	// Bounded by the machines already holding a slug.
 	for i := 2; i <= len(taken)+2; i++ {
 		candidates = append(candidates, fmt.Sprintf("%s-%s-%d", peerSlug(name), peerSlug(address), i))
 	}
@@ -559,7 +552,7 @@ func uniqueSlug(taken map[string]string, id, name, address string) string {
 		}
 	}
 
-	// Unreachable: no file is better than two machines sharing one.
+	// Unreachable with the bound above.
 	return ""
 }
 
@@ -586,8 +579,7 @@ func (d *discovery) writeConfig(fileName string, cfg *config.TraefikConfig) erro
 	return writeFileAtomically(filepath.Join(d.config.TraefikDynamicDir, fileName), data, configFilePermissions)
 }
 
-// writeReport records a cycle outside the directory the proxy watches, whose
-// file provider would report this as broken configuration.
+// writeReport records a cycle outside the directory the proxy watches.
 func (d *discovery) writeReport(report *Report) error {
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
@@ -602,8 +594,7 @@ func (d *discovery) writeReport(report *Report) error {
 	return writeFileAtomically(renderedStateFile(d.config.StateFile), []byte(report.Render()), stateFilePermissions)
 }
 
-// writeFileAtomically writes through a temporary file and a rename, so nothing
-// observes a half-written file.
+// writeFileAtomically writes through a temporary file and a rename.
 func writeFileAtomically(path string, data []byte, permissions os.FileMode) error {
 	temp := path + ".tmp"
 	if err := os.WriteFile(temp, data, permissions); err != nil {
@@ -616,8 +607,7 @@ func writeFileAtomically(path string, data []byte, permissions os.FileMode) erro
 	return nil
 }
 
-// reconcileConfigs removes the files of machines that contributed nothing, so
-// no route is left pointing at an address that no longer answers.
+// reconcileConfigs removes the files of machines that contributed nothing.
 func (d *discovery) reconcileConfigs(keep map[string]struct{}) error {
 	entries, err := os.ReadDir(d.config.TraefikDynamicDir)
 	if err != nil {

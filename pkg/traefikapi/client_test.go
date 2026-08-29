@@ -129,7 +129,6 @@ func TestRoutersReportsUnreachableSeparately(t *testing.T) {
 	}
 }
 
-// A pattern may contain a parenthesis, which must not truncate the scan.
 func TestExtractHostsKeepsAParenthesisedRegexp(t *testing.T) {
 	tests := []struct {
 		name string
@@ -152,7 +151,6 @@ func TestExtractHostsKeepsAParenthesisedRegexp(t *testing.T) {
 	}
 }
 
-// A negated matcher claims nothing.
 func TestExtractHostsIgnoresANegatedMatcher(t *testing.T) {
 	tests := []struct {
 		name string
@@ -185,7 +183,6 @@ func declarationHandler(body string) http.HandlerFunc {
 	}
 }
 
-// A machine is adopted only when it says it is this proxy.
 func TestDeclares(t *testing.T) {
 	tests := []struct {
 		name string
@@ -245,7 +242,6 @@ func TestDeclaresReportsAnUnreachableMachine(t *testing.T) {
 	}
 }
 
-// An alternative naming no host would match every request, so it is refused.
 func TestRoutesRefusesAnUnconstrainedAlternative(t *testing.T) {
 	tests := []struct {
 		name     string

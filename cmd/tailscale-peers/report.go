@@ -7,8 +7,7 @@ import (
 	"time"
 )
 
-// Render turns a cycle into the table the command line shows. Rendered here so
-// the command cannot disagree with what the proxy acted on.
+// Render turns a cycle into the table the command line shows.
 func (r *Report) Render() string {
 	var b strings.Builder
 
@@ -20,7 +19,7 @@ func (r *Report) Render() string {
 	b.WriteString("\n\n")
 
 	if r.SourceError != "" {
-		// Before the table: an empty table alone reads like a fault.
+		// Printed before the table.
 		fmt.Fprintf(&b, "No machines were considered: the tailnet status could not be read (%s).\n", r.SourceError)
 		fmt.Fprintf(&b, "This is the status source failing, not an empty tailnet. It is retried every %s.\n", r.RefreshInterval)
 		return b.String()
@@ -103,9 +102,8 @@ func writeRow(b *strings.Builder, row [4]string, widths [4]int) {
 	b.WriteString("\n")
 }
 
-// peerDetail is what a machine contributed, or why it contributed nothing. A
-// retry shows the wait: an absolute time beside the cycle timestamp, both
-// rounded to the second, reads as though the backoff were not advancing.
+// peerDetail is what a machine contributed, or why it contributed nothing,
+// showing a retry as the wait ahead of it.
 func peerDetail(peer PeerReport, cycle time.Time) string {
 	if len(peer.Hosts) > 0 {
 		return strings.Join(peer.Hosts, ", ")
@@ -121,8 +119,7 @@ func peerDetail(peer PeerReport, cycle time.Time) string {
 	return detail
 }
 
-// compactReason shortens a probe failure for the table. The state file keeps
-// the full text.
+// compactReason shortens a probe failure for the table.
 func compactReason(reason string) string {
 	for _, known := range []string{
 		"connection refused",
@@ -144,8 +141,7 @@ func compactReason(reason string) string {
 	return reason
 }
 
-// renderSummary keeps a tailnet full of phones and routers from reading as a
-// fault: most machines running no proxy is the ordinary case.
+// renderSummary counts what the cycle found and names the ordinary outcomes.
 func renderSummary(peers []PeerReport) string {
 	var forwarding, hostnames, noProxy, undeclared, unreachable, skipped int
 	for _, peer := range peers {

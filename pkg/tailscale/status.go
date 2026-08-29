@@ -75,7 +75,7 @@ func (s *Status) Peers() []Peer {
 		if n == nil {
 			continue
 		}
-		// By address, since another machine may share this one's hostname.
+		// Matches on address, not hostname.
 		if sharesAddress(n.TailscaleIPs, s.Self.TailscaleIPs) {
 			continue
 		}

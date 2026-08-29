@@ -36,7 +36,7 @@ func main() {
 
 	d := newDiscovery(cfg, log, source, httpProbe)
 
-	// Disabled still clears the routes a previous enabled run left behind.
+	// Clears the routes a previous enabled run left behind.
 	if !cfg.Enabled {
 		log.Info("Peer routing is disabled",
 			"hint", "set HTTP_PROXY_TAILSCALE_ENABLED=true to enable it")
@@ -57,7 +57,7 @@ func main() {
 
 	run(ctx, d)
 
-	// Withdraw on the way out: the entrypoint's cleanup only runs at startup.
+	// Withdraws every route on the way out.
 	if err := d.reconcileConfigs(nil); err != nil {
 		log.Error("Failed to withdraw peer routes on shutdown", "error", err)
 	}
@@ -76,8 +76,7 @@ func newSource(cfg *config.TailscaleConfig) (tailscale.Source, error) {
 	}
 }
 
-// run polls until the context is cancelled: the trigger is a container starting
-// on another machine, which no local event stream observes.
+// run polls until the context is cancelled.
 func run(ctx context.Context, d *discovery) {
 	ticker := time.NewTicker(d.config.RefreshInterval)
 	defer ticker.Stop()

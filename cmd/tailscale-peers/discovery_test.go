@@ -55,8 +55,7 @@ func (f fakeSource) Status(context.Context) (*tailscale.Status, error) {
 	return status, nil
 }
 
-// fakeProbe answers per base URL, so a machine that runs no proxy is expressed
-// by having no entry rather than by a flag.
+// fakeProbe answers per base URL; a machine with no entry runs no proxy.
 type fakeProbe struct {
 	routes   map[string][]traefikapi.Route
 	rejected map[string][]string
@@ -84,7 +83,7 @@ func hostRoute(host string) traefikapi.Route {
 	}
 }
 
-// wildcardRoute is a peer route claiming a pattern rather than a name.
+// wildcardRoute is a peer route claiming a pattern.
 func wildcardRoute(pattern string) traefikapi.Route {
 	return traefikapi.Route{
 		Rule:     fmt.Sprintf("HostRegexp(`%s`)", pattern),
@@ -120,7 +119,6 @@ func peerURL(address string) string {
 	return fmt.Sprintf("http://%s:%d", address, peerAPIPort)
 }
 
-// No document means nothing probed and nothing written.
 func TestSourceFailureProbesNothingAndWritesNothing(t *testing.T) {
 	probe := &fakeProbe{routes: map[string][]traefikapi.Route{
 		"http://http-proxy:8080": nil,
@@ -154,7 +152,6 @@ func TestSourceFailureProbesNothingAndWritesNothing(t *testing.T) {
 	}
 }
 
-// The document's age is recorded, so the command line can show it.
 func TestVerifiedCycleRecordsTheDocumentAge(t *testing.T) {
 	probe := &fakeProbe{routes: map[string][]traefikapi.Route{
 		"http://http-proxy:8080": nil,
@@ -197,7 +194,6 @@ func TestVerifiedCycleRecordsTheDocumentAge(t *testing.T) {
 	}
 }
 
-// A machine that stops answering has its file removed.
 func TestStaleConfigurationIsRemoved(t *testing.T) {
 	probe := &fakeProbe{routes: map[string][]traefikapi.Route{
 		"http://http-proxy:8080": nil,
@@ -439,7 +435,6 @@ func TestBackoffGrowsAndIsCapped(t *testing.T) {
 	}
 }
 
-// Pinned against the service's behaviour rather than its rendering.
 func TestFailingMachineIsProbedLessOftenEachTime(t *testing.T) {
 	probe := &fakeProbe{routes: map[string][]traefikapi.Route{"http://http-proxy:8080": nil}}
 	cfg := &config.TailscaleConfig{
@@ -458,7 +453,7 @@ func TestFailingMachineIsProbedLessOftenEachTime(t *testing.T) {
 	var probedAt []time.Duration
 	var waits []time.Duration
 
-	// Two minutes of cycles at the refresh interval's own resolution.
+	// Two minutes of cycles.
 	for tick := range 25 {
 		now = start.Add(time.Duration(tick) * 5 * time.Second)
 
@@ -489,8 +484,7 @@ func TestFailingMachineIsProbedLessOftenEachTime(t *testing.T) {
 			if peer.Status != statusUnreachable {
 				t.Fatalf("machine status = %q, want %q", peer.Status, statusUnreachable)
 			}
-			// The retry the report advertises must be ahead of the cycle that
-			// produced it, or it is describing the past.
+			// The advertised retry is ahead of the cycle that produced it.
 			if !peer.RetryAt.After(report.UpdatedAt) {
 				t.Fatalf("retryAt %s is not after the cycle at %s", peer.RetryAt, report.UpdatedAt)
 			}
@@ -502,7 +496,7 @@ func TestFailingMachineIsProbedLessOftenEachTime(t *testing.T) {
 		t.Fatalf("probed at %v, want the machine tried at least three times in two minutes", probedAt)
 	}
 
-	// Skipped rather than probed every cycle, and less often each time.
+	// Probed less often each time.
 	for i := 1; i < len(probedAt); i++ {
 		gap := probedAt[i] - probedAt[i-1]
 		if gap <= cfg.RefreshInterval && i > 1 {
@@ -516,7 +510,6 @@ func TestFailingMachineIsProbedLessOftenEachTime(t *testing.T) {
 	}
 }
 
-// Without the local routing table a cycle writes nothing and keeps what it had.
 func TestLocalReadFailureKeepsPreviousRoutes(t *testing.T) {
 	probe := &fakeProbe{routes: map[string][]traefikapi.Route{
 		"http://http-proxy:8080": nil,
@@ -543,7 +536,6 @@ func TestLocalReadFailureKeepsPreviousRoutes(t *testing.T) {
 	}
 }
 
-// Two machines called the same thing each keep their own file.
 func TestMachinesSharingAHostnameKeepSeparateConfigurations(t *testing.T) {
 	probe := &fakeProbe{routes: map[string][]traefikapi.Route{
 		"http://http-proxy:8080": nil,
@@ -581,7 +573,6 @@ func TestMachinesSharingAHostnameKeepSeparateConfigurations(t *testing.T) {
 	}
 }
 
-// The same document produces the same winner on every cycle.
 func TestDuplicateHostnamesResolveTheSameWayEveryCycle(t *testing.T) {
 	probe := &fakeProbe{routes: map[string][]traefikapi.Route{
 		"http://http-proxy:8080": nil,
@@ -612,7 +603,6 @@ func TestDuplicateHostnamesResolveTheSameWayEveryCycle(t *testing.T) {
 	}
 }
 
-// A machine answering without declaring itself contributes nothing.
 func TestMachineThatDoesNotDeclareItselfIsNotUsed(t *testing.T) {
 	probe := &fakeProbe{
 		routes: map[string][]traefikapi.Route{"http://http-proxy:8080": nil},
@@ -648,7 +638,6 @@ func TestMachineThatDoesNotDeclareItselfIsNotUsed(t *testing.T) {
 	}
 }
 
-// Stopping the service withdraws what it forwarded.
 func TestShutdownWithdrawsEveryPeerRoute(t *testing.T) {
 	probe := &fakeProbe{routes: map[string][]traefikapi.Route{
 		"http://http-proxy:8080": nil,
@@ -672,7 +661,6 @@ func TestShutdownWithdrawsEveryPeerRoute(t *testing.T) {
 	}
 }
 
-// A rule that could not be accepted is reported rather than dropped.
 func TestRefusedRulesAreReported(t *testing.T) {
 	probe := &fakeProbe{
 		routes: map[string][]traefikapi.Route{
@@ -702,7 +690,6 @@ func TestRefusedRulesAreReported(t *testing.T) {
 	}
 }
 
-// A failed write must not withdraw the last good configuration.
 func TestAFailedWriteKeepsThePreviousConfiguration(t *testing.T) {
 	probe := &fakeProbe{routes: map[string][]traefikapi.Route{
 		"http://http-proxy:8080": nil,
@@ -718,8 +705,7 @@ func TestAFailedWriteKeepsThePreviousConfiguration(t *testing.T) {
 		t.Fatalf("expected the first cycle to write %s: %v", written, err)
 	}
 
-	// A directory where the temporary file has to go makes the write fail
-	// without touching the file already there.
+	// A directory in the temporary file's place fails the write.
 	if err := os.Mkdir(written+".tmp", 0o755); err != nil {
 		t.Fatalf("failed to block the write: %v", err)
 	}
@@ -732,7 +718,6 @@ func TestAFailedWriteKeepsThePreviousConfiguration(t *testing.T) {
 	}
 }
 
-// A third machine can normalise onto the second one's disambiguated name.
 func TestSlugsStayUniqueWhenTheDisambiguationCollides(t *testing.T) {
 	taken := map[string]string{}
 
@@ -758,7 +743,6 @@ func TestSlugsStayUniqueWhenTheDisambiguationCollides(t *testing.T) {
 	}
 }
 
-// A pattern is never equal to a name, so it has to be matched against them.
 func TestAPeerWildcardCoveringALocalHostnameLosesToIt(t *testing.T) {
 	local := servedLocally("app.loc", "api.loc")
 	results := []probeResult{{
@@ -779,7 +763,6 @@ func TestAPeerWildcardCoveringALocalHostnameLosesToIt(t *testing.T) {
 	}
 }
 
-// A wildcard covering nothing local is a legitimate route.
 func TestAPeerWildcardCoveringNothingLocalIsKept(t *testing.T) {
 	local := servedLocally("app.other", "api.other")
 	results := []probeResult{{
@@ -831,7 +814,6 @@ func TestAnAbsurdHostPatternIsRefused(t *testing.T) {
 	}
 }
 
-// The service creates it on the path the CLI never touches: a plain compose up.
 func TestTheStateDirectoryIsCreatedOwnerOnly(t *testing.T) {
 	probe := &fakeProbe{routes: map[string][]traefikapi.Route{
 		"http://http-proxy:8080": nil,

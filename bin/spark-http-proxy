@@ -52,13 +52,13 @@ TAILSCALE_STATE_FILE="${STATE_DIR}/tailscale-peers.json"
 TAILSCALE_RENDERED_FILE="${STATE_DIR}/tailscale-peers.txt"
 TAILSCALE_SOCKET_OVERRIDE="$(dirname "${COMPOSE_FILE}")/compose.tailscale-socket.yml"
 
-# Compose reads COMPOSE_FILE as a ":"-separated list, so extra files go here.
+# Extra compose files. COMPOSE_FILE holds a single path.
 COMPOSE_FILES=("-f" "${COMPOSE_FILE}")
 
 if [[ "${TAILSCALE_ENABLED}" == "true" ]]; then
   export COMPOSE_PROFILES="${COMPOSE_PROFILES:+${COMPOSE_PROFILES},}tailscale"
 
-  # The socket mount lives in its own file, absent on a platform without one.
+  # Adds the socket mount, which lives in its own file.
   if [[ "${TAILSCALE_SOURCE}" == "socket" ]]; then
     if [[ -f "${TAILSCALE_SOCKET_OVERRIDE}" ]]; then
       COMPOSE_FILES+=("-f" "${TAILSCALE_SOCKET_OVERRIDE}")
@@ -764,7 +764,7 @@ start_with_tailscale() {
     export HTTP_PROXY_TAILSCALE_ENABLED=true
     TAILSCALE_ENABLED=true
 
-    # Guarded: the block at the top already did this when the caller exported it.
+    # Skipped when the block at the top already added it.
     if [[ ",${COMPOSE_PROFILES:-}," != *",tailscale,"* ]]; then
         COMPOSE_PROFILES="${COMPOSE_PROFILES:+${COMPOSE_PROFILES},}tailscale"
         export COMPOSE_PROFILES
@@ -833,7 +833,7 @@ show_tailscale_peers() {
     log_warning "The proxy is not running, so this is the last recorded cycle and not the current state"
     echo ""
   elif [[ -n "$(find "${report}" -mmin +1 2>/dev/null)" ]]; then
-    # The proxy is up but discovery has not written in a while.
+    # The proxy is up and discovery has not written in a while.
     log_warning "This report is more than a minute old, so discovery may have stopped"
     echo "   Check the service with: ${0} logs tailscale_peers"
     echo ""

@@ -26,9 +26,8 @@ const MiddlewaresPath = "/api/http/middlewares"
 // Port 30000 identifies a Traefik, not this proxy.
 const ProxyDeclarationName = "spark-http-proxy"
 
-// PeerRouterPrefix marks a forwarded router, so it is not offered onward. It
-// also names the generated files and the entrypoint's cleanup glob: all three
-// move together.
+// PeerRouterPrefix names a forwarded router, its generated file and the
+// entrypoint's cleanup glob.
 const PeerRouterPrefix = "tailscale-peer-"
 
 // ErrUnreachable reports a machine that did not answer at all, as opposed to
@@ -56,8 +55,7 @@ type Middleware struct {
 	Status   string `json:"status"`
 }
 
-// Host is a hostname a rule claims. A pattern is flagged, since it has to be
-// matched against hostnames rather than compared to them.
+// Host is a hostname a rule claims, flagged when it is a pattern.
 type Host struct {
 	Value    string
 	IsRegexp bool
@@ -90,8 +88,8 @@ func NewWithTimeout(baseURL string, timeout time.Duration) *Client {
 	return New(&http.Client{Timeout: timeout}, baseURL)
 }
 
-// Declares reports whether the machine says it is this proxy. Asked before the
-// routing table, so a machine that is not costs one request.
+// Declares reads the middlewares endpoint and reports whether the machine
+// identifies itself as this proxy.
 func (c *Client) Declares(ctx context.Context) (bool, error) {
 	var middlewares []Middleware
 	if err := c.get(ctx, MiddlewaresPath, &middlewares); err != nil {
@@ -150,8 +148,7 @@ type Result struct {
 }
 
 // Routes keeps the routers naming a hostname the machine serves itself, and
-// refuses any rule not bounded by a hostname: the rule is copied verbatim, so
-// an unbounded alternative would match every request this machine receives.
+// refuses any rule a hostname does not bound.
 func Routes(routers []Router) Result {
 	result := Result{Routes: make([]Route, 0, len(routers))}
 
@@ -182,9 +179,8 @@ func Routes(routers []Router) Result {
 	return result
 }
 
-// hostConstrained reports whether a hostname bounds every path through a rule.
-// Parsed rather than scanned, because an unbounded alternative can sit at any
-// depth.
+// hostConstrained parses a rule and reports whether a hostname bounds every
+// path through it, at any depth.
 func hostConstrained(rule string) bool {
 	parser := &ruleParser{rule: rule}
 
@@ -200,14 +196,14 @@ func hostConstrained(rule string) bool {
 	return constrained
 }
 
-// ruleParser answers one question about a rule, so each production returns
-// whether its subtree is host-bounded rather than building a tree.
+// ruleParser walks a rule, each production returning whether a hostname bounds
+// its subtree.
 type ruleParser struct {
 	rule string
 	pos  int
 }
 
-// parseAlternation handles ||: bounded only when every branch is.
+// parseAlternation handles ||, bounded when every branch is.
 func (p *ruleParser) parseAlternation() (bool, bool) {
 	constrained, ok := p.parseConjunction()
 	if !ok {
@@ -224,7 +220,7 @@ func (p *ruleParser) parseAlternation() (bool, bool) {
 	return constrained, true
 }
 
-// parseConjunction handles &&: bounded when any branch is.
+// parseConjunction handles &&, bounded when any branch is.
 func (p *ruleParser) parseConjunction() (bool, bool) {
 	constrained, ok := p.parseMatcher()
 	if !ok {
@@ -241,7 +237,7 @@ func (p *ruleParser) parseConjunction() (bool, bool) {
 	return constrained, true
 }
 
-// parseMatcher handles a group or a matcher. A negation bounds nothing.
+// parseMatcher handles a group or a matcher, negation included.
 func (p *ruleParser) parseMatcher() (bool, bool) {
 	p.skipSpace()
 
@@ -338,8 +334,8 @@ type hostMatcherRef struct {
 	isRegexp  bool
 }
 
-// hostMatchers returns every Host and HostRegexp matcher with its argument
-// text. Scanned rather than matched, since a pattern may contain a parenthesis.
+// hostMatchers returns every Host and HostRegexp matcher, scanning each one to
+// the parenthesis that closes its arguments.
 func hostMatchers(rule string) []hostMatcherRef {
 	var matchers []hostMatcherRef
 

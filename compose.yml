@@ -63,7 +63,7 @@ services:
     volumes:
       - traefik_dynamic:/traefik/dynamic
       - "${LOCAL_HOME:-$HOME}/.local/spark/http-proxy/state:/state"
-    # Run directly, so SIGTERM reaches the process and it withdraws its routes.
+    # Runs as PID 1, receiving the SIGTERM that makes it withdraw its routes.
     command: ["/usr/local/bin/tailscale-peers"]
     environment:
       - HTTP_PROXY_TAILSCALE_ENABLED=${HTTP_PROXY_TAILSCALE_ENABLED:-false}

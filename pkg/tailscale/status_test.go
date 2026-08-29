@@ -71,7 +71,6 @@ func TestAnotherUserIsExcludedWhateverIsConfigured(t *testing.T) {
 	}
 }
 
-// Only an address identifies this machine; a hostname may be shared.
 func TestSelfIsExcludedByAddressNotByHostname(t *testing.T) {
 	peers := parseTestStatus(t, tailnetStatus).Peers()
 
@@ -92,7 +91,6 @@ func TestSelfIsExcludedByAddressNotByHostname(t *testing.T) {
 	}
 }
 
-// Two machines with one hostname keep separate identities, in a fixed order.
 func TestDuplicateHostnamesKeepTheirIdentities(t *testing.T) {
 	const document = `{
   "Self": {"HostName": "machine-a", "Online": true, "UserID": 1, "TailscaleIPs": ["100.64.0.1"]},

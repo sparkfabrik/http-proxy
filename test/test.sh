@@ -866,8 +866,8 @@ cleanup_peer_stack() {
     rm -rf "$PEER_STATE_DIR" "$PEER_DYNAMIC_DIR" "$PEER_CONFIG_FILE" 2>/dev/null || true
 }
 
-# Writes the static configuration of the stand-in proxy, which listens for
-# route queries on 30000 itself since there is no host port mapping here.
+# Writes the static configuration of the stand-in proxy, which serves route
+# queries on 30000 itself.
 write_peer_static_config() {
     mkdir -p "$PEER_DYNAMIC_DIR"
 
@@ -1266,8 +1266,7 @@ main() {
     test_virtual_path_fallthrough && vpath_fallthrough_passed=1
     [ "$vpath_fallthrough_passed" -eq 1 ] && passed=$((passed + 1))
 
-    # Tailnet peer routing: brings up a second proxy of its own, and removes it
-    # again, so it neither depends on nor disturbs the suites around it.
+    # Tailnet peer routing: brings up a second proxy of its own, and removes it.
     log "Testing tailnet peer routing..."
     total=$((total + 1))
     local peers_passed=0
