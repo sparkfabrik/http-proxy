@@ -951,6 +951,10 @@ That stops **this machine forwarding to others**. Every hostname it was forwardi
 
 It does not withdraw this machine from the tailnet. Its proxy still runs, still publishes the declaration that says what it is, and still answers for its own containers, so your other machines keep discovering and reaching it. To stop that, stop the proxy itself or close the ports.
 
+**The choice is remembered.** `start-with-tailscale` records it and `stop-tailscale` clears it, so `restart`, `upgrade` and a later `tailscale-peers` in any shell see the same state. The monitoring stack is recorded the same way by `start-with-metrics` and `stop-metrics`, in `~/.local/spark/http-proxy/optional-stacks`.
+
+An explicit `HTTP_PROXY_TAILSCALE_ENABLED` or `HTTP_PROXY_METRICS_ENABLED` wins where it is set, for CI and other non-interactive callers, then the recorded choice, then off. A stack already running when nothing is recorded is recorded on the next command, so upgrading does not turn it off.
+
 ### Enabling it
 
 ```bash

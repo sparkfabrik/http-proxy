@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `spark-http-proxy` records which optional stacks are on, so peer routing and monitoring both survive `start`, `restart` and `upgrade`, and every command reports them from any shell. Previously peer routing was read from the caller's environment and monitoring was inferred from a running container, so a plain `start` dropped monitoring and a `restart` from a fresh shell dropped peer routing ([#124](https://github.com/sparkfabrik/http-proxy/issues/124))
+- A stack that is already running when nothing is recorded is recorded on the next command, so upgrading to this version does not turn it off ([#124](https://github.com/sparkfabrik/http-proxy/issues/124))
+- `tailscale-peers`, `status`, `grafana` and `prometheus` distinguish an optional stack being switched off from its services not running ([#124](https://github.com/sparkfabrik/http-proxy/issues/124))
 - `self-test` no longer aborts on the first failed check. Its probes returned non-zero from inside a command substitution, which under `set -e` ended the script before it could report which check failed or remove the containers it had started ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
 - Fix the CORS example in `examples/applications.yml`, which could never have worked: its `traefik.` middleware label made the layer skip the container, so its `VIRTUAL_HOST` was ignored and no route existed. It now declares its routers as labels too ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
 - Correct `AGENTS.md`, which stated that the repository has no unit tests and that `make test` is the verification step. Unit tests exist beside the code, and `make test` runs only the integration suite ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))

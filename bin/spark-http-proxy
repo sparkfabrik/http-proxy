@@ -43,8 +43,63 @@ log_warning() { echo "⚠️  $1"; }
 export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-http-proxy}
 export COMPOSE_FILE=${COMPOSE_FILE:-$(discover_compose_file)}
 
-# Tailnet peer routing
-TAILSCALE_ENABLED="${HTTP_PROXY_TAILSCALE_ENABLED:-false}"
+# Optional stacks, recorded so every command and every shell agrees.
+OPTIONAL_STACKS_FILE="${CONFIG_DIR}/optional-stacks"
+
+# Reports whether an optional stack is recorded as on.
+stack_recorded() {
+  grep -qx "${1}=true" "${OPTIONAL_STACKS_FILE}" 2>/dev/null
+}
+
+# Records an optional stack as on.
+record_stack() {
+  mkdir -p "${CONFIG_DIR}"
+  clear_stack "$1"
+  printf '%s=true\n' "$1" >>"${OPTIONAL_STACKS_FILE}"
+}
+
+# Removes an optional stack from the record.
+clear_stack() {
+  [[ -f "${OPTIONAL_STACKS_FILE}" ]] || return 0
+  local remaining
+  remaining="$(grep -vx "${1}=true" "${OPTIONAL_STACKS_FILE}" || true)"
+  printf '%s' "${remaining}" >"${OPTIONAL_STACKS_FILE}"
+  [[ -s "${OPTIONAL_STACKS_FILE}" ]] || rm -f "${OPTIONAL_STACKS_FILE}"
+}
+
+# Resolves an optional stack: an explicit variable, then the record, then off.
+resolve_stack() {
+  local name="$1" override="$2"
+
+  if [[ -n "${override}" ]]; then
+    echo "${override}"
+    return 0
+  fi
+  if stack_recorded "${name}"; then
+    echo "true"
+    return 0
+  fi
+  echo "false"
+}
+
+# Names where a resolved state came from.
+stack_origin() {
+  local name="$1" override="$2"
+
+  if [[ -n "${override}" ]]; then
+    echo "the environment"
+  elif stack_recorded "${name}"; then
+    echo "${OPTIONAL_STACKS_FILE}"
+  else
+    echo "the default"
+  fi
+}
+
+TAILSCALE_ENABLED="$(resolve_stack tailscale "${HTTP_PROXY_TAILSCALE_ENABLED:-}")"
+TAILSCALE_ENABLED_ORIGIN="$(stack_origin tailscale "${HTTP_PROXY_TAILSCALE_ENABLED:-}")"
+METRICS_ENABLED="$(resolve_stack metrics "${HTTP_PROXY_METRICS_ENABLED:-}")"
+METRICS_ENABLED_ORIGIN="$(stack_origin metrics "${HTTP_PROXY_METRICS_ENABLED:-}")"
+
 TAILSCALE_SOURCE="${HTTP_PROXY_TAILSCALE_SOURCE:-socket}"
 STATE_DIR="${CONFIG_DIR}/state"
 TAILSCALE_STATUS_FILE="${STATE_DIR}/tailscale-status.json"
@@ -55,19 +110,36 @@ TAILSCALE_SOCKET_OVERRIDE="$(dirname "${COMPOSE_FILE}")/compose.tailscale-socket
 # Extra compose files. COMPOSE_FILE holds a single path.
 COMPOSE_FILES=("-f" "${COMPOSE_FILE}")
 
-if [[ "${TAILSCALE_ENABLED}" == "true" ]]; then
-  export COMPOSE_PROFILES="${COMPOSE_PROFILES:+${COMPOSE_PROFILES},}tailscale"
+# Adds the profiles and files the recorded stacks need.
+apply_optional_stacks() {
+  COMPOSE_FILES=("-f" "${COMPOSE_FILE}")
+  local profiles=""
 
-  # Adds the socket mount, which lives in its own file.
-  if [[ "${TAILSCALE_SOURCE}" == "socket" ]]; then
-    if [[ -f "${TAILSCALE_SOCKET_OVERRIDE}" ]]; then
-      COMPOSE_FILES+=("-f" "${TAILSCALE_SOCKET_OVERRIDE}")
-    else
-      log_warning "Tailscale socket override not found at ${TAILSCALE_SOCKET_OVERRIDE}"
-      log_info "Peer discovery will report the daemon as unreachable until it is restored"
+  if [[ "${METRICS_ENABLED}" == "true" ]]; then
+    profiles="metrics"
+  fi
+
+  if [[ "${TAILSCALE_ENABLED}" == "true" ]]; then
+    export HTTP_PROXY_TAILSCALE_ENABLED=true
+    profiles="${profiles:+${profiles},}tailscale"
+
+    # Adds the socket mount, which lives in its own file.
+    if [[ "${TAILSCALE_SOURCE}" == "socket" ]]; then
+      if [[ -f "${TAILSCALE_SOCKET_OVERRIDE}" ]]; then
+        COMPOSE_FILES+=("-f" "${TAILSCALE_SOCKET_OVERRIDE}")
+      else
+        log_warning "Tailscale socket override not found at ${TAILSCALE_SOCKET_OVERRIDE}"
+        log_info "Peer discovery will report the daemon as unreachable until it is restored"
+      fi
     fi
   fi
-fi
+
+  if [[ -n "${profiles}" ]]; then
+    export COMPOSE_PROFILES="${profiles}"
+  fi
+}
+
+apply_optional_stacks
 
 # Helper function to get a service's mapped port
 get_service_port() {
@@ -310,7 +382,8 @@ show_config() {
   echo "  State directory: ${STATE_DIR}"
   echo ""
   echo "Tailnet peer routing:"
-  echo "  HTTP_PROXY_TAILSCALE_ENABLED: ${TAILSCALE_ENABLED} (default: false)"
+  echo "  Peer routing: ${TAILSCALE_ENABLED} (from ${TAILSCALE_ENABLED_ORIGIN})"
+  echo "  Monitoring: ${METRICS_ENABLED} (from ${METRICS_ENABLED_ORIGIN})"
   echo "  HTTP_PROXY_TAILSCALE_SOURCE: ${TAILSCALE_SOURCE} (default: socket)"
   echo "  HTTP_PROXY_TAILSCALE_REFRESH_INTERVAL: ${HTTP_PROXY_TAILSCALE_REFRESH_INTERVAL:-60s} (default: 60s)"
   echo "  HTTP_PROXY_TAILSCALE_STATUS_MAX_AGE: ${HTTP_PROXY_TAILSCALE_STATUS_MAX_AGE:-10m} (default: 10m)"
@@ -368,6 +441,26 @@ if [[ "$1" != "help" && "$1" != "version" && "$1" != "completion" && "$1" != "in
     exit 1
   fi
 fi
+
+# Records an optional stack that is already running but was never recorded, so
+# the first run after this change does not tear it down.
+adopt_running_stacks() {
+  if [[ "${METRICS_ENABLED}" != "true" ]] && [[ -z "${HTTP_PROXY_METRICS_ENABLED:-}" ]] && is_running prometheus; then
+    record_stack metrics
+    METRICS_ENABLED=true
+    METRICS_ENABLED_ORIGIN="${OPTIONAL_STACKS_FILE}"
+    log_info "Recorded the monitoring stack, which was already running"
+  fi
+
+  if [[ "${TAILSCALE_ENABLED}" != "true" ]] && [[ -z "${HTTP_PROXY_TAILSCALE_ENABLED:-}" ]] && is_running tailscale_peers; then
+    record_stack tailscale
+    TAILSCALE_ENABLED=true
+    TAILSCALE_ENABLED_ORIGIN="${OPTIONAL_STACKS_FILE}"
+    log_info "Recorded tailnet peer routing, which was already running"
+  fi
+
+  apply_optional_stacks
+}
 
 # Ensure config directories exist
 mkdir -p "${CONFIG_DIR}" "${CERT_DIR}"
@@ -677,11 +770,26 @@ open_dashboard() {
   open_url "http://localhost:${port}" "Traefik dashboard"
 }
 
+# Reports monitoring being off apart from its services not answering.
+require_metrics_running() {
+  if [[ "${METRICS_ENABLED}" != "true" ]]; then
+    log_error "Monitoring is not enabled"
+    log_info "Start it with: ${0} start-with-metrics"
+    return 1
+  fi
+  if ! is_running prometheus; then
+    log_error "Monitoring is enabled but its services are not running"
+    log_info "Start them with: ${0} start-with-metrics"
+    return 1
+  fi
+}
+
 open_grafana() {
   local port
+  require_metrics_running || exit 1
   port=$(get_service_port grafana 3000)
   if [[ -z "${port}" ]]; then
-    log_error "Grafana port not found. Is it running?"
+    log_error "Grafana port not found"
     log_info "Try starting with: ${0} start-with-metrics"
     exit 1
   fi
@@ -690,9 +798,10 @@ open_grafana() {
 
 open_prometheus() {
   local port
+  require_metrics_running || exit 1
   port=$(get_service_port prometheus 9090)
   if [[ -z "${port}" ]]; then
-    log_error "Prometheus port not found. Is it running?"
+    log_error "Prometheus port not found"
     log_info "Try starting with: ${0} start-with-metrics"
     exit 1
   fi
@@ -763,6 +872,8 @@ refresh_tailscale_status_if_needed() {
 start_with_tailscale() {
     export HTTP_PROXY_TAILSCALE_ENABLED=true
     TAILSCALE_ENABLED=true
+    record_stack tailscale
+    apply_optional_stacks
 
     # Skipped when the block at the top already added it.
     if [[ ",${COMPOSE_PROFILES:-}," != *",tailscale,"* ]]; then
@@ -783,12 +894,13 @@ start_with_tailscale() {
 
     ensure_state_dir
     refresh_tailscale_status_if_needed
-    recreate_stack "false"
+    recreate_stack
 }
 
 # Stops peer routing alone and removes every forwarded hostname.
 stop_tailscale() {
     log_info "Stopping tailnet peer routing..."
+    clear_stack tailscale
     dc_tailscale stop tailscale_peers >/dev/null 2>&1 || true
     dc_tailscale rm -f tailscale_peers >/dev/null 2>&1 || true
 
@@ -807,11 +919,18 @@ show_tailscale_peers() {
   if [[ "${TAILSCALE_ENABLED}" != "true" ]]; then
     log_warning "Tailnet peer routing is disabled"
     echo ""
-    echo "Enable it by starting the proxy with:"
-    echo "  HTTP_PROXY_TAILSCALE_ENABLED=true ${0} start"
+    echo "Enable it with:"
+    echo "  ${0} start-with-tailscale"
     echo ""
     echo "On a platform whose Tailscale daemon exposes no socket, such as macOS, add:"
     echo "  HTTP_PROXY_TAILSCALE_SOURCE=file"
+    return 0
+  fi
+
+  if ! is_running tailscale_peers; then
+    log_warning "Tailnet peer routing is enabled but its service is not running"
+    echo "   Start it with: ${0} start-with-tailscale"
+    echo "   Or stop expecting it with: ${0} stop-tailscale"
     return 0
   fi
 
@@ -864,7 +983,9 @@ show_tailscale_summary() {
 
 # Docker Compose helpers
 dc_cmd() { docker compose "${COMPOSE_FILES[@]}" "$@"; }
-dc_metrics() { docker compose "${COMPOSE_FILES[@]}" --profile metrics "$@"; }
+# Addresses every optional stack, whatever is recorded. A --profile flag
+# replaces COMPOSE_PROFILES rather than adding to it, so a teardown names them.
+dc_all() { docker compose "${COMPOSE_FILES[@]}" --profile metrics --profile tailscale "$@"; }
 dc_tailscale() { docker compose "${COMPOSE_FILES[@]}" --profile tailscale "$@"; }
 
 # Check if service is running
@@ -1049,37 +1170,21 @@ ensure_running() {
 
 # Clean up and start services
 recreate_stack() {
-  local with_metrics="$1"
 
   docker rm -vf http-proxy >/dev/null 2>&1 || true
   docker rm -vf "$(docker ps -q --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")" >/dev/null 2>&1 || true
 
-  if [[ "${with_metrics}" == "true" ]]; then
-    dc_metrics down -v
-    dc_metrics up -d --pull always
-  else
-    dc_metrics down -v
-    dc_cmd up -d --pull always
-  fi
+  dc_all down -v
+  dc_cmd up -d --pull always
 }
 
 # Pull latest images and recreate only changed containers (preserves volumes)
 upgrade_stack() {
-  local with_metrics="$1"
-
   log_info "Pulling latest images..."
-  if [[ "${with_metrics}" == "true" ]]; then
-    dc_metrics pull
-  else
-    dc_cmd pull
-  fi
+  dc_cmd pull
 
   log_info "Recreating containers with updated images..."
-  if [[ "${with_metrics}" == "true" ]]; then
-    dc_metrics up -d
-  else
-    dc_cmd up -d
-  fi
+  dc_cmd up -d
 }
 
 # Self-update the script and compose files from the git repository
@@ -1189,6 +1294,11 @@ show_version() {
   fi
 }
 
+# Runs once the Docker helpers exist and only where Docker answers.
+if docker info >/dev/null 2>&1; then
+  adopt_running_stacks
+fi
+
 case "$1" in
 "" | "-h" | "--help")
   show_usage
@@ -1234,15 +1344,18 @@ status)
     dc_cmd ps
     echo ""
 
-    if is_running prometheus; then
+    if [[ "${METRICS_ENABLED}" != "true" ]]; then
+      log_warning "Monitoring is not enabled"
+      echo "   💡 Start with: ${0} start-with-metrics"
+    elif is_running prometheus; then
       log_success "Monitoring services are running"
       grafana_port=$(get_service_port grafana 3000)
       prometheus_port=$(get_service_port prometheus 9090)
       echo "   📊 Grafana: http://localhost:${grafana_port:-'not available'} (admin/admin)"
       echo "   📈 Prometheus: http://localhost:${prometheus_port:-'not available'}"
     else
-      log_warning "Monitoring services are not running"
-      echo "   💡 Start with: ${0} start-with-metrics"
+      log_warning "Monitoring is enabled but its services are not running"
+      echo "   💡 Start them with: ${0} start-with-metrics"
     fi
 
     if [[ "${TAILSCALE_ENABLED}" == "true" ]]; then
@@ -1261,7 +1374,7 @@ start)
   log_info "Starting HTTP Proxy (basic stack)..."
   ensure_state_dir
   refresh_tailscale_status_if_needed
-  recreate_stack "false"
+  recreate_stack
   echo ""
   log_success "HTTP Proxy running"
   dashboard_port=$(get_service_port traefik 8080)
@@ -1273,23 +1386,14 @@ start)
   ;;
 restart)
   ensure_state_dir
+  refresh_tailscale_status_if_needed
   if ! is_running http-proxy; then
     log_info "HTTP Proxy is not running, starting it..."
-    if is_running prometheus; then
-      log_info "Starting with monitoring services..."
-      recreate_stack "true"
-    else
-      recreate_stack "false"
-    fi
+    recreate_stack
     log_success "HTTP Proxy started"
   else
     log_info "Restarting HTTP Proxy..."
-    if is_running prometheus; then
-      log_info "Restarting with monitoring services..."
-      dc_metrics restart
-    else
-      dc_cmd restart
-    fi
+    dc_cmd restart
     log_success "HTTP Proxy restarted"
   fi
   ;;
@@ -1310,9 +1414,12 @@ stop-tailscale)
   ;;
 start-with-metrics)
   log_info "Starting HTTP Proxy with monitoring..."
+  record_stack metrics
+  METRICS_ENABLED=true
+  apply_optional_stacks
   ensure_state_dir
   refresh_tailscale_status_if_needed
-  recreate_stack "true"
+  recreate_stack
   echo ""
   log_success "HTTP Proxy + Monitoring running"
   dashboard_port=$(get_service_port traefik 8080)
@@ -1326,6 +1433,8 @@ start-with-metrics)
   configure_system_dns
   ;;
 stop-metrics)
+  clear_stack metrics
+  METRICS_ENABLED=false
   log_info "Stopping monitoring services..."
   dc_cmd stop prometheus grafana
   dc_cmd rm -f prometheus grafana
@@ -1333,7 +1442,7 @@ stop-metrics)
   ;;
 clean)
   log_info "Stopping all services and cleaning volumes..."
-  dc_metrics down -v
+  dc_all down -v
   log_success "All services stopped and volumes removed"
   ;;
 destroy)
@@ -1342,7 +1451,7 @@ destroy)
   echo
   if [[ $REPLY =~ ^[Yy]$ ]]; then
     log_info "Destroying all HTTP proxy resources..."
-    dc_metrics down --volumes --rmi all --remove-orphans
+    dc_all down --volumes --rmi all --remove-orphans
     log_success "All HTTP proxy resources destroyed"
   else
     log_info "Destroy cancelled"
@@ -1372,11 +1481,7 @@ upgrade)
   ensure_state_dir
   ensure_running
   log_info "Upgrading HTTP Proxy images..."
-  if is_running prometheus; then
-    upgrade_stack "true"
-  else
-    upgrade_stack "false"
-  fi
+  upgrade_stack
   echo ""
   log_success "Upgrade complete"
   show_version
