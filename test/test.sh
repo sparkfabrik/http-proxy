@@ -1009,6 +1009,122 @@ test_body_absent() {
     return 1
 }
 
+# The launchd status agent, exercised on any platform: the CLI is sourced with
+# a fake HOME and a stub launchctl, so the assertions are about the code rather
+# than about the host.
+test_status_agent() {
+    local passed=0 total=0
+    local home stub_dir plist
+    home="$(mktemp -d)"
+    local defs="bin/.status-agent-defs"
+    sed '/^case "$1" in/,$d' bin/spark-http-proxy >"${defs}"
+    stub_dir="${home}/stubs"
+    mkdir -p "${stub_dir}" "${home}/Library/LaunchAgents"
+    plist="${home}/Library/LaunchAgents/com.sparkfabrik.http-proxy.tailscale-status.plist"
+
+    # A client the installer can resolve, in a directory the agent PATH names.
+    printf '#!/bin/sh\nexit 0\n' >"${stub_dir}/tailscale"
+    chmod +x "${stub_dir}/tailscale"
+
+    # launchctl that reports success for every verb, and a print that answers
+    # whether the label was recorded as loaded by the stub itself.
+    cat >"${stub_dir}/launchctl" <<'STUB'
+#!/bin/sh
+case "${1}" in
+print) [ -f "${LAUNCHCTL_STUB_LOADED}" ] ;;
+bootstrap) [ "${LAUNCHCTL_STUB_BOOTSTRAP_LOADS}" = "yes" ] && : >"${LAUNCHCTL_STUB_LOADED}"; exit 0 ;;
+bootout) [ "${LAUNCHCTL_STUB_BOOTOUT_UNLOADS:-yes}" = "yes" ] && rm -f "${LAUNCHCTL_STUB_LOADED}"; exit 0 ;;
+*) exit 0 ;;
+esac
+STUB
+    chmod +x "${stub_dir}/launchctl"
+
+    # The second argument is the PATH the installing shell carries, which the
+    # previous code copied into the plist.
+    run_agent_install() {
+        HOME="${home}" \
+            PATH="${2:-${stub_dir}:/usr/bin:/bin}" \
+            HTTP_PROXY_TAILSCALE_AGENT_PATH="${stub_dir}:/usr/bin:/bin" \
+            LAUNCHCTL_STUB_LOADED="${home}/loaded" \
+            LAUNCHCTL_STUB_BOOTSTRAP_LOADS="${1}" \
+            DEFS="${defs}" \
+            bash -c '. "${DEFS}"; install_status_agent' 2>&1
+    }
+
+    # A launchctl that exits 0 without loading anything is the case the previous
+    # code could not detect.
+    total=$((total + 1))
+    if run_agent_install no | grep -q "Could not load"; then
+        success "an install that loads nothing reports failure"
+        passed=$((passed + 1))
+    else
+        error "an install that loaded nothing reported success"
+    fi
+
+    total=$((total + 1))
+    if run_agent_install yes | grep -q "Status refresh installed"; then
+        success "an install that loads the label reports success"
+        passed=$((passed + 1))
+    else
+        error "an install that loaded the label did not report success"
+    fi
+
+    local first second
+    run_agent_install yes "${stub_dir}:/usr/bin:/bin" >/dev/null 2>&1
+    first="$(cat "${plist}")"
+    run_agent_install yes "${stub_dir}:/usr/bin:/bin:/sbin:${home}" >/dev/null 2>&1
+    second="$(cat "${plist}")"
+
+    total=$((total + 1))
+    if [ -n "${first}" ] && [ "${first}" = "${second}" ]; then
+        success "the plist is the same whichever shell installed it"
+        passed=$((passed + 1))
+    else
+        error "the plist changed with the installing shell"
+    fi
+
+    total=$((total + 1))
+    if grep -q "<string>${stub_dir}:/usr/bin:/bin</string>" "${plist}"; then
+        success "the plist carries the agent PATH"
+        passed=$((passed + 1))
+    else
+        error "the plist does not carry the agent PATH"
+    fi
+
+    # Removal reports what it achieved rather than what it attempted.
+    run_removal() {
+        HOME="${home}" \
+            PATH="${stub_dir}:/usr/bin:/bin" \
+            LAUNCHCTL_STUB_LOADED="${1}" \
+            LAUNCHCTL_STUB_BOOTOUT_UNLOADS="${2:-yes}" \
+            DEFS="${defs}" \
+            bash -c '. "${DEFS}"; remove_status_agent' 2>&1
+    }
+
+    run_agent_install yes >/dev/null 2>&1
+    total=$((total + 1))
+    if run_removal "${home}/loaded" | grep -q "Status refresh removed" && [ ! -e "${plist}" ]; then
+        success "removal that unloads the label reports removal"
+        passed=$((passed + 1))
+    else
+        error "removal did not report removal after unloading the label"
+    fi
+
+    # A label still loaded after bootout must not be reported as removed.
+    run_agent_install yes >/dev/null 2>&1
+    total=$((total + 1))
+    if run_removal "${home}/loaded" no | grep -q "still loaded"; then
+        success "removal that leaves the label loaded says so"
+        passed=$((passed + 1))
+    else
+        error "removal reported success with the label still loaded"
+    fi
+
+    rm -rf "${home}" "${defs}"
+    log "Status agent tests: ${passed}/${total} passed"
+    [ "${passed}" -eq "${total}" ]
+}
+
 test_tailscale_peer_routing() {
     local passed=0 total=0
     local traefik_image peer_address
@@ -1463,6 +1579,12 @@ main() {
     local vpath_fallthrough_passed=0
     test_virtual_path_fallthrough && vpath_fallthrough_passed=1
     [ "$vpath_fallthrough_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing the launchd status agent..."
+    total=$((total + 1))
+    local agent_passed=0
+    test_status_agent && agent_passed=1
+    [ "$agent_passed" -eq 1 ] && passed=$((passed + 1))
 
     # Tailnet peer routing: brings up a second proxy of its own, and removes it.
     log "Testing tailnet peer routing..."
