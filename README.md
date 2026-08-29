@@ -947,9 +947,10 @@ expected, not a fault. Add `--json` for the same information machine-readably.
 spark-http-proxy stop-tailscale
 ```
 
-Every forwarded hostname is withdrawn immediately, and the machine keeps serving
-its own containers. Your other machines stop reaching this one's hostnames, and
-this one still reaches theirs only if you start it again.
+That stops **this machine forwarding to others**. Every hostname it was forwarding is withdrawn immediately and the machine keeps serving its own containers.
+
+It does not withdraw this machine from the tailnet. Its proxy still runs, still publishes the declaration that says what it is, and still answers for its own containers, so your other machines keep discovering and reaching it. To stop that, stop the proxy itself or close the ports.
+
 
 ### Enabling it
 

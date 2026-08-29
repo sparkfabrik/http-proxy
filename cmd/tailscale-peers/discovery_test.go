@@ -77,7 +77,29 @@ func (f *fakeProbe) probe(_ context.Context, baseURL string) (traefikapi.Result,
 }
 
 func hostRoute(host string) traefikapi.Route {
-	return traefikapi.Route{Rule: fmt.Sprintf("Host(`%s`)", host), Priority: 49, Hosts: []string{host}}
+	return traefikapi.Route{
+		Rule:     fmt.Sprintf("Host(`%s`)", host),
+		Priority: 49,
+		Hosts:    []traefikapi.Host{{Value: host}},
+	}
+}
+
+// wildcardRoute is a peer route claiming a pattern rather than a name.
+func wildcardRoute(pattern string) traefikapi.Route {
+	return traefikapi.Route{
+		Rule:     fmt.Sprintf("HostRegexp(`%s`)", pattern),
+		Priority: 49,
+		Hosts:    []traefikapi.Host{{Value: pattern, IsRegexp: true}},
+	}
+}
+
+// servedLocally builds the local side of the ownership check from plain names.
+func servedLocally(hosts ...string) *localRoutes {
+	local := &localRoutes{literals: map[string]struct{}{}, patternText: map[string]struct{}{}}
+	for _, host := range hosts {
+		local.literals[host] = struct{}{}
+	}
+	return local
 }
 
 func testDiscovery(t *testing.T, cfg *config.TailscaleConfig, source tailscale.Source, probe *fakeProbe) *discovery {
@@ -224,13 +246,13 @@ func TestResolveOwnership(t *testing.T) {
 	pathRoute := traefikapi.Route{
 		Rule:     "Host(`app.loc`) && (PathPrefix(`/api/`) || Path(`/api`))",
 		Priority: 10004,
-		Hosts:    []string{"app.loc"},
+		Hosts:    []traefikapi.Host{{Value: "app.loc"}},
 	}
 
 	tests := []struct {
 		name       string
 		results    []probeResult
-		localHosts map[string]struct{}
+		local      *localRoutes
 		wantRoutes map[string]int
 		wantOwner  map[string]string
 	}{
@@ -239,7 +261,7 @@ func TestResolveOwnership(t *testing.T) {
 			results: []probeResult{
 				{candidate: candidate{id: "nodekey:01", name: "machine-b", address: "100.64.0.2"}, status: statusOK, routes: []traefikapi.Route{shared}},
 			},
-			localHosts: map[string]struct{}{"app.loc": {}},
+			local:      servedLocally("app.loc"),
 			wantRoutes: map[string]int{"machine-b": 0},
 			wantOwner:  map[string]string{"app.loc": localOwner},
 		},
@@ -249,7 +271,7 @@ func TestResolveOwnership(t *testing.T) {
 				{candidate: candidate{id: "nodekey:01", name: "machine-b", address: "100.64.0.2"}, status: statusOK, routes: []traefikapi.Route{shared}},
 				{candidate: candidate{id: "nodekey:02", name: "machine-c", address: "100.64.0.3"}, status: statusOK, routes: []traefikapi.Route{shared}},
 			},
-			localHosts: map[string]struct{}{},
+			local:      servedLocally(),
 			wantRoutes: map[string]int{"machine-b": 1, "machine-c": 0},
 			wantOwner:  map[string]string{"app.loc": "machine-b"},
 		},
@@ -258,14 +280,14 @@ func TestResolveOwnership(t *testing.T) {
 			results: []probeResult{
 				{candidate: candidate{id: "nodekey:01", name: "machine-b", address: "100.64.0.2"}, status: statusOK, routes: []traefikapi.Route{shared, pathRoute}},
 			},
-			localHosts: map[string]struct{}{},
+			local:      servedLocally(),
 			wantRoutes: map[string]int{"machine-b": 2},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			owned, collisions := resolveOwnership(tt.results, tt.localHosts)
+			owned, collisions := resolveOwnership(tt.results, tt.local)
 
 			for _, machine := range owned {
 				if want, checked := tt.wantRoutes[machine.name]; checked && len(machine.routes) != want {
@@ -293,8 +315,8 @@ func TestOwnershipDoesNotDependOnProbeOrder(t *testing.T) {
 	first := probeResult{candidate: candidate{id: "nodekey:01", name: "machine-b", address: "100.64.0.2"}, status: statusOK, routes: []traefikapi.Route{hostRoute("app.loc")}}
 	second := probeResult{candidate: candidate{id: "nodekey:02", name: "machine-c", address: "100.64.0.3"}, status: statusOK, routes: []traefikapi.Route{hostRoute("app.loc")}}
 
-	forward, _ := resolveOwnership(sortResults([]probeResult{first, second}), nil)
-	reverse, _ := resolveOwnership(sortResults([]probeResult{second, first}), nil)
+	forward, _ := resolveOwnership(sortResults([]probeResult{first, second}), servedLocally())
+	reverse, _ := resolveOwnership(sortResults([]probeResult{second, first}), servedLocally())
 
 	if !reflect.DeepEqual(forward, reverse) {
 		t.Fatalf("ownership differs with probe order: %+v vs %+v", forward, reverse)
@@ -322,7 +344,7 @@ func sortResults(results []probeResult) []probeResult {
 func TestPeerTraefikConfig(t *testing.T) {
 	routes := []traefikapi.Route{
 		hostRoute("app.loc"),
-		{Rule: "Host(`app.loc`) && (PathPrefix(`/api/`) || Path(`/api`))", Priority: 10004, Hosts: []string{"app.loc"}},
+		{Rule: "Host(`app.loc`) && (PathPrefix(`/api/`) || Path(`/api`))", Priority: 10004, Hosts: []traefikapi.Host{{Value: "app.loc"}}},
 	}
 
 	cfg := peerTraefikConfig("machine-b", "100.64.0.2", routes)
@@ -751,5 +773,82 @@ func TestSlugsStayUniqueWhenTheDisambiguationCollides(t *testing.T) {
 	again := map[string]string{}
 	if uniqueSlug(again, "id-1", "machine-b", "100.64.0.10") != first {
 		t.Error("the first machine's slug is not stable")
+	}
+}
+
+// A peer wildcard that covers a hostname this machine serves would shadow it,
+// and comparing pattern text alone never notices, because a pattern is never
+// equal to a name. Local precedence has to test the pattern against what is
+// served here.
+func TestAPeerWildcardCoveringALocalHostnameLosesToIt(t *testing.T) {
+	local := servedLocally("app.loc", "api.loc")
+	results := []probeResult{{
+		candidate: candidate{id: "nodekey:01", name: "machine-b", address: "100.64.0.2"},
+		status:    statusOK,
+		routes:    []traefikapi.Route{wildcardRoute(`^.*\.loc$`)},
+	}}
+
+	owned, collisions := resolveOwnership(results, local)
+
+	for _, machine := range owned {
+		if len(machine.routes) != 0 {
+			t.Errorf("%s kept %d routes, want its wildcard suppressed", machine.name, len(machine.routes))
+		}
+	}
+	if len(collisions) != 1 || collisions[0].ServedBy != localOwner {
+		t.Fatalf("collisions = %+v, want the wildcard reported as served locally", collisions)
+	}
+}
+
+// A peer wildcard covering nothing served here is a legitimate route and is
+// kept: refusing every pattern would throw the feature away to close the hole.
+func TestAPeerWildcardCoveringNothingLocalIsKept(t *testing.T) {
+	local := servedLocally("app.other", "api.other")
+	results := []probeResult{{
+		candidate: candidate{id: "nodekey:01", name: "machine-b", address: "100.64.0.2"},
+		status:    statusOK,
+		routes:    []traefikapi.Route{wildcardRoute(`^.*\.loc$`)},
+	}}
+
+	owned, collisions := resolveOwnership(results, local)
+
+	if len(owned) != 1 || len(owned[0].routes) != 1 {
+		t.Fatalf("owned = %+v, want the wildcard kept", owned)
+	}
+	if len(collisions) != 0 {
+		t.Errorf("collisions = %+v, want none", collisions)
+	}
+}
+
+// The same in the other direction: a local wildcard covers a peer's plain name.
+func TestALocalWildcardSuppressesAPeerHostname(t *testing.T) {
+	local := &localRoutes{literals: map[string]struct{}{}, patternText: map[string]struct{}{}}
+	pattern, err := compileHostPattern(`^.*\.loc$`)
+	if err != nil {
+		t.Fatalf("compileHostPattern() error = %v", err)
+	}
+	local.patterns = append(local.patterns, pattern)
+	local.patternText[`^.*\.loc$`] = struct{}{}
+
+	results := []probeResult{{
+		candidate: candidate{id: "nodekey:01", name: "machine-b", address: "100.64.0.2"},
+		status:    statusOK,
+		routes:    []traefikapi.Route{hostRoute("app.loc")},
+	}}
+
+	_, collisions := resolveOwnership(results, local)
+
+	if len(collisions) != 1 || collisions[0].Host != "app.loc" {
+		t.Fatalf("collisions = %+v, want app.loc reported as served locally", collisions)
+	}
+}
+
+// A peer-supplied pattern is bounded before it is compiled.
+func TestAnAbsurdHostPatternIsRefused(t *testing.T) {
+	if _, err := compileHostPattern(strings.Repeat("a", traefikapi.MaxHostPatternLength+1)); err == nil {
+		t.Fatal("compileHostPattern() error = nil, want an over-long pattern refused")
+	}
+	if _, err := compileHostPattern(`^.*\.loc$`); err != nil {
+		t.Errorf("compileHostPattern() error = %v, want an ordinary pattern compiled", err)
 	}
 }

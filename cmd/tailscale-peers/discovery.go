@@ -191,7 +191,7 @@ func (d *discovery) runCycle(ctx context.Context) *Report {
 	// A cycle that cannot tell what the local containers serve would forward a
 	// hostname this machine answers itself, so it writes nothing and leaves the
 	// previous cycle's files in place until the local proxy answers again.
-	localHosts, err := d.localHosts(ctx)
+	local, err := d.localHosts(ctx)
 	if err != nil {
 		report.LocalError = err.Error()
 		d.logger.Error("Failed to read the local routing table, keeping the previous peer routes",
@@ -201,7 +201,7 @@ func (d *discovery) runCycle(ctx context.Context) *Report {
 	}
 
 	probed := d.probeCandidates(ctx, candidates)
-	owned, collisions := resolveOwnership(probed, localHosts)
+	owned, collisions := resolveOwnership(probed, local)
 
 	keep := make(map[string]struct{}, len(owned))
 	for _, result := range owned {
@@ -400,7 +400,7 @@ type owner struct {
 // reports every drop. A hostname served locally wins over every machine; among
 // machines, the first in name order wins, so every machine on the tailnet
 // reaches the same conclusion.
-func resolveOwnership(results []probeResult, localHosts map[string]struct{}) ([]ownedRoutes, []Collision) {
+func resolveOwnership(results []probeResult, local *localRoutes) ([]ownedRoutes, []Collision) {
 	owners := make(map[string]owner)
 	slugs := make(map[string]string)
 	owned := make([]ownedRoutes, 0, len(results))
@@ -419,14 +419,14 @@ func resolveOwnership(results []probeResult, localHosts map[string]struct{}) ([]
 		}
 
 		for _, route := range result.routes {
-			if host, holder, taken := claimedElsewhere(route.Hosts, localHosts, owners, result.id); taken {
+			if host, holder, taken := claimedElsewhere(route.Hosts, local, owners, result.id); taken {
 				collisions = append(collisions, Collision{Host: host, ServedBy: holder, AlsoOn: result.name})
 				continue
 			}
 			for _, host := range route.Hosts {
-				if _, claimed := owners[host]; !claimed {
-					owners[host] = owner{id: result.id, name: result.name}
-					machine.hosts = append(machine.hosts, host)
+				if _, claimed := owners[host.Value]; !claimed {
+					owners[host.Value] = owner{id: result.id, name: result.name}
+					machine.hosts = append(machine.hosts, host.Value)
 				}
 			}
 			machine.routes = append(machine.routes, route)
@@ -442,35 +442,104 @@ func resolveOwnership(results []probeResult, localHosts map[string]struct{}) ([]
 // already serves, and which machine that is. A machine's own second claim of a
 // hostname is not a collision: a container mounted under a path of a hostname
 // produces one route for the path and one for the host it sits on.
-func claimedElsewhere(hosts []string, localHosts map[string]struct{}, owners map[string]owner, machineID string) (string, string, bool) {
+func claimedElsewhere(hosts []traefikapi.Host, local *localRoutes, owners map[string]owner, machineID string) (string, string, bool) {
 	for _, host := range hosts {
-		if _, local := localHosts[host]; local {
-			return host, localOwner, true
+		if local != nil && local.serves(host) {
+			return host.Value, localOwner, true
 		}
-		if holder, claimed := owners[host]; claimed && holder.id != machineID {
-			return host, holder.name, true
+		if holder, claimed := owners[host.Value]; claimed && holder.id != machineID {
+			return host.Value, holder.name, true
 		}
 	}
 	return "", "", false
 }
 
-// localHosts returns the hostnames the local containers serve, read from the
-// local proxy's own API. Routes forwarded to a machine are excluded by the same
+// localRoutes is what this machine serves itself: the literal hostnames, and
+// the wildcards, compiled so a peer's hostname can be tested against them.
+type localRoutes struct {
+	literals map[string]struct{}
+	patterns []*regexp.Regexp
+	// patternText keeps the wildcards as written, so a peer offering the same
+	// wildcard collides with the local one rather than being tested against it.
+	patternText map[string]struct{}
+}
+
+// serves reports whether this machine already answers for a hostname a peer
+// claims, and covers the four combinations of literal and wildcard on each side.
+func (l *localRoutes) serves(host traefikapi.Host) bool {
+	if host.IsRegexp {
+		if _, taken := l.patternText[host.Value]; taken {
+			return true
+		}
+		// A peer wildcard that matches something served here would shadow it,
+		// and comparing pattern text alone would never notice: a pattern is
+		// never equal to a hostname.
+		pattern, err := compileHostPattern(host.Value)
+		if err != nil {
+			return false
+		}
+		for literal := range l.literals {
+			if pattern.MatchString(literal) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if _, taken := l.literals[host.Value]; taken {
+		return true
+	}
+	for _, pattern := range l.patterns {
+		if pattern.MatchString(host.Value) {
+			return true
+		}
+	}
+	return false
+}
+
+// compileHostPattern compiles a hostname pattern, refusing an absurd one. Go's
+// regexp is RE2, so a pattern cannot backtrack catastrophically, but a peer
+// supplies this text and a bound costs nothing.
+func compileHostPattern(pattern string) (*regexp.Regexp, error) {
+	if len(pattern) > traefikapi.MaxHostPatternLength {
+		return nil, fmt.Errorf("host pattern is longer than %d characters", traefikapi.MaxHostPatternLength)
+	}
+	return regexp.Compile(pattern)
+}
+
+// localHosts returns what the local containers serve, read from the local
+// proxy's own API. Routes forwarded to a machine are excluded by the same
 // filter that keeps a machine from offering what it does not serve itself, so
 // the routes written by the previous cycle do not read as locally served.
-func (d *discovery) localHosts(ctx context.Context) (map[string]struct{}, error) {
+func (d *discovery) localHosts(ctx context.Context) (*localRoutes, error) {
 	result, err := d.probe(ctx, d.config.LocalAPIURL)
 	if err != nil {
 		return nil, err
 	}
 
-	hosts := make(map[string]struct{})
+	local := &localRoutes{
+		literals:    make(map[string]struct{}),
+		patternText: make(map[string]struct{}),
+	}
+
 	for _, route := range result.Routes {
 		for _, host := range route.Hosts {
-			hosts[host] = struct{}{}
+			if !host.IsRegexp {
+				local.literals[host.Value] = struct{}{}
+				continue
+			}
+			local.patternText[host.Value] = struct{}{}
+			pattern, err := compileHostPattern(host.Value)
+			if err != nil {
+				d.logger.Warn("Ignoring a local wildcard hostname that will not compile",
+					"pattern", host.Value, "error", err)
+				continue
+			}
+			local.patterns = append(local.patterns, pattern)
 		}
 	}
-	return hosts, nil
+
+	return local, nil
 }
 
 // peerTraefikConfig builds the forwarding configuration for one machine: one

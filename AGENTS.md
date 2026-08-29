@@ -79,39 +79,10 @@ directly by Traefik's Docker provider) and `VIRTUAL_HOST` env vars (translated
 by `dinghy_layer` into files). Both require `join_networks` to have bridged the
 network first.
 
-### Shared Go packages (`pkg/`)
-
-- **`pkg/config`** — env-var loading (`config.go`, all `HTTP_PROXY_DNS_*` vars
-  with defaults) **and** the Traefik dynamic-config YAML structs (`traefik.go`:
-  `TraefikConfig`/`Router`/`Service`/`TLSConfig`). `dinghy_layer` marshals these
-  structs to produce the files Traefik watches.
-- **`pkg/service`** — `docker_event_service.go`: the shared Docker-event-watching
-  loop (`EventHandler` interface, `RunWithSignalHandling`). Both `dinghy_layer`
-  and `join_networks` are `EventHandler` implementations on top of this. Performs
-  an initial full scan, then streams events with signal-based graceful shutdown.
-- **`pkg/logger`**, **`pkg/utils`** — leveled logging (`LOG_LEVEL`) and helpers.
-
-All four binaries build from the **same `build/Dockerfile`** (multi-stage) and
-are selected at runtime by their `command:` in compose.
-
-### Configuration surface
-
-Runtime behaviour is driven by env vars (mostly `HTTP_PROXY_DNS_*` and
-`LOG_LEVEL`), defaulted in `pkg/config/config.go` and wired through
-`compose.yml`. Per-container routing is driven by
-`VIRTUAL_HOST`/`VIRTUAL_PORT`/`VIRTUAL_PATH` or `traefik.*` labels. When adding
-an env var, update `pkg/config/config.go`, `compose.yml`, `README.md`, and
-`examples/applications.yml` together.
-
-Note that **any** `traefik.` label on a container makes `dinghy_layer` skip it
-entirely, `VIRTUAL_HOST` included. That is intentional (native labels win) but
-easy to trip over by adding a middleware label alone, so the layer now warns
-when it happens.
-
-## Tailnet peer routing
-
-Off by default, and the pieces are spread across the tree, so the constraints are
-worth knowing before touching any of them.
+The diagram above is the local mechanism: containers on this machine. The one
+below is the cross-machine mechanism, `tailscale_peers`, which ends in the same
+volume and the same file provider. Together they are every way a route reaches
+Traefik.
 
 ```mermaid
 graph TB
@@ -156,8 +127,42 @@ transport feeds the same filter: the platform decides how the document arrives,
 never what it is checked against. Diamonds are decisions, the three red terminals
 are the three statuses `tailscale-peers` reports, and green is what gets written.
 The dotted edge is where this service stops and Traefik takes over, watching the
-directory with no restart. The request path that reads what this writes is in the
-README.
+directory with no restart. The request path that reads what both of them write is
+in the README.
+
+### Shared Go packages (`pkg/`)
+
+- **`pkg/config`** — env-var loading (`config.go`, all `HTTP_PROXY_DNS_*` vars
+  with defaults) **and** the Traefik dynamic-config YAML structs (`traefik.go`:
+  `TraefikConfig`/`Router`/`Service`/`TLSConfig`). `dinghy_layer` marshals these
+  structs to produce the files Traefik watches.
+- **`pkg/service`** — `docker_event_service.go`: the shared Docker-event-watching
+  loop (`EventHandler` interface, `RunWithSignalHandling`). Both `dinghy_layer`
+  and `join_networks` are `EventHandler` implementations on top of this. Performs
+  an initial full scan, then streams events with signal-based graceful shutdown.
+- **`pkg/logger`**, **`pkg/utils`** — leveled logging (`LOG_LEVEL`) and helpers.
+
+All four binaries build from the **same `build/Dockerfile`** (multi-stage) and
+are selected at runtime by their `command:` in compose.
+
+### Configuration surface
+
+Runtime behaviour is driven by env vars (mostly `HTTP_PROXY_DNS_*` and
+`LOG_LEVEL`), defaulted in `pkg/config/config.go` and wired through
+`compose.yml`. Per-container routing is driven by
+`VIRTUAL_HOST`/`VIRTUAL_PORT`/`VIRTUAL_PATH` or `traefik.*` labels. When adding
+an env var, update `pkg/config/config.go`, `compose.yml`, `README.md`, and
+`examples/applications.yml` together.
+
+Note that **any** `traefik.` label on a container makes `dinghy_layer` skip it
+entirely, `VIRTUAL_HOST` included. That is intentional (native labels win) but
+easy to trip over by adding a middleware label alone, so the layer now warns
+when it happens.
+
+## Tailnet peer routing
+
+Off by default. The narrative is in the README; these are the constraints that
+are easy to break, and the diagram is in the architecture section above.
 
 **The ownership filter is the trust boundary.** `Status.Peers` in
 `pkg/tailscale/status.go` accepts a machine only when its `UserID` matches

@@ -66,8 +66,8 @@ func TestRoutes(t *testing.T) {
 	}
 
 	want := []Route{
-		{Rule: "Host(`app.loc`)", Priority: 49, Hosts: []string{"app.loc"}},
-		{Rule: "Host(`app.loc`) && (PathPrefix(`/api/`) || Path(`/api`))", Priority: 10004, Hosts: []string{"app.loc"}},
+		{Rule: "Host(`app.loc`)", Priority: 49, Hosts: []Host{{Value: "app.loc"}}},
+		{Rule: "Host(`app.loc`) && (PathPrefix(`/api/`) || Path(`/api`))", Priority: 10004, Hosts: []Host{{Value: "app.loc"}}},
 	}
 
 	got := Routes(routers)
@@ -83,14 +83,14 @@ func TestExtractHosts(t *testing.T) {
 	tests := []struct {
 		name string
 		rule string
-		want []string
+		want []Host
 	}{
-		{"single host", "Host(`app.loc`)", []string{"app.loc"}},
-		{"several arguments", "Host(`a.loc`, `b.loc`)", []string{"a.loc", "b.loc"}},
-		{"alternation", "Host(`a.loc`) || Host(`b.loc`)", []string{"a.loc", "b.loc"}},
-		{"with a path", "Host(`app.loc`) && (PathPrefix(`/api/`) || Path(`/api`))", []string{"app.loc"}},
-		{"regexp host", "HostRegexp(`^.*\\.loc$`)", []string{"^.*\\.loc$"}},
-		{"regexp and host", "HostRegexp(`^.*\\.loc$`) || Host(`app.loc`)", []string{"^.*\\.loc$", "app.loc"}},
+		{"single host", "Host(`app.loc`)", []Host{{Value: "app.loc"}}},
+		{"several arguments", "Host(`a.loc`, `b.loc`)", []Host{{Value: "a.loc"}, {Value: "b.loc"}}},
+		{"alternation", "Host(`a.loc`) || Host(`b.loc`)", []Host{{Value: "a.loc"}, {Value: "b.loc"}}},
+		{"with a path", "Host(`app.loc`) && (PathPrefix(`/api/`) || Path(`/api`))", []Host{{Value: "app.loc"}}},
+		{"regexp host", "HostRegexp(`^.*\\.loc$`)", []Host{{Value: "^.*\\.loc$", IsRegexp: true}}},
+		{"regexp and host", "HostRegexp(`^.*\\.loc$`) || Host(`app.loc`)", []Host{{Value: "^.*\\.loc$", IsRegexp: true}, {Value: "app.loc"}}},
 		{"no host matcher", "PathPrefix(`/api`)", nil},
 		{"header matcher is not a host", "HeaderRegexp(`X-Host`, `.*`)", nil},
 		{"empty rule", "", nil},
@@ -99,7 +99,7 @@ func TestExtractHosts(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := ExtractHosts(tt.rule); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("ExtractHosts(%q) = %q, want %q", tt.rule, got, tt.want)
+				t.Errorf("ExtractHosts(%q) = %+v, want %+v", tt.rule, got, tt.want)
 			}
 		})
 	}
@@ -137,11 +137,11 @@ func TestExtractHostsKeepsAParenthesisedRegexp(t *testing.T) {
 	tests := []struct {
 		name string
 		rule string
-		want []string
+		want []Host
 	}{
-		{"grouped alternation", "HostRegexp(`^(a|b)\\.loc$`)", []string{"^(a|b)\\.loc$"}},
-		{"grouped with a path", "HostRegexp(`^(a|b)\\.loc$`) && (PathPrefix(`/api/`) || Path(`/api`))", []string{"^(a|b)\\.loc$"}},
-		{"grouped then plain", "HostRegexp(`^(a|b)\\.loc$`) || Host(`app.loc`)", []string{"^(a|b)\\.loc$", "app.loc"}},
+		{"grouped alternation", "HostRegexp(`^(a|b)\\.loc$`)", []Host{{Value: "^(a|b)\\.loc$", IsRegexp: true}}},
+		{"grouped with a path", "HostRegexp(`^(a|b)\\.loc$`) && (PathPrefix(`/api/`) || Path(`/api`))", []Host{{Value: "^(a|b)\\.loc$", IsRegexp: true}}},
+		{"grouped then plain", "HostRegexp(`^(a|b)\\.loc$`) || Host(`app.loc`)", []Host{{Value: "^(a|b)\\.loc$", IsRegexp: true}, {Value: "app.loc"}}},
 		{"a matcher ending in host is not one", "XHost(`nope.loc`)", nil},
 		{"a host inside another matcher's argument", "HeaderRegexp(`X-Host`, `.*`)", nil},
 	}
@@ -149,7 +149,7 @@ func TestExtractHostsKeepsAParenthesisedRegexp(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := ExtractHosts(tt.rule); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("ExtractHosts(%q) = %q, want %q", tt.rule, got, tt.want)
+				t.Errorf("ExtractHosts(%q) = %+v, want %+v", tt.rule, got, tt.want)
 			}
 		})
 	}
@@ -162,19 +162,19 @@ func TestExtractHostsIgnoresANegatedMatcher(t *testing.T) {
 	tests := []struct {
 		name string
 		rule string
-		want []string
+		want []Host
 	}{
 		{"negated alone", "!Host(`a.loc`)", nil},
 		{"negated with a space", "! Host(`a.loc`)", nil},
 		{"negated regexp", "!HostRegexp(`^a\\.loc$`)", nil},
-		{"a claim and a negation", "Host(`a.loc`) && !Host(`b.loc`)", []string{"a.loc"}},
-		{"a negation and a claim", "!Host(`b.loc`) && Host(`a.loc`)", []string{"a.loc"}},
+		{"a claim and a negation", "Host(`a.loc`) && !Host(`b.loc`)", []Host{{Value: "a.loc"}}},
+		{"a negation and a claim", "!Host(`b.loc`) && Host(`a.loc`)", []Host{{Value: "a.loc"}}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := ExtractHosts(tt.rule); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("ExtractHosts(%q) = %q, want %q", tt.rule, got, tt.want)
+				t.Errorf("ExtractHosts(%q) = %+v, want %+v", tt.rule, got, tt.want)
 			}
 		})
 	}
@@ -300,28 +300,29 @@ func TestRoutesRefusesAnUnconstrainedAlternative(t *testing.T) {
 	}
 }
 
-func TestTopLevelAlternatives(t *testing.T) {
+func TestHostConstrained(t *testing.T) {
 	tests := []struct {
-		name  string
-		rule  string
-		want  []string
-		valid bool
+		name string
+		rule string
+		want bool
 	}{
-		{"no alternation", "Host(`a.loc`)", []string{"Host(`a.loc`)"}, true},
-		{"top level", "Host(`a.loc`) || Host(`b.loc`)", []string{"Host(`a.loc`) ", " Host(`b.loc`)"}, true},
-		{"nested is not top level", "Host(`a.loc`) && (Path(`/x`) || Path(`/y`))", []string{"Host(`a.loc`) && (Path(`/x`) || Path(`/y`))"}, true},
-		{"inside backticks is not an operator", "HostRegexp(`^(a||b)\\.loc$`)", []string{"HostRegexp(`^(a||b)\\.loc$`)"}, true},
-		{"unbalanced", "Host(`a.loc`))", nil, false},
+		{"a plain host", "Host(`a.loc`)", true},
+		{"parenthesised hijack", "(Host(`a.loc`) || PathPrefix(`/`))", false},
+		{"doubly parenthesised hijack", "((Host(`a.loc`) || PathPrefix(`/`)))", false},
+		{"a conjunction bounds the alternation it contains", "Host(`a.loc`) && (Host(`b.loc`) || PathPrefix(`/`))", true},
+		{"every branch bounded", "Host(`a.loc`) || (Host(`b.loc`) && PathPrefix(`/x`))", true},
+		{"a negated group bounds nothing", "!(Host(`a.loc`))", false},
+		{"a negated host with a conjunction", "!Host(`a.loc`) && PathPrefix(`/x`)", false},
+		{"a host anded onto a negation", "!Host(`a.loc`) && Host(`b.loc`)", true},
+		{"a matcher that is not a host", "PathPrefix(`/`)", false},
+		{"unbalanced parentheses", "(Host(`a.loc`)", false},
+		{"trailing rubbish", "Host(`a.loc`) nonsense", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := topLevelAlternatives(tt.rule)
-			if ok != tt.valid {
-				t.Fatalf("topLevelAlternatives() ok = %v, want %v", ok, tt.valid)
-			}
-			if tt.valid && !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("topLevelAlternatives() = %q, want %q", got, tt.want)
+			if got := hostConstrained(tt.rule); got != tt.want {
+				t.Errorf("hostConstrained(%q) = %v, want %v", tt.rule, got, tt.want)
 			}
 		})
 	}
