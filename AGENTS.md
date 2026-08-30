@@ -254,7 +254,8 @@ ready while any of them is red.
   three locally before pushing; they are the cheapest gate and catch the most.
 - **`test`** — builds the service and Traefik images and runs `test/test.sh`
   against a real stack. This is the only end-to-end coverage the CLI has.
-- **`security-scan`** and **Trivy** — dependency and image scanning.
+- **`security-scan`** — dependency and image scanning. Its Trivy step uploads
+  SARIF, so Trivy reports as a separate check without being a separate job.
 - **`dev-deploy`** and **`deploy`** — build and publish the images.
 
 There is no staging environment: merging to `main` publishes images that every
