@@ -1226,6 +1226,22 @@ show_tailscale_summary() {
     return 0
   fi
 
+  # The rows are the same facts as the counts, so a record where they disagree
+  # is describing two different cycles whichever half is right.
+  local rows=0 listed=0 line name hosts
+  while IFS=$'\t' read -r name hosts; do
+    [[ -z "${name}" ]] && continue
+    rows=$((rows + 1))
+    line="${hosts//[^,]/}"
+    listed=$((listed + ${#line} + 1))
+  done < <(tail -n +3 <<<"${summary}")
+
+  if [[ "${rows}" != "${forwarding}" || "${listed}" != "${hostnames}" ]]; then
+    echo "⚠️  Tailnet peer routing is enabled, but there is no usable discovery record"
+    echo "   💡 Detail: ${0} tailscale-peers"
+    return 0
+  fi
+
   if [[ "${forwarding}" == "0" ]]; then
     # Says nothing about the machines that were never contacted.
     log_success "Tailnet peer routing: nothing forwarded, $(count_noun "${seen:-0}" machine) seen and ${probed:-0} probed, none of which runs this proxy"

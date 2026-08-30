@@ -1326,6 +1326,26 @@ test_status_summary() {
         error "a leading-zero count was rendered: $(run_status 2>&1 | tr '\n' ' ')"
     fi
 
+    # A record whose counts and rows disagree is describing two different
+    # cycles, whichever one is right.
+    printf 'ok\n9 4 1 2\n' >"${state}/tailscale-peers-summary"
+    total=$((total + 1))
+    if run_status | grep -q "no usable discovery record"; then
+        success "counts without the machines they claim are an unrecognised record"
+        passed=$((passed + 1))
+    else
+        error "a truncated record was rendered as forwarding: $(run_status | tr '\n' ' ')"
+    fi
+
+    printf 'ok\n9 4 2 3\nonly-one\tapp.loc\n' >"${state}/tailscale-peers-summary"
+    total=$((total + 1))
+    if run_status | grep -q "no usable discovery record"; then
+        success "counts that disagree with the machines listed are an unrecognised record"
+        passed=$((passed + 1))
+    else
+        error "a contradictory record was rendered: $(run_status | tr '\n' ' ')"
+    fi
+
     rm -rf "${home}" "${defs}"
     log "Status summary tests: ${passed}/${total} passed"
     [ "${passed}" -eq "${total}" ]
