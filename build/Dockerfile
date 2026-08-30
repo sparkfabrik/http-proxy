@@ -12,7 +12,7 @@ RUN GOOS=linux GOARCH=$TARGETARCH CGO_ENABLED=0 go build -v -o dns-server ./cmd/
 RUN GOOS=linux GOARCH=$TARGETARCH CGO_ENABLED=0 go build -v -o dinghy-layer ./cmd/dinghy-layer
 RUN GOOS=linux GOARCH=$TARGETARCH CGO_ENABLED=0 go build -v -o tailscale-peers ./cmd/tailscale-peers
 
-FROM alpine:latest
+FROM alpine:3.24
 RUN apk add --no-cache ca-certificates
 
 # Accept git version as build argument in final stage
