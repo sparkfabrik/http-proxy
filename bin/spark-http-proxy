@@ -1196,10 +1196,13 @@ show_tailscale_summary() {
     return 0
   fi
 
-  local state counts seen probed forwarding hostnames extra
-  # read returns non-zero at end of file, and this script runs under errexit,
-  # so an empty or truncated record would otherwise end the whole command.
-  if ! { read -r state && read -r counts; } <"${TAILSCALE_SUMMARY_FILE}"; then
+  local summary state counts seen probed forwarding hostnames extra
+  # One snapshot: the writer replaces this file by rename, so reading it more
+  # than once can pair one cycle's counts with another cycle's machines. And
+  # read returns non-zero at end of file, which under errexit would otherwise
+  # end the whole command on an empty or truncated record.
+  if ! summary="$(cat -- "${TAILSCALE_SUMMARY_FILE}")" ||
+    ! { read -r state && read -r counts; } <<<"${summary}"; then
     echo "⚠️  Tailnet peer routing is enabled, but there is no usable discovery record"
     echo "   💡 Detail: ${0} tailscale-peers"
     return 0
@@ -1236,11 +1239,11 @@ show_tailscale_summary() {
   local name hosts width=0
   while IFS=$'\t' read -r name _; do
     [[ "${#name}" -gt "${width}" ]] && width="${#name}"
-  done < <(tail -n +3 "${TAILSCALE_SUMMARY_FILE}")
+  done < <(tail -n +3 <<<"${summary}")
 
   while IFS=$'\t' read -r name hosts; do
     [[ -n "${name}" ]] && printf "     %-${width}s  %s\n" "${name}" "${hosts//,/, }"
-  done < <(tail -n +3 "${TAILSCALE_SUMMARY_FILE}")
+  done < <(tail -n +3 <<<"${summary}")
   echo "   💡 Detail: ${0} tailscale-peers"
 }
 
