@@ -1042,6 +1042,8 @@ tailscale_refresh_peers() {
     # The service writes this file last, so the report beside it is already the new one.
     current="$(cat "${TAILSCALE_COMPLETED_FILE}" 2>/dev/null)"
     if [[ -n "${current}" && "${current}" != "${before}" ]]; then
+      # A cycle finishing between these two reads can only substitute a newer
+      # complete report, since its own barrier is written after it.
       cat "${TAILSCALE_RENDERED_FILE}"
       return 0
     fi
