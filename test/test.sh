@@ -1191,7 +1191,15 @@ STUB
     printf '#!/bin/sh\nexit 1\n' >"${stub_dir}/tailscale"
     chmod +x "${stub_dir}/tailscale"
 
-    printf '{"updatedAt":"2026-01-01T00:00:00Z","peers":[]}\n' >"${state}/tailscale-peers.json"
+    # Written the way the service writes it, indented, so the assertions are
+    # about the format it actually produces.
+    cat >"${state}/tailscale-peers.json" <<'STATE'
+{
+  "updatedAt": "2026-01-01T00:00:00Z",
+  "source": "socket",
+  "peers": []
+}
+STATE
     printf 'Tailnet peers, from the cycle at 2026-01-01T00:00:00Z\nSTALE-REPORT-MARKER\n' >"${state}/tailscale-peers.txt"
 
     # The source is forced so the document path is exercised deliberately
@@ -1240,11 +1248,50 @@ STUB
     # Peer routing switched off is a choice, not a failure.
     out="$(run_refresh 3 false)"
     total=$((total + 1))
-    if echo "${out}" | grep -qi "disabled" && echo "${out}" | grep -q "start-with-tailscale"; then
-        success "peer routing disabled is reported with how to enable it"
+    if echo "${out}" | grep -qi "disabled" && echo "${out}" | grep -q "start-with-tailscale" &&
+        ! echo "${out}" | grep -q "exit=0"; then
+        success "peer routing disabled is reported, with how to enable it, and does not claim success"
         passed=$((passed + 1))
     else
-        error "peer routing disabled was not reported with how to enable it"
+        error "peer routing disabled was not reported as a failure with how to enable it"
+    fi
+
+    # A service that is not running is a fault: the cycle the user asked for
+    # did not happen.
+    cat >"${stub_dir}/docker" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = "ps" ]; then echo "http-proxy"; exit 0; fi
+done
+exit 0
+STUB
+    chmod +x "${stub_dir}/docker"
+
+    out="$(run_refresh 3 true)"
+    total=$((total + 1))
+    if echo "${out}" | grep -q "not running" && ! echo "${out}" | grep -q "exit=0"; then
+        success "a service that is not running is reported as a failure"
+        passed=$((passed + 1))
+    else
+        error "a service that is not running claimed success"
+    fi
+
+    # Back to a running service for the cases below.
+    cat >"${stub_dir}/docker" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = "ps" ]; then echo "http-proxy"; echo "tailscale_peers"; exit 0; fi
+done
+exit 0
+STUB
+    chmod +x "${stub_dir}/docker"
+
+    total=$((total + 1))
+    if [ "$(HOME="${home}" DEFS="${defs}" bash -c '. "${DEFS}"; cycle_stamp')" = "2026-01-01T00:00:00Z" ]; then
+        success "the cycle timestamp is read from a state file in the service's format"
+        passed=$((passed + 1))
+    else
+        error "the cycle timestamp could not be read from the service's own format"
     fi
 
     # With no Tailscale client the document cannot be written, and a cycle run

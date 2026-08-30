@@ -1005,24 +1005,22 @@ remove_status_agent() {
 
 # The timestamp of the last completed cycle, read from the state file.
 cycle_stamp() {
-  sed -n 's/.*"updatedAt":"\([^"]*\)".*/\1/p' "${TAILSCALE_STATE_FILE}" 2>/dev/null | head -1
+  sed -n 's/.*"updatedAt"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${TAILSCALE_STATE_FILE}" 2>/dev/null | head -1
 }
 
 # Runs a discovery cycle now instead of waiting for the next one.
 tailscale_refresh_peers() {
   if [[ "${TAILSCALE_ENABLED}" != "true" ]]; then
-    log_warning "Tailnet peer routing is disabled"
-    echo ""
-    echo "Enable it with:"
-    echo "  ${0} start-with-tailscale"
-    return 0
+    log_warning "Tailnet peer routing is disabled, so there is no cycle to run"
+    echo "   Enable it with: ${0} start-with-tailscale" >&2
+    return 1
   fi
 
   if ! is_running tailscale_peers; then
     log_warning "Tailnet peer routing is enabled but its service is not running"
-    echo "   Start it with: ${0} start-with-tailscale"
-    echo "   Or stop expecting it with: ${0} stop-tailscale"
-    return 0
+    echo "   Start it with: ${0} start-with-tailscale" >&2
+    echo "   Or stop expecting it with: ${0} stop-tailscale" >&2
+    return 1
   fi
 
   resolve_tailscale_source

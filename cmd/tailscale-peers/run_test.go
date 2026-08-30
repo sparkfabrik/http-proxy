@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -100,4 +102,44 @@ func TestASignalResetsTheInterval(t *testing.T) {
 	if gap := next.Sub(forced); gap < 800*time.Millisecond {
 		t.Fatalf("the interval was not restarted: the next cycle came %s after the forced one, which is what was left of the original interval", gap)
 	}
+}
+
+// The CLI reads the cycle timestamp out of the state file with sed, so the
+// expression it uses is checked against a file this service actually wrote
+// rather than against a fixture written by hand.
+func TestTheCycleTimestampIsReadableByTheCLI(t *testing.T) {
+	cfg := &config.TailscaleConfig{Enabled: true, RefreshInterval: time.Hour}
+	probe := &fakeProbe{routes: map[string][]traefikapi.Route{}}
+	d := testDiscovery(t, cfg, fakeSource{document: tailnetStatus}, probe)
+
+	written := time.Now().UTC()
+	if err := d.writeReport(&Report{UpdatedAt: written, Source: "socket"}); err != nil {
+		t.Fatalf("writing the report: %v", err)
+	}
+
+	const cliExpression = `s/.*"updatedAt"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p`
+	out, err := exec.Command("sed", "-n", cliExpression, d.config.StateFile).Output()
+	if err != nil {
+		t.Fatalf("running the CLI expression: %v", err)
+	}
+
+	got := strings.TrimSpace(string(out))
+	if got == "" {
+		t.Fatalf("the CLI expression read no timestamp from the state file this service wrote:\n%s", stateFileHead(t, d.config.StateFile))
+	}
+	if want := written.Format(time.RFC3339Nano); got != want {
+		t.Errorf("the CLI read %q, the service wrote %q", got, want)
+	}
+}
+
+func stateFileHead(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err.Error()
+	}
+	if len(raw) > 200 {
+		raw = raw[:200]
+	}
+	return string(raw)
 }
