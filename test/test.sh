@@ -1452,6 +1452,8 @@ STUB
         else
             error "the empty scan exited ${rc} and left: $(cat "${scratch}/dynamic/auto-tls.yml" 2>&1 | tr '\n' ' ')"
         fi
+        rm -rf "${scratch}"
+
         # A scan that could not write must say so, because the CLI reads its
         # exit status to decide whether to tell the user the certificates were
         # applied. A read-only dynamic directory is the cheapest way to make the
