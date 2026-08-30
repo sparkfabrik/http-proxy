@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The service image is built on `alpine:3.24` rather than `alpine:latest`, so a rebuild produces the same base until the pin is moved deliberately ([#123](https://github.com/sparkfabrik/http-proxy/issues/123))
 - Peer discovery writes `tailscale-peers-completed-at` in the state directory, holding the timestamp of the last completed cycle and nothing else. It is written after the state file and the report, so a reader that sees it change knows both are already on disk. `tailscale-refresh-peers` waits on it rather than searching the other two files for a timestamp ([#134](https://github.com/sparkfabrik/http-proxy/issues/134))
 - `spark-http-proxy` writes errors and warnings to stderr rather than stdout, so a caller capturing its output no longer captures its error text
 
