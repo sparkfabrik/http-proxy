@@ -1316,6 +1316,32 @@ MKCERT
         fi
     done
 
+    # The probe pattern, against the entrypoint it has to recognise and against a
+    # file that only mentions the flag. A false positive is the expensive one: it
+    # sends the scan to an entrypoint that runs its whole body and withdraws peer
+    # routes, which is why the pattern requires the guard and not the flag.
+    local probe fake
+    probe="$(grep -oE "grep -qE '[^']+'" bin/spark-http-proxy | head -1 | sed "s/grep -qE '//; s/'$//")"
+
+    total=$((total + 1))
+    if [ -n "${probe}" ] && grep -qE "${probe}" build/traefik/entrypoint.sh; then
+        success "the capability probe recognises the entrypoint's guard"
+        passed=$((passed + 1))
+    else
+        error "the probe pattern no longer matches the guard it looks for: ${probe:-not found}"
+    fi
+
+    fake="$(mktemp)"
+    printf '#!/bin/sh\n# TODO: support --tls-only one day\nexec traefik "$@"\n' >"${fake}"
+    total=$((total + 1))
+    if [ -n "${probe}" ] && ! grep -qE "${probe}" "${fake}"; then
+        success "a mention of the flag in a comment is not read as support"
+        passed=$((passed + 1))
+    else
+        error "the probe matches an entrypoint that only mentions the flag"
+    fi
+    rm -f "${fake}"
+
     # A stubbed docker stands in for both images, so the fallback is exercised
     # without building one. STUB_GUARD decides whether the probe finds the guard.
     stub="$(mktemp -d)"

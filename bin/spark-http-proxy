@@ -642,7 +642,12 @@ apply_certificates() {
 
   # An image predating the scan guard would pass --tls-only through to Traefik
   # and run the rest of its entrypoint on the way, withdrawing peer routes.
-  if docker exec http-proxy grep -q -- '--tls-only' /entrypoint.sh 2>/dev/null; then
+  # The guard itself, not the flag anywhere in the file. A mention in a comment
+  # would otherwise read as support and send the scan to an entrypoint that runs
+  # its whole body, withdrawing peer routes on the way. A pattern that stops
+  # matching costs a restart, which still applies the certificate, so the
+  # tighter test fails in the safe direction.
+  if docker exec http-proxy grep -qE '^[[:space:]]*if .*--tls-only' /entrypoint.sh 2>/dev/null; then
     log_info "Applying certificates..."
     # Only the proxy knows why a scan failed, and without its message the
     # warning says a thing did not work and nothing about what to look at.
