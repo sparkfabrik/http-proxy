@@ -1196,7 +1196,7 @@ show_tailscale_summary() {
     return 0
   fi
 
-  local summary state counts seen probed forwarding hostnames extra
+  local summary state counts seen probed extra
   # One snapshot: the writer replaces this file by rename, so reading it more
   # than once can pair one cycle's counts with another cycle's machines. And
   # read returns non-zero at end of file, which under errexit would otherwise
@@ -1207,13 +1207,12 @@ show_tailscale_summary() {
     echo "   💡 Detail: ${0} tailscale-peers"
     return 0
   fi
-  read -r seen probed forwarding hostnames extra <<<"${counts}"
+  read -r seen probed extra <<<"${counts}"
 
   # A shape this CLI does not know is not a summary: read leaves the missing
   # fields empty rather than failing, so the counts would shift a column.
   if [[ "${state}" != "ok" && "${state}" != "aborted" ]] || [[ -n "${extra}" ]] ||
-    ! [[ "${seen}" =~ ^(0|[1-9][0-9]*)$ && "${probed}" =~ ^(0|[1-9][0-9]*)$ &&
-    "${forwarding}" =~ ^(0|[1-9][0-9]*)$ && "${hostnames}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+    ! [[ "${seen}" =~ ^(0|[1-9][0-9]*)$ && "${probed}" =~ ^(0|[1-9][0-9]*)$ ]]; then
     echo "⚠️  Tailnet peer routing is enabled, but there is no usable discovery record"
     echo "   💡 Detail: ${0} tailscale-peers"
     return 0
@@ -1226,21 +1225,15 @@ show_tailscale_summary() {
     return 0
   fi
 
-  # The rows are the same facts as the counts, so a record where they disagree
-  # is describing two different cycles whichever half is right.
-  local rows=0 listed=0 line name hosts
+  # How many machines forward, and how many hostnames they carry, is the rows
+  # counted. The record does not state it twice, so it cannot disagree.
+  local forwarding=0 hostnames=0 commas name hosts
   while IFS=$'\t' read -r name hosts; do
     [[ -z "${name}" ]] && continue
-    rows=$((rows + 1))
-    line="${hosts//[^,]/}"
-    listed=$((listed + ${#line} + 1))
+    forwarding=$((forwarding + 1))
+    commas="${hosts//[^,]/}"
+    hostnames=$((hostnames + ${#commas} + 1))
   done < <(tail -n +3 <<<"${summary}")
-
-  if [[ "${rows}" != "${forwarding}" || "${listed}" != "${hostnames}" ]]; then
-    echo "⚠️  Tailnet peer routing is enabled, but there is no usable discovery record"
-    echo "   💡 Detail: ${0} tailscale-peers"
-    return 0
-  fi
 
   if [[ "${forwarding}" == "0" ]]; then
     # Says nothing about the machines that were never contacted.

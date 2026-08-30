@@ -617,13 +617,13 @@ func (d *discovery) writeSummary(report *Report) error {
 			if !os.IsNotExist(err) {
 				return fmt.Errorf("failed to read the previous summary %s: %w", path, err)
 			}
-			return writeFileAtomically(path, []byte("aborted\n0 0 0 0\n"), stateFilePermissions)
+			return writeFileAtomically(path, []byte("aborted\n0 0\n"), stateFilePermissions)
 		}
 		return writeFileAtomically(path, retokenise(previous, "aborted"), stateFilePermissions)
 	}
 
 	var b strings.Builder
-	var probed, forwarding, hostnames int
+	var probed int
 	var machines strings.Builder
 	for _, peer := range report.Peers {
 		// A skipped machine was never contacted, so nothing about it is known.
@@ -633,13 +633,13 @@ func (d *discovery) writeSummary(report *Report) error {
 		if peer.Status != statusOK || len(peer.Hosts) == 0 {
 			continue
 		}
-		forwarding++
-		hostnames += len(peer.Hosts)
 		fmt.Fprintf(&machines, "%s\t%s\n", peer.Name, strings.Join(peer.Hosts, ","))
 	}
 
+	// Only what the rows cannot say. How many machines forward, and how many
+	// hostnames they carry, is the rows counted.
 	b.WriteString("ok\n")
-	fmt.Fprintf(&b, "%d %d %d %d\n", len(report.Peers), probed, forwarding, hostnames)
+	fmt.Fprintf(&b, "%d %d\n", len(report.Peers), probed)
 	b.WriteString(machines.String())
 
 	return writeFileAtomically(path, []byte(b.String()), stateFilePermissions)

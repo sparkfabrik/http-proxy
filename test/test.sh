@@ -1184,7 +1184,7 @@ test_status_summary() {
     }
 
     # Forwarding: the machines and what they serve.
-    printf 'ok\n9 4 1 2\npaolo-cto-arch-p620\tnest.spark.loc,react.spark.loc\n' >"${state}/tailscale-peers-summary"
+    printf 'ok\n9 4\npaolo-cto-arch-p620\tnest.spark.loc,react.spark.loc\n' >"${state}/tailscale-peers-summary"
     : >"${state}/tailscale-peers.txt"
     local out
     out="$(run_status)"
@@ -1200,7 +1200,7 @@ test_status_summary() {
     # Nothing forwarded, which is the usual state with one proxy on a tailnet.
     # Nine machines were in the report and only four were probed; the other
     # five were asleep and were never asked.
-    printf 'ok\n9 4 0 0\n' >"${state}/tailscale-peers-summary"
+    printf 'ok\n9 4\n' >"${state}/tailscale-peers-summary"
     out="$(run_status)"
 
     total=$((total + 1))
@@ -1229,7 +1229,7 @@ test_status_summary() {
     fi
 
     # A cycle that could not run is not a working state.
-    printf 'aborted\n9 4 1 2\npaolo-cto-arch-p620\tnest.spark.loc,react.spark.loc\n' >"${state}/tailscale-peers-summary"
+    printf 'aborted\n9 4\npaolo-cto-arch-p620\tnest.spark.loc,react.spark.loc\n' >"${state}/tailscale-peers-summary"
     out="$(run_status)"
 
     total=$((total + 1))
@@ -1254,7 +1254,7 @@ test_status_summary() {
 
     # The longest name on a real tailnet is longer than any width guessed in
     # advance, and the columns have to line up when the feature is working.
-    printf 'ok\n2 2 2 2\nMac-Sparkfabrik-PaoloMainardi\tmacos.spark.loc\nshort\tapp.spark.loc\n' >"${state}/tailscale-peers-summary"
+    printf 'ok\n2 2\nMac-Sparkfabrik-PaoloMainardi\tmacos.spark.loc\nshort\tapp.spark.loc\n' >"${state}/tailscale-peers-summary"
     out="$(run_status)"
 
     total=$((total + 1))
@@ -1284,7 +1284,7 @@ test_status_summary() {
 
     # The token is part of the shape. Anything but the two known values would
     # otherwise fall through to the success path with a tick on it.
-    printf 'garbage\n9 4 1 2\npaolo-cto-arch-p620\tnest.spark.loc\n' >"${state}/tailscale-peers-summary"
+    printf 'garbage\n9 4\npaolo-cto-arch-p620\tnest.spark.loc\n' >"${state}/tailscale-peers-summary"
     out="$(run_status)"
 
     total=$((total + 1))
@@ -1317,33 +1317,13 @@ test_status_summary() {
 
     # A count with a leading zero is not a shape this service writes, and bash
     # reads it as octal, so 08 is both wrong and an arithmetic error.
-    printf 'ok\n9 4 08 2\n' >"${state}/tailscale-peers-summary"
+    printf 'ok\n9 08\n' >"${state}/tailscale-peers-summary"
     total=$((total + 1))
     if run_status 2>&1 | grep -q "no usable discovery record"; then
         success "a count with a leading zero is treated as an unrecognised record"
         passed=$((passed + 1))
     else
         error "a leading-zero count was rendered: $(run_status 2>&1 | tr '\n' ' ')"
-    fi
-
-    # A record whose counts and rows disagree is describing two different
-    # cycles, whichever one is right.
-    printf 'ok\n9 4 1 2\n' >"${state}/tailscale-peers-summary"
-    total=$((total + 1))
-    if run_status | grep -q "no usable discovery record"; then
-        success "counts without the machines they claim are an unrecognised record"
-        passed=$((passed + 1))
-    else
-        error "a truncated record was rendered as forwarding: $(run_status | tr '\n' ' ')"
-    fi
-
-    printf 'ok\n9 4 2 3\nonly-one\tapp.loc\n' >"${state}/tailscale-peers-summary"
-    total=$((total + 1))
-    if run_status | grep -q "no usable discovery record"; then
-        success "counts that disagree with the machines listed are an unrecognised record"
-        passed=$((passed + 1))
-    else
-        error "a contradictory record was rendered: $(run_status | tr '\n' ' ')"
     fi
 
     rm -rf "${home}" "${defs}"
