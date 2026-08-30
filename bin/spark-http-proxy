@@ -1191,7 +1191,7 @@ show_tailscale_summary() {
   if [[ ! -f "${TAILSCALE_SUMMARY_FILE}" ]]; then
     # Not log_warning: status is one report, and this is a state of the system
     # rather than a diagnostic about the CLI, so it belongs on stdout.
-    echo "⚠️  Tailnet peer routing is enabled, but no discovery cycle has been recorded yet"
+    echo "⚠️  Tailnet peer routing is enabled, but there is no usable discovery record"
     echo "   💡 Detail: ${0} tailscale-peers"
     return 0
   fi
@@ -1205,7 +1205,7 @@ show_tailscale_summary() {
   if [[ "${state}" != "ok" && "${state}" != "aborted" ]] || [[ -n "${extra}" ]] ||
     ! [[ "${seen}" =~ ^[0-9]+$ && "${probed}" =~ ^[0-9]+$ &&
     "${forwarding}" =~ ^[0-9]+$ && "${hostnames}" =~ ^[0-9]+$ ]]; then
-    echo "⚠️  Tailnet peer routing is enabled, but no discovery cycle has been recorded yet"
+    echo "⚠️  Tailnet peer routing is enabled, but there is no usable discovery record"
     echo "   💡 Detail: ${0} tailscale-peers"
     return 0
   fi

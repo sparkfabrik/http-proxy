@@ -1275,7 +1275,7 @@ test_status_summary() {
     out="$(run_status)"
 
     total=$((total + 1))
-    if echo "${out}" | grep -q "no discovery cycle has been recorded yet"; then
+    if echo "${out}" | grep -q "no usable discovery record"; then
         success "a summary in an unrecognised shape is treated as no cycle"
         passed=$((passed + 1))
     else
@@ -1288,7 +1288,7 @@ test_status_summary() {
     out="$(run_status)"
 
     total=$((total + 1))
-    if echo "${out}" | grep -q "no discovery cycle has been recorded yet"; then
+    if echo "${out}" | grep -q "no usable discovery record"; then
         success "an unknown state token is treated as no cycle"
         passed=$((passed + 1))
     else
