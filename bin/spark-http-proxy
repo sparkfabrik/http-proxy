@@ -653,6 +653,10 @@ apply_certificates() {
         log_info "The proxy said: ${scan_error}"
       fi
       log_info "Apply them with: $(basename "${0}") restart"
+      # The certificate exists but the proxy is not serving it, so the command
+      # did not do what it says it does. Reporting success here would have a
+      # script move on to a hostname that is not answering yet.
+      return 1
     fi
     return 0
   fi

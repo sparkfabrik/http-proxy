@@ -1365,13 +1365,21 @@ STUB
 
     # A scan that fails must say what the proxy said. Without it the warning
     # reports that something did not work and nothing about what to look at.
-    out="$(stub_generate STUB_SCAN_FAILS=1)"
+    rc=0; out="$(stub_generate STUB_SCAN_FAILS=1)" || rc=$?
     total=$((total + 1))
     if echo "${out}" | grep -q "did not apply" && echo "${out}" | grep -q "permission denied"; then
         success "a failed scan reports the proxy's own reason"
         passed=$((passed + 1))
     else
         error "a failed scan gave no reason: $(echo "${out}" | grep -E "⚠️|ℹ" | tr '\n' ' ')"
+    fi
+
+    total=$((total + 1))
+    if [ "${rc}" -ne 0 ]; then
+        success "a failed scan makes the command exit non-zero"
+        passed=$((passed + 1))
+    else
+        error "the certificate was not applied and the command reported success"
     fi
 
     # An image predating the guard: the restart is still the only way to apply a
