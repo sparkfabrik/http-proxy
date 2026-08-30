@@ -1197,6 +1197,16 @@ test_status_summary() {
         error "status did not name the forwarding machine: $(echo "${out}" | tr '\n' ' ')"
     fi
 
+    # The advice sits beside the hostnames it applies to, and has to survive
+    # being copied: a placeholder pastes as arguments or as a redirection.
+    total=$((total + 1))
+    if echo "${out}" | grep -q "generate-mkcert 'nest.spark.loc'"; then
+        success "status shows a certificate command for a hostname it just listed"
+        passed=$((passed + 1))
+    else
+        error "status gave no usable certificate command: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
     # Nothing forwarded, which is the usual state with one proxy on a tailnet.
     # Nine machines were in the report and only four were probed; the other
     # five were asleep and were never asked.
@@ -1226,6 +1236,16 @@ test_status_summary() {
         passed=$((passed + 1))
     else
         error "nothing forwarded was not reported as working: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # On a tailnet with one proxy this is the permanent state, so certificate
+    # advice here would print on every status forever.
+    total=$((total + 1))
+    if echo "${out}" | grep -q "generate-mkcert"; then
+        error "status advised on certificates with nothing forwarded: $(echo "${out}" | tr '\n' ' ')"
+    else
+        success "nothing forwarded means no certificate advice"
+        passed=$((passed + 1))
     fi
 
     # A cycle that could not run is not a working state.
@@ -1259,8 +1279,9 @@ test_status_summary() {
 
     total=$((total + 1))
     local col_long col_short
-    col_long="$(echo "${out}" | grep "macos.spark.loc" | grep -bo "macos.spark.loc" | cut -d: -f1)"
-    col_short="$(echo "${out}" | grep "app.spark.loc" | grep -bo "app.spark.loc" | cut -d: -f1)"
+    # Only the table rows: the example command names a hostname too.
+    col_long="$(echo "${out}" | grep -v generate-mkcert | grep "macos.spark.loc" | grep -bo "macos.spark.loc" | cut -d: -f1)"
+    col_short="$(echo "${out}" | grep -v generate-mkcert | grep "app.spark.loc" | grep -bo "app.spark.loc" | cut -d: -f1)"
     if [ -n "${col_long}" ] && [ "${col_long}" = "${col_short}" ]; then
         success "the hostname column lines up whatever the machine names are"
         passed=$((passed + 1))

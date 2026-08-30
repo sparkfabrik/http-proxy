@@ -1252,14 +1252,22 @@ show_tailscale_summary() {
   log_success "Tailnet peer routing: $(count_noun "${forwarding}" machine) forwarding $(count_noun "${hostnames}" hostname)"
   # The column is sized from the names present: the longest on a real tailnet
   # is longer than any width chosen in advance.
-  local name hosts width=0
+  local name hosts width=0 example=""
   while IFS=$'\t' read -r name _; do
     [[ "${#name}" -gt "${width}" ]] && width="${#name}"
   done < <(tail -n +3 <<<"${summary}")
 
   while IFS=$'\t' read -r name hosts; do
-    [[ -n "${name}" ]] && printf "     %-${width}s  %s\n" "${name}" "${hosts//,/, }"
+    [[ -z "${name}" ]] && continue
+    printf "     %-${width}s  %s\n" "${name}" "${hosts//,/, }"
+    [[ -z "${example}" ]] && example="${hosts%%,*}"
   done < <(tail -n +3 <<<"${summary}")
+
+  # TLS terminates here, so each of these needs a certificate on this machine.
+  # Whether one exists is not checked. The example is a hostname listed just
+  # above, so the command works when it is copied.
+  echo "   Over HTTPS each needs a certificate here, for example:"
+  echo "     ${0} generate-mkcert '${example}'"
   echo "   💡 Detail: ${0} tailscale-peers"
 }
 
