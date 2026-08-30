@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A destructive command run without a terminal now refuses instead of proceeding. `echo y | spark-http-proxy destroy` used to be accepted, because the piped reply satisfied the confirmation; it is now declined, and the same applies to the `remove-cert` confirmation. Confirming a destructive action is an interactive act ([#147](https://github.com/sparkfabrik/http-proxy/issues/147))
 - `spark-http-proxy status` names the machines forwarding hostnames and what each serves, says how many machines were seen when nothing is forwarded, and reports a cycle that could not run as a warning rather than a success. Peer discovery writes `tailscale-peers-summary` in the state directory for it, so the CLI reads a datum rather than searching a report meant for people ([#142](https://github.com/sparkfabrik/http-proxy/issues/142))
 - Every base image is pinned to an immutable digest beside its version tag, so a rebuild of the same commit cannot pick up different image contents if a tag is repointed ([#139](https://github.com/sparkfabrik/http-proxy/issues/139))
 - The service image is built on `alpine:3.24` rather than `alpine:latest`, so a rebuild produces the same base until the pin is moved deliberately ([#123](https://github.com/sparkfabrik/http-proxy/issues/123))
@@ -41,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Commands that prompt no longer exit silently when there is no terminal. `generate-mkcert` and `remove-cert` without arguments now say a domain is required, and `remove-cert` and `destroy` say they cannot confirm rather than stopping with no output. None of them ever performed the destructive action, but none of them said why they had not ([#147](https://github.com/sparkfabrik/http-proxy/issues/147))
 - Commands the CLI suggests can be pasted. `list-certs` printed `generate-mkcert <domain>` and `remove-cert <domain>`, and the angle brackets are shell redirections, so copying either was a syntax error. Both now name a real quoted domain, and `remove-cert` names one it just listed ([#118](https://github.com/sparkfabrik/http-proxy/issues/118))
 - After a restart, peer routing no longer reports itself as broken for up to a minute. A cycle that cannot read the local routing table because the proxy is still starting is retried within seconds instead of after a full interval, and the report says no machine was probed rather than listing every machine as excluded and zero hostnames as a result ([#141](https://github.com/sparkfabrik/http-proxy/issues/141))
 - The macOS status refresh agent reports whether it actually loaded, rather than trusting `launchctl`, which exits 0 on a malformed plist and on a missing file. Removal likewise confirms the agent is unloaded and its plist deleted. The agent's `PATH` no longer varies with the shell that installed it, and can be set with `HTTP_PROXY_TAILSCALE_AGENT_PATH` ([#130](https://github.com/sparkfabrik/http-proxy/issues/130))
