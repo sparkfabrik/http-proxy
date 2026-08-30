@@ -612,15 +612,19 @@ func (d *discovery) writeSummary(report *Report) error {
 	if report.LocalError != "" {
 		previous, err := os.ReadFile(path)
 		if err != nil {
-			return writeFileAtomically(path, []byte("aborted\n0 0 0\n"), stateFilePermissions)
+			return writeFileAtomically(path, []byte("aborted\n0 0 0 0\n"), stateFilePermissions)
 		}
 		return writeFileAtomically(path, retokenise(previous, "aborted"), stateFilePermissions)
 	}
 
 	var b strings.Builder
-	var forwarding, hostnames int
+	var probed, forwarding, hostnames int
 	var machines strings.Builder
 	for _, peer := range report.Peers {
+		// A skipped machine was never contacted, so nothing about it is known.
+		if peer.Status != statusSkipped {
+			probed++
+		}
 		if peer.Status != statusOK || len(peer.Hosts) == 0 {
 			continue
 		}
@@ -630,7 +634,7 @@ func (d *discovery) writeSummary(report *Report) error {
 	}
 
 	b.WriteString("ok\n")
-	fmt.Fprintf(&b, "%d %d %d\n", len(report.Peers), forwarding, hostnames)
+	fmt.Fprintf(&b, "%d %d %d %d\n", len(report.Peers), probed, forwarding, hostnames)
 	b.WriteString(machines.String())
 
 	return writeFileAtomically(path, []byte(b.String()), stateFilePermissions)

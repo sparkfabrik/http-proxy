@@ -1184,7 +1184,7 @@ test_status_summary() {
     }
 
     # Forwarding: the machines and what they serve.
-    printf 'ok\n9 1 2\npaolo-cto-arch-p620\tnest.spark.loc,react.spark.loc\n' >"${state}/tailscale-peers-summary"
+    printf 'ok\n9 4 1 2\npaolo-cto-arch-p620\tnest.spark.loc,react.spark.loc\n' >"${state}/tailscale-peers-summary"
     : >"${state}/tailscale-peers.txt"
     local out
     out="$(run_status)"
@@ -1198,7 +1198,9 @@ test_status_summary() {
     fi
 
     # Nothing forwarded, which is the usual state with one proxy on a tailnet.
-    printf 'ok\n9 0 0\n' >"${state}/tailscale-peers-summary"
+    # Nine machines were in the report and only four were probed; the other
+    # five were asleep and were never asked.
+    printf 'ok\n9 4 0 0\n' >"${state}/tailscale-peers-summary"
     out="$(run_status)"
 
     total=$((total + 1))
@@ -1207,6 +1209,15 @@ test_status_summary() {
         passed=$((passed + 1))
     else
         error "status gave no evidence discovery ran: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # A machine that was never probed cannot be said to be running anything.
+    total=$((total + 1))
+    if echo "${out}" | grep -q "4 probed"; then
+        success "status distinguishes the machines it probed from those it did not"
+        passed=$((passed + 1))
+    else
+        error "status claimed something about every machine seen: $(echo "${out}" | tr '\n' ' ')"
     fi
 
     total=$((total + 1))
@@ -1218,7 +1229,7 @@ test_status_summary() {
     fi
 
     # A cycle that could not run is not a working state.
-    printf 'aborted\n9 1 2\npaolo-cto-arch-p620\tnest.spark.loc,react.spark.loc\n' >"${state}/tailscale-peers-summary"
+    printf 'aborted\n9 4 1 2\npaolo-cto-arch-p620\tnest.spark.loc,react.spark.loc\n' >"${state}/tailscale-peers-summary"
     out="$(run_status)"
 
     total=$((total + 1))
@@ -1239,6 +1250,22 @@ test_status_summary() {
         passed=$((passed + 1))
     else
         error "the aborted message went to stderr, so it splits from the rest of status"
+    fi
+
+    # The longest name on a real tailnet is longer than any width guessed in
+    # advance, and the columns have to line up when the feature is working.
+    printf 'ok\n2 2 2 2\nMac-Sparkfabrik-PaoloMainardi\tmacos.spark.loc\nshort\tapp.spark.loc\n' >"${state}/tailscale-peers-summary"
+    out="$(run_status)"
+
+    total=$((total + 1))
+    local col_long col_short
+    col_long="$(echo "${out}" | grep "macos.spark.loc" | grep -bo "macos.spark.loc" | cut -d: -f1)"
+    col_short="$(echo "${out}" | grep "app.spark.loc" | grep -bo "app.spark.loc" | cut -d: -f1)"
+    if [ -n "${col_long}" ] && [ "${col_long}" = "${col_short}" ]; then
+        success "the hostname column lines up whatever the machine names are"
+        passed=$((passed + 1))
+    else
+        error "the columns did not line up: hostnames start at ${col_long} and ${col_short}"
     fi
 
     rm -rf "${home}" "${defs}"

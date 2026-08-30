@@ -254,7 +254,7 @@ func TestTheSummaryDescribesACompletedCycle(t *testing.T) {
 		t.Fatalf("writing the report: %v", err)
 	}
 
-	want := "ok\n2 1 2\ndesktop\tapp.loc,api.loc\n"
+	want := "ok\n2 1 1 2\ndesktop\tapp.loc,api.loc\n"
 	if got := readSummary(t, cfg.StateFile); got != want {
 		t.Errorf("summary is\n%q\nwant\n%q", got, want)
 	}
@@ -277,7 +277,7 @@ func TestASummaryWithNothingForwardedIsStillOk(t *testing.T) {
 
 	// Nothing forwarded is the usual state on a tailnet with one proxy, and it
 	// is a completed cycle rather than a state of its own.
-	want := "ok\n1 0 0\n"
+	want := "ok\n1 0 0 0\n"
 	if got := readSummary(t, cfg.StateFile); got != want {
 		t.Errorf("summary is\n%q\nwant\n%q", got, want)
 	}
@@ -310,7 +310,7 @@ func TestAnAbortedCycleKeepsWhatIsStillInPlace(t *testing.T) {
 	}
 
 	// Those routes are still in place, so only the token changes.
-	want := "aborted\n1 1 1\ndesktop\tapp.loc\n"
+	want := "aborted\n1 1 1 1\ndesktop\tapp.loc\n"
 	if got := readSummary(t, cfg.StateFile); got != want {
 		t.Errorf("summary is\n%q\nwant\n%q", got, want)
 	}

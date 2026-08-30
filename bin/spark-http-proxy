@@ -1196,9 +1196,9 @@ show_tailscale_summary() {
     return 0
   fi
 
-  local state counts seen forwarding hostnames
+  local state counts seen probed forwarding hostnames
   { read -r state; read -r counts; } <"${TAILSCALE_SUMMARY_FILE}"
-  read -r seen forwarding hostnames <<<"${counts}"
+  read -r seen probed forwarding hostnames <<<"${counts}"
 
   if [[ "${state}" == "aborted" ]]; then
     echo "⚠️  Tailnet peer routing: the last cycle could not read the local routing table"
@@ -1208,15 +1208,22 @@ show_tailscale_summary() {
   fi
 
   if [[ "${forwarding:-0}" -eq 0 ]]; then
-    log_success "Tailnet peer routing: nothing forwarded, $(count_noun "${seen:-0}" machine) seen and none running this proxy"
+    # Says nothing about the machines that were never contacted.
+    log_success "Tailnet peer routing: nothing forwarded, $(count_noun "${seen:-0}" machine) seen and ${probed:-0} probed, none of which runs this proxy"
     echo "   💡 Detail: ${0} tailscale-peers"
     return 0
   fi
 
   log_success "Tailnet peer routing: $(count_noun "${forwarding}" machine) forwarding $(count_noun "${hostnames}" hostname)"
-  local name hosts
+  # The column is sized from the names present: the longest on a real tailnet
+  # is longer than any width chosen in advance.
+  local name hosts width=0
+  while IFS=$'\t' read -r name _; do
+    [[ "${#name}" -gt "${width}" ]] && width="${#name}"
+  done < <(tail -n +3 "${TAILSCALE_SUMMARY_FILE}")
+
   while IFS=$'\t' read -r name hosts; do
-    [[ -n "${name}" ]] && printf '     %-24s %s\n' "${name}" "${hosts//,/, }"
+    [[ -n "${name}" ]] && printf "     %-${width}s  %s\n" "${name}" "${hosts//,/, }"
   done < <(tail -n +3 "${TAILSCALE_SUMMARY_FILE}")
   echo "   💡 Detail: ${0} tailscale-peers"
 }
