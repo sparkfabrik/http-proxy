@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"os"
 	"sync"
 	"syscall"
@@ -190,20 +191,24 @@ func TestACompletedCycleWaitsTheInterval(t *testing.T) {
 }
 
 func TestTheBackoffStaysBoundedHoweverLongTheFailureLasts(t *testing.T) {
-	const interval = time.Minute
-	retry := localRetryInitial
+	// The last of these is the largest duration there is. An interval near it
+	// leaves room for the carried backoff to overflow while still being below
+	// the interval, which a one-minute interval never reveals.
+	for _, interval := range []time.Duration{time.Minute, time.Hour, 24 * time.Hour, math.MaxInt64} {
+		retry := localRetryInitial
 
-	// Far beyond the point where doubling a time.Duration overflows int64,
-	// which it does after 34 consecutive failures from a two second start.
-	for cycle := 1; cycle <= 1000; cycle++ {
-		var wait time.Duration
-		wait, retry = nextWait(true, retry, interval)
+		// Far beyond the point where doubling a time.Duration overflows int64,
+		// which it does after 34 consecutive failures from a two second start.
+		for cycle := 1; cycle <= 1000; cycle++ {
+			var wait time.Duration
+			wait, retry = nextWait(true, retry, interval)
 
-		if wait <= 0 {
-			t.Fatalf("cycle %d: wait is %v, so the timer fires at once and the loop spins", cycle, wait)
-		}
-		if wait > interval {
-			t.Fatalf("cycle %d: wait is %v, longer than the refresh interval %v", cycle, wait, interval)
+			if wait <= 0 {
+				t.Fatalf("interval %v, cycle %d: wait is %v, so the timer fires at once and the loop spins", interval, cycle, wait)
+			}
+			if wait > interval {
+				t.Fatalf("interval %v, cycle %d: wait is %v, longer than the interval", interval, cycle, wait)
+			}
 		}
 	}
 }

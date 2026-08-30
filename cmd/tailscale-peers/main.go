@@ -88,12 +88,12 @@ func nextWait(failed bool, retry, interval time.Duration) (wait, next time.Durat
 	if !failed {
 		return interval, localRetryInitial
 	}
-	// Stop doubling once the interval is reached: an unbounded retry overflows
-	// int64 nanoseconds after 34 failures and turns the wait negative, which
-	// fires the timer at once and spins the loop.
-	next = retry
-	if next < interval {
-		next *= 2
+	// Never double past the interval: an unbounded retry overflows int64
+	// nanoseconds after 34 failures and turns the wait negative, which fires
+	// the timer at once and spins the loop.
+	next = interval
+	if retry < interval/2 {
+		next = retry * 2
 	}
 	return min(retry, interval), next
 }
