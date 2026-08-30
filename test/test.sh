@@ -1268,6 +1268,20 @@ test_status_summary() {
         error "the columns did not line up: hostnames start at ${col_long} and ${col_short}"
     fi
 
+    # A summary in a shape this CLI does not know is not a summary. `read` is
+    # happy to leave a variable empty, so an unrecognised line would otherwise
+    # print counts silently shifted out of their columns.
+    printf 'ok\n9 1 2\npaolo-cto-arch-p620\tnest.spark.loc\n' >"${state}/tailscale-peers-summary"
+    out="$(run_status)"
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "no discovery cycle has been recorded yet"; then
+        success "a summary in an unrecognised shape is treated as no cycle"
+        passed=$((passed + 1))
+    else
+        error "an unrecognised summary was rendered anyway: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
     rm -rf "${home}" "${defs}"
     log "Status summary tests: ${passed}/${total} passed"
     [ "${passed}" -eq "${total}" ]

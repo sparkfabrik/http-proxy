@@ -1196,9 +1196,19 @@ show_tailscale_summary() {
     return 0
   fi
 
-  local state counts seen probed forwarding hostnames
+  local state counts seen probed forwarding hostnames extra
   { read -r state; read -r counts; } <"${TAILSCALE_SUMMARY_FILE}"
-  read -r seen probed forwarding hostnames <<<"${counts}"
+  read -r seen probed forwarding hostnames extra <<<"${counts}"
+
+  # A shape this CLI does not know is not a summary: read leaves the missing
+  # fields empty rather than failing, so the counts would shift a column.
+  if [[ -n "${extra}" ]] ||
+    ! [[ "${seen}" =~ ^[0-9]+$ && "${probed}" =~ ^[0-9]+$ &&
+    "${forwarding}" =~ ^[0-9]+$ && "${hostnames}" =~ ^[0-9]+$ ]]; then
+    echo "⚠️  Tailnet peer routing is enabled, but no discovery cycle has been recorded yet"
+    echo "   💡 Detail: ${0} tailscale-peers"
+    return 0
+  fi
 
   if [[ "${state}" == "aborted" ]]; then
     echo "⚠️  Tailnet peer routing: the last cycle could not read the local routing table"
