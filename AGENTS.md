@@ -356,13 +356,15 @@ Source: `.github/instructions/docker.instructions.md`
 look up what actually exists and take the newest stable release the runtime
 supports. For Go that is `https://proxy.golang.org/<module>/@latest`; the
 candidate's own `go` directive must not exceed the toolchain declared in
-`go.mod`. A version
-recalled rather than checked is how a build ends up pinned to something that was
-never released.
+`go.mod`. A version recalled rather than checked is how a build ends up pinned
+to something that was never released.
 
-**Pin what is pulled at build time.** Base images carry readable version tags,
-not `latest` and not digests: `renovate.json` extends `config:recommended`,
-which bumps tags and leaves digests alone, so a digest would go stale unmaintained.
+**Pin what is pulled at build time.** Base images carry a readable version tag
+and an immutable digest, `image:tag@sha256:...`, because a tag is a pointer the
+publisher can repoint. `renovate.json` sets `pinDigests`, so Renovate maintains
+both: a tag upgrade and a repointed tag arrive as separate pull requests. Resolve
+a digest from the registry when you write it, and take the multi-platform index
+digest, since these images build for more than one architecture.
 
 The Go dependency set is deliberately small; adding to it is worth arguing in the
 pull request.
