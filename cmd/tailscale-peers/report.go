@@ -183,7 +183,7 @@ func renderSummary(peers []PeerReport) string {
 	if forwarding > 0 {
 		// TLS terminates here, so reaching a forwarded hostname over HTTPS needs
 		// a certificate on this machine. Whether one exists is not checked.
-		b.WriteString("\nOver HTTPS these need a certificate on this machine: spark-http-proxy generate-mkcert <hostname>\n")
+		b.WriteString("\nOver HTTPS each of these needs a certificate on this machine, created with\nspark-http-proxy generate-mkcert and the hostname.\n")
 	}
 
 	return b.String()

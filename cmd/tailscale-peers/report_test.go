@@ -230,6 +230,17 @@ func TestRenderPointsAtCertificatesWhenSomethingIsForwarded(t *testing.T) {
 	if !strings.Contains(out, "generate-mkcert") {
 		t.Errorf("a report with a forwarded hostname did not name the certificate command:\n%s", out)
 	}
+	// A reader copies this line. Shell metacharacters in a placeholder make it a
+	// syntax error, and a bare placeholder word mints a certificate named after
+	// the placeholder, which fails silently instead.
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, "generate-mkcert") {
+			continue
+		}
+		if strings.ContainsAny(line, "<>") {
+			t.Errorf("the certificate line carries shell metacharacters, so copying it is a syntax error:\n%s", line)
+		}
+	}
 }
 
 func TestRenderSaysNothingAboutCertificatesWhenNothingIsForwarded(t *testing.T) {
