@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"os"
 	"sync"
 	"syscall"
@@ -151,5 +152,79 @@ func TestTheCompletedFileDoesNotAdvanceWhenAnEarlierWriteFails(t *testing.T) {
 	}
 	if got := string(raw); got != first.Format(time.RFC3339Nano) {
 		t.Errorf("the barrier advanced to %q while the report was never written", got)
+	}
+}
+
+func TestAFailedLocalReadIsRetriedWithoutWaitingTheInterval(t *testing.T) {
+	// The local API is unreachable here, which is the startup race: Traefik is
+	// not listening yet, so the cycle aborts and nothing is probed.
+	cfg := &config.TailscaleConfig{Enabled: true, RefreshInterval: time.Hour}
+	probe := &fakeProbe{routes: map[string][]traefikapi.Route{}}
+	d := testDiscovery(t, cfg, fakeSource{document: tailnetStatus}, probe)
+
+	hup := make(chan os.Signal, 1)
+	runService(t, d, hup)
+	first := cycleTime(t, d.config.StateFile)
+
+	if _, ran := awaitCycleAfter(t, d.config.StateFile, first, 10*time.Second); !ran {
+		t.Fatal("a cycle that could not read the local routing table waited the full interval before trying again")
+	}
+}
+
+func TestACompletedCycleWaitsTheInterval(t *testing.T) {
+	const interval = time.Second
+	cfg := &config.TailscaleConfig{Enabled: true, RefreshInterval: interval, LocalAPIURL: "http://local"}
+	probe := &fakeProbe{routes: map[string][]traefikapi.Route{"http://local": {}}}
+	d := testDiscovery(t, cfg, fakeSource{document: tailnetStatus}, probe)
+
+	hup := make(chan os.Signal, 1)
+	runService(t, d, hup)
+	first := cycleTime(t, d.config.StateFile)
+
+	next, ran := awaitCycleAfter(t, d.config.StateFile, first, 3*interval)
+	if !ran {
+		t.Fatal("the loop stopped after a completed cycle")
+	}
+	if gap := next.Sub(first); gap < interval-100*time.Millisecond {
+		t.Fatalf("a completed cycle was retried early, after %s, so the fast retry is not limited to failures", gap)
+	}
+}
+
+func TestTheBackoffStaysBoundedHoweverLongTheFailureLasts(t *testing.T) {
+	// The last of these is the largest duration there is. An interval near it
+	// leaves room for the carried backoff to overflow while still being below
+	// the interval, which a one-minute interval never reveals.
+	for _, interval := range []time.Duration{time.Minute, time.Hour, 24 * time.Hour, math.MaxInt64} {
+		retry := localRetryInitial
+
+		// Far beyond the point where doubling a time.Duration overflows int64,
+		// which it does after 34 consecutive failures from a two second start.
+		for cycle := 1; cycle <= 1000; cycle++ {
+			var wait time.Duration
+			wait, retry = nextWait(true, retry, interval)
+
+			if wait <= 0 {
+				t.Fatalf("interval %v, cycle %d: wait is %v, so the timer fires at once and the loop spins", interval, cycle, wait)
+			}
+			if wait > interval {
+				t.Fatalf("interval %v, cycle %d: wait is %v, longer than the interval", interval, cycle, wait)
+			}
+		}
+	}
+}
+
+func TestTheBackoffStartsOverAfterASuccess(t *testing.T) {
+	const interval = time.Minute
+	retry := localRetryInitial
+	for range 5 {
+		_, retry = nextWait(true, retry, interval)
+	}
+
+	wait, next := nextWait(false, retry, interval)
+	if wait != interval {
+		t.Errorf("a completed cycle waited %v rather than the interval %v", wait, interval)
+	}
+	if next != localRetryInitial {
+		t.Errorf("the backoff carried %v into the next failure instead of starting over", next)
 	}
 }

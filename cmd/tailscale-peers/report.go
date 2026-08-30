@@ -26,7 +26,10 @@ func (r *Report) Render() string {
 	}
 
 	if r.LocalError != "" {
-		fmt.Fprintf(&b, "The local routing table could not be read (%s), so the previous peer routes were kept.\n\n", r.LocalError)
+		fmt.Fprintf(&b, "The local routing table could not be read (%s), so the previous peer routes were kept.\n", r.LocalError)
+		fmt.Fprintf(&b, "No machine was probed this cycle, so this is not a verdict on any of them. It is usual for a few seconds after a restart, while the proxy is still starting.%s\n\n", r.retryHint())
+		b.WriteString(renderTable(r.Peers, r.UpdatedAt))
+		return b.String()
 	}
 
 	if len(r.Peers) == 0 {
@@ -191,6 +194,14 @@ func plural(count int, noun string) string {
 // completedStateFile holds the timestamp of the last completed cycle and nothing else.
 func completedStateFile(stateFile string) string {
 	return strings.TrimSuffix(stateFile, filepath.Ext(stateFile)) + "-completed-at"
+}
+
+// retryHint names the wait the reader should expect before the next attempt.
+func (r *Report) retryHint() string {
+	if r.RefreshInterval == "" {
+		return ""
+	}
+	return " The next attempt is in a few seconds, backing off to " + r.RefreshInterval + "."
 }
 
 // renderedStateFile is the state file's rendered twin, written beside it.

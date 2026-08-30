@@ -80,10 +80,30 @@ func newSource(cfg *config.TailscaleConfig) (tailscale.Source, error) {
 	}
 }
 
+// The first wait after a cycle that could not read the local routing table.
+const localRetryInitial = 2 * time.Second
+
+// nextWait returns how long to wait after a cycle and the backoff to carry.
+func nextWait(failed bool, retry, interval time.Duration) (wait, next time.Duration) {
+	if !failed {
+		return interval, localRetryInitial
+	}
+	// Never double past the interval: an unbounded retry overflows int64
+	// nanoseconds after 34 failures and turns the wait negative, which fires
+	// the timer at once and spins the loop.
+	next = interval
+	if retry < interval/2 {
+		next = retry * 2
+	}
+	return min(retry, interval), next
+}
+
 // run polls until the context is cancelled, and runs a cycle at once on a signal.
 func run(ctx context.Context, d *discovery, hup <-chan os.Signal) {
-	ticker := time.NewTicker(d.config.RefreshInterval)
-	defer ticker.Stop()
+	timer := time.NewTimer(d.config.RefreshInterval)
+	defer timer.Stop()
+
+	retry := localRetryInitial
 
 	for {
 		report := d.runCycle(ctx)
@@ -91,12 +111,21 @@ func run(ctx context.Context, d *discovery, hup <-chan os.Signal) {
 			d.logger.Error("Failed to write the peer report", "error", err, "state_file", d.config.StateFile)
 		}
 
+		// A cycle that read nothing locally probed nothing, so it is retried
+		// before the interval rather than after it. A forced cycle does not
+		// clear the backoff: the signal does not fix whatever is failing, and a
+		// cycle that succeeds clears it anyway.
+		var wait time.Duration
+		wait, retry = nextWait(report.LocalError != "", retry, d.config.RefreshInterval)
+
+		timer.Stop()
+		timer.Reset(wait)
+
 		select {
 		case <-ctx.Done():
 			return
 		case <-hup:
-			ticker.Reset(d.config.RefreshInterval)
-		case <-ticker.C:
+		case <-timer.C:
 		}
 	}
 }

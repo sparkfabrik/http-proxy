@@ -172,3 +172,48 @@ func TestRenderOmitsARetryThatIsNotAhead(t *testing.T) {
 		t.Errorf("a machine with no scheduled retry claims one:\n%s", report.Render())
 	}
 }
+
+func TestRenderSaysAnAbortedCycleIsNotAVerdict(t *testing.T) {
+	r := &Report{
+		UpdatedAt:       time.Now().UTC(),
+		RefreshInterval: "1m0s",
+		LocalError:      "machine did not answer: connection refused",
+		Peers: []PeerReport{
+			{Name: "desktop", Address: "100.64.0.1", Status: statusSkipped, Reason: "not probed this cycle"},
+			{Name: "laptop", Address: "100.64.0.2", Status: statusSkipped, Reason: "not probed this cycle"},
+		},
+	}
+
+	out := r.Render()
+
+	if strings.Contains(out, "excluded") {
+		t.Errorf("an aborted cycle called its machines excluded, which claims a judgement that never happened:\n%s", out)
+	}
+	if strings.Contains(out, "0 machines forwarding") {
+		t.Errorf("an aborted cycle reported zero forwarding as a discovery result:\n%s", out)
+	}
+	// The reader has to be told another attempt is coming and roughly when, as
+	// the status-source failure path already does.
+	if !strings.Contains(out, "next attempt") || !strings.Contains(out, r.RefreshInterval) {
+		t.Errorf("an aborted cycle did not say when it would try again:\n%s", out)
+	}
+}
+
+func TestRenderStillSummarisesACompletedCycle(t *testing.T) {
+	r := &Report{
+		UpdatedAt: time.Now().UTC(),
+		Peers: []PeerReport{
+			{Name: "desktop", Address: "100.64.0.1", Status: statusOK, Hosts: []string{"app.loc"}},
+			{Name: "phone", Address: "100.64.0.2", Status: statusSkipped, Reason: "offline"},
+		},
+	}
+
+	out := r.Render()
+
+	if !strings.Contains(out, "1 machine forwarding 1 hostname") {
+		t.Errorf("a completed cycle lost its counts:\n%s", out)
+	}
+	if !strings.Contains(out, "excluded") {
+		t.Errorf("a completed cycle stopped reporting genuinely excluded machines:\n%s", out)
+	}
+}

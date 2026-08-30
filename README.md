@@ -942,6 +942,32 @@ phone       100.100.0.32    skipped      offline
 Most rows on a real tailnet are phones, routers and televisions. They are
 expected, not a fault. Add `--json` for the same information machine-readably.
 
+**Do not wait for the next cycle.** Discovery polls every 60 seconds by default,
+so a container started on another machine takes up to a minute to become
+reachable. This runs a cycle now instead:
+
+```console
+$ spark-http-proxy tailscale-refresh-peers
+Tailnet peers, from the cycle at 2026-01-02T09:16:58Z
+Source: socket, tailnet status produced at 2026-01-02T09:16:58Z
+
+MACHINE     ADDRESS         STATUS   DETAIL
+machine-a   100.100.0.11    ok       app.loc, api.loc, new-thing.loc
+
+5 machines considered, 1 machine forwarding 3 hostnames.
+```
+
+It waits for the cycle to finish and prints its report, so what you see is the
+result of that cycle rather than the one before it. If the cycle does not
+complete in time it says so and exits non-zero, rather than printing the
+previous report as though it were fresh.
+
+**On macOS it refreshes the status document first.** The machine list there comes
+from a document the host writes every five minutes, so a forced cycle that only
+re-read it would find fresh routes from machines already known while missing a
+machine that came online two minutes ago. Rewriting the document first makes the
+command mean the same thing on both platforms.
+
 **Turn it off again** without stopping the proxy:
 
 ```bash
