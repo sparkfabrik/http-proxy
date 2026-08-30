@@ -1429,18 +1429,24 @@ STUB
         scratch="$(mktemp -d)"
         mkdir -p "${scratch}/certs" "${scratch}/dynamic"
         printf 'stale content referencing a deleted certificate\n' >"${scratch}/dynamic/auto-tls.yml"
+        rc=0
         docker run --rm \
             -v "$(pwd)/build/traefik/entrypoint.sh:/ep.sh:ro" \
             -v "${scratch}/certs:/traefik/certs" \
             -v "${scratch}/dynamic:/traefik/dynamic" \
-            --entrypoint sh "${traefik_image}" /ep.sh --tls-only >/dev/null 2>&1 || true
+            --entrypoint sh "${traefik_image}" /ep.sh --tls-only >/dev/null 2>&1 || rc=$?
 
+        # The empty list itself, not the absence of the old content. Truncating
+        # the file, deleting it, or failing halfway would all remove the stale
+        # text while leaving Traefik without the configuration it reads.
         total=$((total + 1))
-        if ! grep -q "stale content" "${scratch}/dynamic/auto-tls.yml" 2>/dev/null; then
-            success "a scan finding no certificates clears the previous references"
+        if [ "${rc}" -eq 0 ] &&
+            grep -q '^[[:space:]]*certificates:[[:space:]]*\[\][[:space:]]*$' \
+                "${scratch}/dynamic/auto-tls.yml" 2>/dev/null; then
+            success "a scan finding no certificates writes an empty certificate list"
             passed=$((passed + 1))
         else
-            error "removing the last certificate leaves auto-tls.yml pointing at deleted files"
+            error "the empty scan exited ${rc} and left: $(cat "${scratch}/dynamic/auto-tls.yml" 2>&1 | tr '\n' ' ')"
         fi
         rm -rf "${scratch}"
     fi
