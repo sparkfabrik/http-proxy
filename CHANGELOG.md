@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A destructive command run without a terminal now refuses instead of proceeding. `echo y | spark-http-proxy destroy` used to be accepted, because the piped reply satisfied the confirmation; it is now declined, and the same applies to the `remove-cert` confirmation. Confirming a destructive action is an interactive act ([#147](https://github.com/sparkfabrik/http-proxy/issues/147))
 - `spark-http-proxy status` names the machines forwarding hostnames and what each serves, says how many machines were seen when nothing is forwarded, and reports a cycle that could not run as a warning rather than a success. Peer discovery writes `tailscale-peers-summary` in the state directory for it, so the CLI reads a datum rather than searching a report meant for people ([#142](https://github.com/sparkfabrik/http-proxy/issues/142))
 - Every base image is pinned to an immutable digest beside its version tag, so a rebuild of the same commit cannot pick up different image contents if a tag is repointed ([#139](https://github.com/sparkfabrik/http-proxy/issues/139))
 - The service image is built on `alpine:3.24` rather than `alpine:latest`, so a rebuild produces the same base until the pin is moved deliberately ([#123](https://github.com/sparkfabrik/http-proxy/issues/123))

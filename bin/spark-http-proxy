@@ -789,7 +789,7 @@ remove_cert() {
   if [ ! -t 0 ]; then
     log_error "Cannot confirm removal without a terminal, so nothing was removed"
     log_info "Re-run this interactively to confirm"
-    return 1
+    exit 1
   fi
 
   read -p "Remove ${#matched[@]} certificate(s)? (y/N): " -n 1 -r
