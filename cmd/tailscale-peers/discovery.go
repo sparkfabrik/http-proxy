@@ -612,6 +612,11 @@ func (d *discovery) writeSummary(report *Report) error {
 	if report.LocalError != "" {
 		previous, err := os.ReadFile(path)
 		if err != nil {
+			// Absent means there is nothing to carry. Anything else means the
+			// routes are still in place and must not be written away as zeroes.
+			if !os.IsNotExist(err) {
+				return fmt.Errorf("failed to read the previous summary %s: %w", path, err)
+			}
 			return writeFileAtomically(path, []byte("aborted\n0 0 0 0\n"), stateFilePermissions)
 		}
 		return writeFileAtomically(path, retokenise(previous, "aborted"), stateFilePermissions)

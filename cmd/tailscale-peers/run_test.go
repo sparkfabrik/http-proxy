@@ -347,3 +347,36 @@ func TestTheBarrierDoesNotAdvanceWhenTheSummaryCannotBeWritten(t *testing.T) {
 		t.Errorf("the barrier advanced to %q while the summary was never written", got)
 	}
 }
+
+func TestAnUnreadableSummaryIsNotReplacedWithZeroes(t *testing.T) {
+	cfg := &config.TailscaleConfig{Enabled: true, RefreshInterval: time.Hour}
+	probe := &fakeProbe{routes: map[string][]traefikapi.Route{}}
+	d := testDiscovery(t, cfg, fakeSource{document: tailnetStatus}, probe)
+
+	forwarding := &Report{
+		UpdatedAt: time.Now().UTC(),
+		Peers: []PeerReport{
+			{Name: "desktop", Address: "100.64.0.1", Status: statusOK, Hosts: []string{"app.loc"}},
+		},
+	}
+	if err := d.writeReport(forwarding); err != nil {
+		t.Fatalf("writing the first report: %v", err)
+	}
+
+	// Unreadable rather than absent: a transient I/O or permission failure must
+	// not be taken for "there were no routes".
+	path := summaryStateFile(cfg.StateFile)
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatalf("making the summary unreadable: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+
+	aborted := &Report{UpdatedAt: time.Now().UTC().Add(time.Minute), LocalError: "connection refused"}
+	err := d.writeReport(aborted)
+
+	if err == nil {
+		_ = os.Chmod(path, 0o644)
+		raw, _ := os.ReadFile(path)
+		t.Fatalf("an unreadable summary was replaced rather than reported, leaving:\n%q", string(raw))
+	}
+}

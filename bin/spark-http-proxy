@@ -1223,7 +1223,7 @@ show_tailscale_summary() {
     return 0
   fi
 
-  if [[ "${forwarding:-0}" -eq 0 ]]; then
+  if [[ "${forwarding}" == "0" ]]; then
     # Says nothing about the machines that were never contacted.
     log_success "Tailnet peer routing: nothing forwarded, $(count_noun "${seen:-0}" machine) seen and ${probed:-0} probed, none of which runs this proxy"
     echo "   💡 Detail: ${0} tailscale-peers"
@@ -1247,7 +1247,7 @@ show_tailscale_summary() {
 # Renders a count with its noun, singular or plural.
 count_noun() {
   local count="$1" noun="$2"
-  if [[ "${count}" -eq 1 ]]; then
+  if [[ "${count}" == "1" ]]; then
     echo "${count} ${noun}"
   else
     echo "${count} ${noun}s"
