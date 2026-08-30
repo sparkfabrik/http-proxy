@@ -132,7 +132,7 @@ remove_peer_config() {
 # Re-run the certificate scan on its own, for a proxy that is already up. The
 # CLI uses this to apply a certificate without restarting and dropping every
 # connection on the machine.
-if [ "$1" = "--tls-only" ]; then
+if [ "${1:-}" = "--tls-only" ]; then
     generate_tls_config
     exit 0
 fi
