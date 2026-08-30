@@ -245,6 +245,22 @@ Tests require:
 
 There is no way to run a single test in isolation — `test/test.sh` is a monolithic shell script. To iterate on a specific area, use `--no-rebuild` and comment out unrelated test sections temporarily.
 
+## Continuous Integration
+
+`.github/workflows/ci.yml` runs five jobs on every push. A pull request is not
+ready while any of them is red.
+
+- **`go-checks`** — `gofmt`, `go vet`, and `go test ./... -race`. Run the same
+  three locally before pushing; they are the cheapest gate and catch the most.
+- **`test`** — builds the service and Traefik images and runs `test/test.sh`
+  against a real stack. This is the only end-to-end coverage the CLI has.
+- **`security-scan`** — dependency and image scanning. Its Trivy step uploads
+  SARIF, so Trivy reports as a separate check without being a separate job.
+- **`dev-deploy`** and **`deploy`** — build and publish the images.
+
+There is no staging environment: merging to `main` publishes images that every
+developer machine pulls on its next `upgrade`.
+
 ## Development Environment
 
 ```bash
@@ -256,6 +272,24 @@ make dev-cli-traefik    # Open a shell in the Traefik container
 
 The dev stack uses `compose.yml` (root) with `build:` contexts. The production stack
 uses `bin/compose.yml` with pre-built GHCR images.
+
+## Command safety
+
+Sorted by what a command does to state that cannot be recreated.
+
+**Read freely.** `status`, `show-config`, `tailscale-peers`, `list-certs`,
+`logs`, `self-test`.
+
+**Run deliberately.** `start*`, `restart`, `stop-metrics`, `stop-tailscale`,
+`upgrade`, `self-update`, `configure-dns`, `generate-mkcert`,
+`tailscale-refresh-peers`. Recoverable, but they restart containers, rewrite
+system DNS, or install a certificate authority.
+
+**Ask first.** `clean` and `destroy` (both remove volumes, so both take
+monitoring data; `destroy` also removes images), `remove-cert`,
+`docker compose down -v`, `git push --force`, and any write to
+`~/.local/spark/http-proxy/state` — that directory is a trust input rather than
+a cache, since its contents decide whose traffic is forwarded where.
 
 ## Lint and Format
 
@@ -316,6 +350,23 @@ Source: `.github/instructions/docker.instructions.md`
 - Set explicit `WORKDIR`
 - Use `docker compose` (not `docker-compose`) in all scripts and Make targets
 
+## Dependency safety
+
+**Check the registry, never memory.** Before adding or upgrading a dependency,
+look up what actually exists and take the newest stable release the runtime
+supports. For Go that is `https://proxy.golang.org/<module>/@latest`; the
+candidate's own `go` directive must not exceed the toolchain declared in
+`go.mod`. A version
+recalled rather than checked is how a build ends up pinned to something that was
+never released.
+
+**Pin what is pulled at build time.** Base images carry readable version tags,
+not `latest` and not digests: `renovate.json` extends `config:recommended`,
+which bumps tags and leaves digests alone, so a digest would go stale unmaintained.
+
+The Go dependency set is deliberately small; adding to it is worth arguing in the
+pull request.
+
 ## Makefile Style
 
 Source: `.github/instructions/makefile.instructions.md`
@@ -331,6 +382,46 @@ Source: `.github/instructions/makefile.instructions.md`
 - Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Add entries under `[Unreleased]` in the appropriate section (`Added`, `Fixed`, `Changed`)
 - Link entries to the relevant PR: `([#N](https://github.com/sparkfabrik/http-proxy/pull/N))`
+
+## OpenSpec
+
+`openspec/` holds specs under `specs/` and in-flight changes under `changes/`,
+on the `spec-driven` schema in `openspec/config.yaml`. Archived changes sit in
+`changes/archive/` under their completion date.
+
+**A change needs one** when it spans several files and settles an architectural
+question, so the reasoning can be reviewed before the code exists. A bug fix or a
+rename does not.
+
+```bash
+openspec new change <name>        # scaffold proposal, design, tasks, specs
+openspec status --change <name>   # which artifacts are complete
+openspec validate <name>          # deltas parse and every requirement has a scenario
+openspec archive <name>           # merge deltas into specs/ and file the change
+```
+
+Specs describe observable behaviour. Go identifiers, Traefik rule syntax and the
+reasoning behind a decision belong in `design.md`, not in a spec.
+
+## Git workflow
+
+**Never push to `main`.** Branch, open a pull request, and let CI run.
+
+Branches are named `<type>/<issue>-<slug>`: `fix/134-cycle-barrier`,
+`feat/132-refresh-peers`, `docs/122-agents-sections`.
+
+Pull requests are **squash-merged**, so the squash subject is the history. It
+carries the conventional-commit subject, the issue, and the pull request:
+
+```
+fix(cli): assert the status agent loaded instead of trusting launchctl #130 (#131)
+
+Closes: sparkfabrik/http-proxy#130
+Assisted-by: claude-code/claude-opus-5
+```
+
+Footers are fully qualified: a bare `#N` does not resolve outside this
+repository. `Closes:` when the commit resolves the issue, `Refs:` otherwise.
 
 ## General Guidelines
 
