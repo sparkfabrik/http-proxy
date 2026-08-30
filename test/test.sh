@@ -1282,6 +1282,19 @@ test_status_summary() {
         error "an unrecognised summary was rendered anyway: $(echo "${out}" | tr '\n' ' ')"
     fi
 
+    # The token is part of the shape. Anything but the two known values would
+    # otherwise fall through to the success path with a tick on it.
+    printf 'garbage\n9 4 1 2\npaolo-cto-arch-p620\tnest.spark.loc\n' >"${state}/tailscale-peers-summary"
+    out="$(run_status)"
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "no discovery cycle has been recorded yet"; then
+        success "an unknown state token is treated as no cycle"
+        passed=$((passed + 1))
+    else
+        error "an unknown state token was rendered anyway: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
     rm -rf "${home}" "${defs}"
     log "Status summary tests: ${passed}/${total} passed"
     [ "${passed}" -eq "${total}" ]

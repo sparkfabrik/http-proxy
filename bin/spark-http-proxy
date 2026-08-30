@@ -1202,7 +1202,7 @@ show_tailscale_summary() {
 
   # A shape this CLI does not know is not a summary: read leaves the missing
   # fields empty rather than failing, so the counts would shift a column.
-  if [[ -n "${extra}" ]] ||
+  if [[ "${state}" != "ok" && "${state}" != "aborted" ]] || [[ -n "${extra}" ]] ||
     ! [[ "${seen}" =~ ^[0-9]+$ && "${probed}" =~ ^[0-9]+$ &&
     "${forwarding}" =~ ^[0-9]+$ && "${hostnames}" =~ ^[0-9]+$ ]]; then
     echo "⚠️  Tailnet peer routing is enabled, but no discovery cycle has been recorded yet"
