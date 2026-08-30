@@ -2315,6 +2315,13 @@ main() {
 
     # Start stack and create test containers
     cd "$(dirname "$0")/.."
+
+    # The certificate directory is a bind mount. Left to compose, docker creates
+    # it owned by root and nothing the user runs can write a certificate into it,
+    # which is the state a machine is in only when the stack came up before the
+    # CLI ever did. The CLI creates it on load, so create it here too.
+    mkdir -p "${LOCAL_HOME:-${HOME}}/.local/spark/http-proxy/certs"
+
     log "Starting HTTP proxy stack..."
     docker compose up -d
     wait_with_message "$SLEEP_STACK_START" "for proxy services to initialize"
