@@ -48,10 +48,11 @@ three seconds, without a restart and without needing to know which case it is.
   is applied then.
 - **Both messages stop announcing a restart** that no longer happens, and say
   what is actually done.
-- **BREAKING for older container images only.** A CLI carrying this change and an
-  image predating it cannot run the scan. The certificate still applies, within
-  about thirty seconds or at the next start. The CLI detects this rather than
-  invoking a flag the old entrypoint would pass to Traefik.
+- **An older container image keeps the restart.** A CLI carrying this change and
+  an image predating it cannot run the scan, and a newly generated certificate is
+  referenced by nothing, so nothing would ever apply it. The CLI detects this and
+  restarts as it does today, rather than invoking a flag the old entrypoint would
+  pass through to Traefik.
 
 ## Capabilities
 

@@ -1253,6 +1253,202 @@ test_prompts_without_a_terminal() {
     [ "${passed}" -eq "${total}" ]
 }
 
+# Applying a certificate must not restart the running proxy: a restart drops
+# every connection on the machine, so generating one certificate would interrupt
+# every other site the developer has open.
+#
+# The restart survives in one place only. An image predating the entrypoint's
+# --tls-only guard cannot run the scan on its own, and the timer that re-reads
+# certificates only re-reads files auto-tls.yml already references, so a NEW
+# certificate on such an image would never go live. There the restart is still
+# the only way to apply it.
+test_certificates_apply_without_a_restart() {
+    local passed=0 total=0 body host started_before started_after out rc served
+    local stub home log caroot traefik_image scratch
+
+    host="cert-restart-test.spark.loc"
+
+    # The restart belongs to the shared helper, which reaches it only when the
+    # guard is absent. A restart in either command's own body is unconditional.
+    for body in generate_mkcert remove_cert; do
+        total=$((total + 1))
+        if awk "/^${body}\(\) \{/,/^\}/" bin/spark-http-proxy | grep -q "dc_cmd restart"; then
+            error "${body} restarts the proxy directly rather than through the helper"
+        else
+            success "${body} does not restart the proxy directly"
+            passed=$((passed + 1))
+        fi
+    done
+
+    # A stubbed docker stands in for both images, so the fallback is exercised
+    # without building one. STUB_GUARD decides whether the probe finds the guard.
+    stub="$(mktemp -d)"
+    log="${stub}/calls"
+    cat >"${stub}/docker" <<'STUB'
+#!/usr/bin/env bash
+for arg in "$@"; do
+    case "${arg}" in
+        restart) echo "restart" >>"${STUB_LOG}"; exit 0 ;;
+        --tls-only) echo "scan" >>"${STUB_LOG}"; exit 0 ;;
+    esac
+done
+case "$*" in
+    *grep*tls-only*) exit "${STUB_GUARD_MISSING:-0}" ;;
+    *ps*) [ -n "${STUB_NOT_RUNNING:-}" ] || echo "http-proxy"; exit 0 ;;
+esac
+exit 0
+STUB
+    chmod +x "${stub}/docker"
+
+    caroot="$(mkcert -CAROOT 2>/dev/null || true)"
+    home="$(mktemp -d)"
+
+    stub_generate() {
+        : >"${log}"
+        env PATH="${stub}:${PATH}" HOME="${home}" CAROOT="${caroot}" \
+            STUB_LOG="${log}" "$@" \
+            timeout 60 bin/spark-http-proxy generate-mkcert "${host}" </dev/null 2>&1
+    }
+
+    # An image carrying the guard: the scan runs and nothing is restarted.
+    out="$(stub_generate STUB_GUARD_MISSING=0)"
+    total=$((total + 1))
+    if grep -q "scan" "${log}" && ! grep -q "restart" "${log}"; then
+        success "a proxy carrying the guard has the scan run, not a restart"
+        passed=$((passed + 1))
+    else
+        error "expected a scan and no restart, the calls were: $(tr '\n' ' ' <"${log}")"
+    fi
+
+    total=$((total + 1))
+    if ! echo "${out}" | grep -qi "restarting"; then
+        success "the output does not announce a restart that did not happen"
+        passed=$((passed + 1))
+    else
+        error "the output announced a restart: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # An image predating the guard: the restart is still the only way to apply a
+    # new certificate, so it must still happen.
+    out="$(stub_generate STUB_GUARD_MISSING=1)"
+    total=$((total + 1))
+    if grep -q "restart" "${log}"; then
+        success "a proxy without the guard is still restarted, so the certificate applies"
+        passed=$((passed + 1))
+    else
+        error "a certificate was generated against an older proxy and never applied: $(tr '\n' ' ' <"${log}")"
+    fi
+
+    # The proxy is not running: nothing is applied, nothing fails, nothing starts.
+    rc=0; out="$(stub_generate STUB_NOT_RUNNING=1)" || rc=$?
+    total=$((total + 1))
+    if [ "${rc}" -eq 0 ] && ! grep -qE "restart|scan" "${log}"; then
+        success "generate-mkcert succeeds with the proxy stopped, touching nothing"
+        passed=$((passed + 1))
+    else
+        error "exit ${rc}, calls: $(tr '\n' ' ' <"${log}")"
+    fi
+
+    # The CLI's own error marker, not the word "error": mkcert prints a Firefox
+    # trust-store warning containing it, and matching that would pass or fail
+    # this assertion for a reason having nothing to do with the proxy.
+    total=$((total + 1))
+    if ! echo "${out}" | grep -q "❌"; then
+        success "a stopped proxy is not reported as a failure"
+        passed=$((passed + 1))
+    else
+        error "generating with the proxy stopped read as a failure: $(echo "${out}" | grep "❌" | tr '\n' ' ')"
+    fi
+
+    rm -rf "${stub}" "${home}"
+
+    # The scan with no certificates at all, in a throwaway container so the
+    # machine's own certificates are untouched. Removing the last certificate is
+    # exactly this case, and an early return here leaves every reference dangling.
+    traefik_image="$(docker inspect -f '{{.Config.Image}}' http-proxy 2>/dev/null || true)"
+    if [ -n "${traefik_image}" ]; then
+        scratch="$(mktemp -d)"
+        mkdir -p "${scratch}/certs" "${scratch}/dynamic"
+        printf 'stale content referencing a deleted certificate\n' >"${scratch}/dynamic/auto-tls.yml"
+        docker run --rm \
+            -v "$(pwd)/build/traefik/entrypoint.sh:/ep.sh:ro" \
+            -v "${scratch}/certs:/traefik/certs" \
+            -v "${scratch}/dynamic:/traefik/dynamic" \
+            --entrypoint sh "${traefik_image}" /ep.sh --tls-only >/dev/null 2>&1 || true
+
+        total=$((total + 1))
+        if ! grep -q "stale content" "${scratch}/dynamic/auto-tls.yml" 2>/dev/null; then
+            success "a scan finding no certificates clears the previous references"
+            passed=$((passed + 1))
+        else
+            error "removing the last certificate leaves auto-tls.yml pointing at deleted files"
+        fi
+        rm -rf "${scratch}"
+    fi
+
+    if ! command -v mkcert >/dev/null 2>&1; then
+        log "Certificate application tests: ${passed}/${total} passed (mkcert absent, live checks skipped)"
+        [ "${passed}" -eq "${total}" ]
+        return
+    fi
+
+    # The same thing again against the real stack, which is the only proof that
+    # the scan reaches Traefik rather than merely being invoked.
+    started_before="$(docker inspect -f '{{.State.StartedAt}}' http-proxy 2>/dev/null || true)"
+    if [ -z "${started_before}" ]; then
+        error "Cannot read the proxy's start time, is the stack running?"
+        return 1
+    fi
+
+    rc=0; out="$(timeout 60 bin/spark-http-proxy generate-mkcert "${host}" </dev/null 2>&1)" || rc=$?
+
+    total=$((total + 1))
+    if [ "${rc}" -eq 0 ]; then
+        success "generate-mkcert succeeds against the running stack"
+        passed=$((passed + 1))
+    else
+        error "generate-mkcert exited ${rc}: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    started_after="$(docker inspect -f '{{.State.StartedAt}}' http-proxy 2>/dev/null || true)"
+    total=$((total + 1))
+    if [ "${started_after}" = "${started_before}" ]; then
+        success "the proxy was not restarted to apply the certificate"
+        passed=$((passed + 1))
+    else
+        error "the proxy restarted: ${started_before} became ${started_after}"
+    fi
+
+    # Ten seconds, not the three that were measured: both measurements were
+    # first-poll hits, so three is the sampling interval rather than a figure.
+    served=""
+    for _ in $(seq 1 10); do
+        sleep 1
+        served="$(echo | timeout 5 openssl s_client -connect 127.0.0.1:443 -servername "${host}" 2>/dev/null |
+            openssl x509 -noout -subject 2>/dev/null || true)"
+        case "${served}" in
+            *"${host}"*) break ;;
+        esac
+    done
+
+    total=$((total + 1))
+    case "${served}" in
+        *"${host}"*)
+            success "the certificate is served within 10 seconds, with no restart"
+            passed=$((passed + 1))
+            ;;
+        *)
+            error "the certificate is not served after 10 seconds: ${served:-nothing presented}"
+            ;;
+    esac
+
+    rm -f "${CERT_DIR:-${HOME}/.local/spark/http-proxy/certs}/${host}.pem" \
+        "${CERT_DIR:-${HOME}/.local/spark/http-proxy/certs}/${host}-key.pem"
+
+    log "Certificate application tests: ${passed}/${total} passed"
+    [ "${passed}" -eq "${total}" ]
+}
+
 test_suggested_commands_are_pasteable() {
     local passed=0 total=0 offenders
 
@@ -2141,6 +2337,12 @@ main() {
     local prompts_passed=0
     test_prompts_without_a_terminal && prompts_passed=1
     [ "$prompts_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing that certificates apply without a restart..."
+    total=$((total + 1))
+    local cert_apply_passed=0
+    test_certificates_apply_without_a_restart && cert_apply_passed=1
+    [ "$cert_apply_passed" -eq 1 ] && passed=$((passed + 1))
 
     log "Testing that suggested commands can be pasted..."
     total=$((total + 1))

@@ -10,7 +10,8 @@ the proxy, which drops every connection on the machine.
 ### Requirement: Generating a certificate does not interrupt traffic
 
 Generating a certificate SHALL NOT restart the proxy and SHALL NOT drop
-connections to any hostname the proxy already serves.
+connections to any hostname the proxy already serves, whenever the running proxy
+can apply a certificate on request.
 
 #### Scenario: A request in flight survives certificate generation
 
@@ -32,9 +33,9 @@ connections to any hostname the proxy already serves.
 
 ### Requirement: Removing a certificate does not interrupt traffic
 
-Removing a certificate SHALL NOT restart the proxy, and the proxy SHALL stop
-referring to the removed certificate rather than pointing at a file that no
-longer exists.
+Removing a certificate SHALL NOT restart the proxy whenever the running proxy can
+apply a certificate on request, and the proxy SHALL stop referring to the removed
+certificate rather than pointing at a file that no longer exists.
 
 #### Scenario: A removed certificate stops being served
 
@@ -75,6 +76,7 @@ particular they SHALL NOT report restarting the proxy.
 #### Scenario: Generation reports applying, not restarting
 
 - **WHEN** a certificate is generated while the proxy is running
+- **AND** the running proxy can apply a certificate on request
 - **THEN** the output says the certificate is being applied
 - **AND** the output does not say the proxy is being restarted
 
@@ -84,15 +86,24 @@ particular they SHALL NOT report restarting the proxy.
 - **THEN** the output says the certificate applies when the proxy starts
 - **AND** the output does not read as a failure
 
-### Requirement: An older proxy image degrades quietly
+### Requirement: An older proxy image still applies the certificate
 
 A CLI carrying this behaviour SHALL work against a proxy image that predates it.
-It SHALL detect that the running proxy cannot apply a certificate on request,
-and SHALL NOT issue a command that the older proxy would misinterpret.
+It SHALL detect that the running proxy cannot apply a certificate on request, and
+SHALL then restart the proxy as it did before, because a newly generated
+certificate is referenced by nothing and so never becomes live on its own.
 
-#### Scenario: The running proxy cannot apply a certificate on request
+It SHALL NOT send the older proxy a command that proxy would misinterpret.
+
+#### Scenario: Generating against a proxy that cannot apply on request
 
 - **WHEN** a certificate is generated against a proxy image that predates this change
-- **THEN** the command exits successfully
+- **THEN** the proxy is restarted
+- **AND** the hostname is served with the new certificate
 - **AND** no unrecognised command is sent to the proxy
-- **AND** the output does not claim the certificate is already live
+
+#### Scenario: Removing against a proxy that cannot apply on request
+
+- **WHEN** a certificate is removed against a proxy image that predates this change
+- **THEN** the proxy is restarted
+- **AND** the proxy no longer refers to the removed certificate

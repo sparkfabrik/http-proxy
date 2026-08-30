@@ -84,9 +84,21 @@ The CLI therefore checks for the guard before using it:
 docker exec http-proxy grep -q -- '--tls-only' /entrypoint.sh
 ```
 
-When the guard is absent, nothing is sent to the container. The certificate still
-applies on Traefik's own timer, and at the next start regardless, so the command
-succeeds and says so without claiming the certificate is already live.
+**When the guard is absent the CLI restarts the proxy, exactly as it does today.**
+Doing nothing there would be a regression, and the tempting justification for it
+is wrong: Traefik's timer re-reads certificate files that `auto-tls.yml` already
+references, and a newly generated certificate is referenced by nothing. There is
+nothing for the timer to re-read, so the certificate would not go live in thirty
+seconds. It would not go live at all until something regenerated that file.
+
+So on an older image the restart is still the only thing that applies a new
+certificate. Users on such an image keep the behaviour they have, and the
+improvement reaches them when their image catches up.
+
+That also settles the message. There is no path on which a certificate is
+generated and not applied, so the command can say the certificate is applied
+without qualification, and no sentence has to describe a timer that is not doing
+what it claims.
 
 ## Decision: fix the empty-certificate case in the same change
 
@@ -115,9 +127,10 @@ writing the header with an empty certificate list.
   returns only after both files are on disk, and the scan reads them from the
   same bind mount, so there is no window where it sees the certificate without
   the key.
-- **The 30-second tail is still there when the guard is absent.** That is the
-  behaviour on an old image, and the message says the certificate will apply
-  shortly rather than promising it is live.
-- **Traefik's timer is not a documented interface.** Nothing in this change
-  depends on it: it is the fallback path, and the fallback is also covered by the
-  next start.
+- **The interruption remains on older images.** A user on an image predating the
+  guard still gets a restart when generating a certificate. That is what they
+  have today, so it is not a regression, and it ends when their image catches up.
+- **Traefik's timer is not a documented interface and nothing here depends on
+  it.** It explains why a regenerated certificate eventually applies unaided, but
+  no path in this change relies on it: the guard covers the fast path and the
+  restart covers the rest.
