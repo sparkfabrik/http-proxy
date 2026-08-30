@@ -353,7 +353,9 @@ Source: `.github/instructions/docker.instructions.md`
 
 **Check the registry, never memory.** Before adding or upgrading a dependency,
 look up what actually exists and take the newest stable release the runtime
-supports. For Go that is `https://proxy.golang.org/<module>/@latest`. A version
+supports. For Go that is `https://proxy.golang.org/<module>/@latest`; the
+candidate's own `go` directive must not exceed the toolchain declared in
+`go.mod`. A version
 recalled rather than checked is how a build ends up pinned to something that was
 never released.
 
