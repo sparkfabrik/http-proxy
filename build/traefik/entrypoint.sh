@@ -5,6 +5,13 @@
 CERTS_DIR="/traefik/certs"
 DYNAMIC_DIR="/traefik/dynamic"
 TLS_CONFIG_FILE="${DYNAMIC_DIR}/auto-tls.yml"
+# Built here and renamed into place, so a write that fails partway leaves the
+# previous configuration serving rather than a truncated file serving nothing.
+# The .tmp suffix is what dinghy-layer and tailscale-peers already use in this
+# directory. The pid is ours: a scan can run at container start and from the CLI
+# at the same time, and a shared name would have them build one file between
+# them and rename the result into place looking intact.
+TLS_CONFIG_TMP="${TLS_CONFIG_FILE}.$$.tmp"
 
 # Outside the tailscale-peer-*.yaml glob cleared below.
 DECLARATION_FILE="spark-http-proxy-declaration.yaml"
@@ -12,13 +19,20 @@ DECLARATION_FILE="spark-http-proxy-declaration.yaml"
 # Leaves no certificate referenced. Removing the last certificate lands here, and
 # without this the previous file survives, pointing at files that are gone.
 write_empty_tls_config() {
-    if ! cat > "${TLS_CONFIG_FILE}" << 'EOF'
+    if ! cat > "${TLS_CONFIG_TMP}" << 'EOF'
 # Auto-generated TLS configuration from user certificates
 tls:
   certificates: []
 EOF
     then
         echo "Failed to write ${TLS_CONFIG_FILE}" >&2
+        rm -f "${TLS_CONFIG_TMP}"
+        return 1
+    fi
+
+    if ! mv "${TLS_CONFIG_TMP}" "${TLS_CONFIG_FILE}"; then
+        echo "Failed to replace ${TLS_CONFIG_FILE}" >&2
+        rm -f "${TLS_CONFIG_TMP}"
         return 1
     fi
 
@@ -46,12 +60,19 @@ generate_tls_config() {
 
     echo "Found certificates, generating TLS configuration..."
 
-    # Start TLS configuration
-    cat > "${TLS_CONFIG_FILE}" << 'EOF'
+    # Start TLS configuration. Every write is checked: the file is what makes
+    # Traefik serve these certificates, and the CLI reads this function's status
+    # to decide whether to tell the user they were applied.
+    if ! cat > "${TLS_CONFIG_TMP}" << 'EOF'
 # Auto-generated TLS configuration from user certificates
 tls:
   certificates:
 EOF
+    then
+        echo "Failed to write ${TLS_CONFIG_FILE}" >&2
+        rm -f "${TLS_CONFIG_TMP}"
+        return 1
+    fi
 
     # Process each certificate file
     for cert_file in $cert_files; do
@@ -87,21 +108,31 @@ EOF
 
             if [ -n "$domains" ]; then
                 echo "  - Adding certificate: $(basename "$cert_file") for domains: $domains"
-                cat >> "${TLS_CONFIG_FILE}" << EOF
-    - certFile: ${cert_file}
-      keyFile: ${key_file}
-EOF
             else
                 echo "  - Adding certificate: $(basename "$cert_file") (auto-detect domains)"
-                cat >> "${TLS_CONFIG_FILE}" << EOF
+            fi
+
+            # Both branches wrote the same two lines, so they share one write
+            # and one check rather than carrying a copy of each.
+            if ! cat >> "${TLS_CONFIG_TMP}" << EOF
     - certFile: ${cert_file}
       keyFile: ${key_file}
 EOF
+            then
+                echo "Failed to add $(basename "$cert_file") to ${TLS_CONFIG_FILE}" >&2
+                rm -f "${TLS_CONFIG_TMP}"
+                return 1
             fi
         else
             echo "  - Warning: No key file found for certificate $(basename "$cert_file")"
         fi
     done
+
+    if ! mv "${TLS_CONFIG_TMP}" "${TLS_CONFIG_FILE}"; then
+        echo "Failed to replace ${TLS_CONFIG_FILE}" >&2
+        rm -f "${TLS_CONFIG_TMP}"
+        return 1
+    fi
 
     echo "TLS configuration written to ${TLS_CONFIG_FILE}"
 }

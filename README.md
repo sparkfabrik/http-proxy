@@ -551,14 +551,23 @@ mkcert -cert-file ~/.local/spark/http-proxy/certs/wildcard.loc.pem \
        "*.loc"
 ```
 
-**Note**: A certificate written by hand is not picked up on its own. It is applied the next time the proxy starts, or immediately with `docker compose restart`. Certificates made with `spark-http-proxy generate-mkcert` need neither.
+**Note**: A certificate written by hand is not picked up on its own. It is applied the next time the proxy starts, or immediately with `spark-http-proxy restart`. Certificates made with `spark-http-proxy generate-mkcert` need neither.
 
 #### Start the proxy
 
 The certificates will be automatically detected and loaded when you start the proxy:
 
 ```bash
-docker compose up -d
+spark-http-proxy start
+```
+
+Start it this way rather than with `docker compose` directly. The command creates the directories the proxy bind-mounts before the containers do. Docker creates a missing bind-mount source itself, owned by root, and a certificate directory owned by root cannot be written to afterwards.
+
+If a machine already reached that state, `generate-mkcert` fails with a permission error and peer routing stops with a `chmod` error. Take the directories back:
+
+```bash
+sudo chown -R "$(id -un)" ~/.local/spark/http-proxy/certs ~/.local/spark/http-proxy/state
+chmod 700 ~/.local/spark/http-proxy/state
 ```
 
 The Traefik container's entrypoint script scans `~/.local/spark/http-proxy/certs/` for certificate files and automatically generates the TLS configuration in `/traefik/dynamic/auto-tls.yml`. You don't need to manually edit any configuration files!

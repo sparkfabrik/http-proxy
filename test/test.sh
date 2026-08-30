@@ -1501,6 +1501,149 @@ STUB
             error "a scan that could not write reported success"
         fi
         rm -rf "${scratch}"
+
+        # The same, with a certificate present, which takes the other write path
+        # through the function. The files need no valid contents: the scan pairs
+        # them by name and the image carries no openssl to read them with.
+        scratch="$(mktemp -d)"
+        mkdir -p "${scratch}/certs" "${scratch}/dynamic"
+        touch "${scratch}/certs/probe.spark.loc.pem" "${scratch}/certs/probe.spark.loc-key.pem"
+        rc=0
+        docker run --rm \
+            -v "$(pwd)/build/traefik/entrypoint.sh:/ep.sh:ro" \
+            -v "${scratch}/certs:/traefik/certs:ro" \
+            -v "${scratch}/dynamic:/traefik/dynamic:ro" \
+            --entrypoint sh "${traefik_image}" /ep.sh --tls-only >/dev/null 2>&1 || rc=$?
+
+        total=$((total + 1))
+        if [ "${rc}" -ne 0 ]; then
+            success "a scan with certificates that cannot write exits non-zero"
+            passed=$((passed + 1))
+        else
+            error "a scan with certificates could not write and reported success"
+        fi
+        rm -rf "${scratch}"
+
+        # A write that fails partway leaves a file that is neither absent nor
+        # complete: the header and some entries, with the last one cut mid-path.
+        # That is the case the two above do not reach, because a read-only
+        # directory fails the very first write. A small tmpfs lets the header
+        # through and runs out during the loop.
+        scratch="$(mktemp -d)"
+        mkdir -p "${scratch}/certs"
+        local i
+        for i in $(seq 1 120); do
+            touch "${scratch}/certs/c${i}.spark.loc.pem" "${scratch}/certs/c${i}.spark.loc-key.pem"
+        done
+        rc=0
+        docker run --rm \
+            -v "$(pwd)/build/traefik/entrypoint.sh:/ep.sh:ro" \
+            -v "${scratch}/certs:/traefik/certs:ro" \
+            --tmpfs /traefik/dynamic:size=4k \
+            --entrypoint sh "${traefik_image}" /ep.sh --tls-only >/dev/null 2>&1 || rc=$?
+
+        total=$((total + 1))
+        if [ "${rc}" -ne 0 ]; then
+            success "a scan that fails partway through reports failure"
+            passed=$((passed + 1))
+        else
+            error "a scan that wrote a partial configuration reported success"
+        fi
+
+        # And the configuration that was already there survives it. The scan
+        # builds into a temporary file and renames it into place, so a write
+        # that runs out of space leaves the previous certificates serving
+        # rather than replacing them with a truncated file serving none.
+        total=$((total + 1))
+        if docker run --rm \
+            -v "$(pwd)/build/traefik/entrypoint.sh:/ep.sh:ro" \
+            -v "${scratch}/certs:/traefik/certs:ro" \
+            --tmpfs /traefik/dynamic:size=8k \
+            --entrypoint sh "${traefik_image}" -c '
+                printf "tls:\n  certificates:\n    - certFile: /previous.pem\n      keyFile: /previous-key.pem\n" \
+                    > /traefik/dynamic/auto-tls.yml
+                sh /ep.sh --tls-only >/dev/null 2>&1
+                grep -q previous.pem /traefik/dynamic/auto-tls.yml' 2>/dev/null; then
+            success "a failed scan leaves the previous configuration in place"
+            passed=$((passed + 1))
+        else
+            error "a failed scan destroyed the configuration that was already serving"
+        fi
+
+        # And the proxy still starts on top of that partial file. Traefik's file
+        # provider rejects the truncated document and carries on, which is a
+        # working proxy serving its default certificate.
+        # The run's own status as well as the line. A pipeline carries grep's
+        # status, so the entrypoint could print "Starting Traefik" and then fail
+        # to exec Traefik at all and this would still pass. Here the entrypoint
+        # execs "traefik --help", which exits 0 when it runs and 1 when it does
+        # not, so the status is the part that proves Traefik ran.
+        rc=0
+        out="$(docker run --rm \
+            -v "$(pwd)/build/traefik/entrypoint.sh:/ep.sh:ro" \
+            -v "${scratch}/certs:/traefik/certs:ro" \
+            --tmpfs /traefik/dynamic:size=4k \
+            --entrypoint sh "${traefik_image}" /ep.sh --help 2>&1)" || rc=$?
+
+        total=$((total + 1))
+        if [ "${rc}" -eq 0 ] && printf '%s\n' "${out}" | grep -q "Starting Traefik"; then
+            success "a partially written configuration still lets the proxy start"
+            passed=$((passed + 1))
+        else
+            error "a partial configuration stopped the proxy starting: exit ${rc}"
+        fi
+        rm -rf "${scratch}"
+
+        # Two scans at once. One can run at container start while another runs
+        # from the CLI, and a shared temporary name would have them build a
+        # single file between them and rename the result into place, where it
+        # looks intact and is not.
+        scratch="$(mktemp -d)"
+        mkdir -p "${scratch}/certs" "${scratch}/dynamic"
+        touch "${scratch}/certs/probe.spark.loc.pem" "${scratch}/certs/probe.spark.loc-key.pem"
+        out="$(docker run --rm \
+            -v "$(pwd)/build/traefik/entrypoint.sh:/ep.sh:ro" \
+            -v "${scratch}/certs:/traefik/certs:ro" \
+            -v "${scratch}/dynamic:/traefik/dynamic" \
+            --entrypoint sh "${traefik_image}" -c '
+                sh /ep.sh --tls-only >/dev/null 2>&1 &
+                sh /ep.sh --tls-only >/dev/null 2>&1 &
+                wait
+                echo "entries=$(grep -c certFile /traefik/dynamic/auto-tls.yml)"
+                echo "files=$(ls -A /traefik/dynamic | tr "\n" ",")"' 2>&1)"
+
+        total=$((total + 1))
+        if printf '%s\n' "${out}" | grep -q "entries=1" &&
+            printf '%s\n' "${out}" | grep -q "files=auto-tls.yml,$"; then
+            success "two scans at once leave one correct configuration"
+            passed=$((passed + 1))
+        else
+            error "concurrent scans left: $(printf '%s' "${out}" | tr '\n' ' ')"
+        fi
+        rm -rf "${scratch}"
+
+        # A failed write must not stop the proxy starting. Without a TLS
+        # configuration Traefik serves its default certificate, which is a
+        # working proxy; refusing to start would be a worse outcome than the
+        # failure it is reacting to.
+        scratch="$(mktemp -d)"
+        mkdir -p "${scratch}/certs" "${scratch}/dynamic"
+        touch "${scratch}/certs/probe.spark.loc.pem" "${scratch}/certs/probe.spark.loc-key.pem"
+        rc=0
+        out="$(docker run --rm \
+            -v "$(pwd)/build/traefik/entrypoint.sh:/entrypoint.sh:ro" \
+            -v "${scratch}/certs:/traefik/certs:ro" \
+            -v "${scratch}/dynamic:/traefik/dynamic:ro" \
+            --entrypoint sh "${traefik_image}" /entrypoint.sh --help 2>&1)" || rc=$?
+
+        total=$((total + 1))
+        if [ "${rc}" -eq 0 ] && printf '%s\n' "${out}" | grep -q "Starting Traefik"; then
+            success "a failed configuration write still lets the proxy start"
+            passed=$((passed + 1))
+        else
+            error "a failed write stopped the proxy starting: exit ${rc}"
+        fi
+        rm -rf "${scratch}"
     fi
 
     if [ -z "${mkcert_stub}" ] && ! command -v mkcert >/dev/null 2>&1; then
