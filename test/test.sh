@@ -1266,7 +1266,12 @@ test_certificates_apply_without_a_restart() {
     local passed=0 total=0 body host started_before started_after out rc served
     local stub home log caroot traefik_image scratch mkcert_stub certs
 
-    host="cert-restart-test.spark.loc"
+    # A per-run hostname. The live checks write into the machine's real
+    # certificate directory and delete what they wrote, so a fixed name would
+    # overwrite and then destroy a developer's certificate if they happened to
+    # hold one. The prefix is swept first, in case an interrupted run left one.
+    host="cert-restart-test-$$-${RANDOM}.spark.loc"
+    rm -f "${CERT_DIR:-${HOME}/.local/spark/http-proxy/certs}"/cert-restart-test-*.pem
 
     # CI runners carry no mkcert, and without one the CLI stops at certificate
     # generation and never reaches the code under test. What is under test is
@@ -1485,8 +1490,12 @@ STUB
     served=""
     for _ in $(seq 1 10); do
         sleep 1
+        # The SAN, not the subject. A real mkcert certificate's subject is
+        # "O=mkcert development certificate, OU=<user>@<host>" and carries no
+        # hostname at all, so matching the subject would only ever pass against
+        # the openssl stand-in used where mkcert is absent.
         served="$(echo | timeout 5 openssl s_client -connect 127.0.0.1:443 -servername "${host}" 2>/dev/null |
-            openssl x509 -noout -subject 2>/dev/null || true)"
+            openssl x509 -noout -ext subjectAltName 2>/dev/null || true)"
         case "${served}" in
             *"${host}"*) break ;;
         esac
