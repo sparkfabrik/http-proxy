@@ -1164,6 +1164,193 @@ STUB
 
 # tailscale-refresh-peers, exercised with a stub docker so no cycle can run:
 # what matters is that the command reports the truth when one does not.
+# What `status` reports about peer routing, across the four states a user can
+# be in. The summary file is the contract, so the fixtures are that file.
+test_status_summary() {
+    local passed=0 total=0
+    local home state defs
+    home="$(mktemp -d)"
+    state="${home}/.local/spark/http-proxy/state"
+    mkdir -p "${state}"
+
+    defs="bin/.status-summary-defs"
+    sed '/^case "$1" in/,$d' bin/spark-http-proxy >"${defs}"
+
+    run_status() {
+        HOME="${home}" DEFS="${defs}" bash -c '
+            . "${DEFS}"
+            TAILSCALE_ENABLED=true
+            show_tailscale_summary' 2>/dev/null
+    }
+
+    # Forwarding: the machines and what they serve.
+    printf 'ok\n9 4\npaolo-cto-arch-p620\tnest.spark.loc,react.spark.loc\n' >"${state}/tailscale-peers-summary"
+    : >"${state}/tailscale-peers.txt"
+    local out
+    out="$(run_status)"
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "paolo-cto-arch-p620" && echo "${out}" | grep -q "nest.spark.loc"; then
+        success "status names the forwarding machine and its hostnames"
+        passed=$((passed + 1))
+    else
+        error "status did not name the forwarding machine: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # Nothing forwarded, which is the usual state with one proxy on a tailnet.
+    # Nine machines were in the report and only four were probed; the other
+    # five were asleep and were never asked.
+    printf 'ok\n9 4\n' >"${state}/tailscale-peers-summary"
+    out="$(run_status)"
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "9"; then
+        success "status says how many machines were seen when nothing is forwarded"
+        passed=$((passed + 1))
+    else
+        error "status gave no evidence discovery ran: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # A machine that was never probed cannot be said to be running anything.
+    total=$((total + 1))
+    if echo "${out}" | grep -q "4 probed"; then
+        success "status distinguishes the machines it probed from those it did not"
+        passed=$((passed + 1))
+    else
+        error "status claimed something about every machine seen: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "✅"; then
+        success "nothing forwarded is reported as working"
+        passed=$((passed + 1))
+    else
+        error "nothing forwarded was not reported as working: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # A cycle that could not run is not a working state.
+    printf 'aborted\n9 4\npaolo-cto-arch-p620\tnest.spark.loc,react.spark.loc\n' >"${state}/tailscale-peers-summary"
+    out="$(run_status)"
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "✅"; then
+        error "an aborted cycle was reported with a success tick: $(echo "${out}" | tr '\n' ' ')"
+    else
+        success "an aborted cycle is not reported as working"
+        passed=$((passed + 1))
+    fi
+
+    # And it goes to stdout, since status produces one report.
+    # The message itself, not merely the lines under it, which always go to
+    # stdout and would make an emptiness check pass either way.
+    total=$((total + 1))
+    if HOME="${home}" DEFS="${defs}" bash -c '. "${DEFS}"; TAILSCALE_ENABLED=true; show_tailscale_summary' 2>/dev/null |
+        grep -q "could not read the local routing table"; then
+        success "the aborted message itself goes to stdout"
+        passed=$((passed + 1))
+    else
+        error "the aborted message went to stderr, so it splits from the rest of status"
+    fi
+
+    # The longest name on a real tailnet is longer than any width guessed in
+    # advance, and the columns have to line up when the feature is working.
+    printf 'ok\n2 2\nMac-Sparkfabrik-PaoloMainardi\tmacos.spark.loc\nshort\tapp.spark.loc\n' >"${state}/tailscale-peers-summary"
+    out="$(run_status)"
+
+    total=$((total + 1))
+    local col_long col_short
+    col_long="$(echo "${out}" | grep "macos.spark.loc" | grep -bo "macos.spark.loc" | cut -d: -f1)"
+    col_short="$(echo "${out}" | grep "app.spark.loc" | grep -bo "app.spark.loc" | cut -d: -f1)"
+    if [ -n "${col_long}" ] && [ "${col_long}" = "${col_short}" ]; then
+        success "the hostname column lines up whatever the machine names are"
+        passed=$((passed + 1))
+    else
+        error "the columns did not line up: hostnames start at ${col_long} and ${col_short}"
+    fi
+
+    # A summary in a shape this CLI does not know is not a summary. `read` is
+    # happy to leave a variable empty, so an unrecognised line would otherwise
+    # print counts silently shifted out of their columns.
+    printf 'ok\n9 1 2\npaolo-cto-arch-p620\tnest.spark.loc\n' >"${state}/tailscale-peers-summary"
+    out="$(run_status)"
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "no usable discovery record"; then
+        success "a summary in an unrecognised shape is treated as no cycle"
+        passed=$((passed + 1))
+    else
+        error "an unrecognised summary was rendered anyway: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # The token is part of the shape. Anything but the two known values would
+    # otherwise fall through to the success path with a tick on it.
+    printf 'garbage\n9 4\npaolo-cto-arch-p620\tnest.spark.loc\n' >"${state}/tailscale-peers-summary"
+    out="$(run_status)"
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "no usable discovery record"; then
+        success "an unknown state token is treated as no cycle"
+        passed=$((passed + 1))
+    else
+        error "an unknown state token was rendered anyway: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # An empty or truncated record must not take the whole command down: read
+    # returns non-zero at end of file, and the CLI runs under errexit.
+    : >"${state}/tailscale-peers-summary"
+    total=$((total + 1))
+    if run_status | grep -q "no usable discovery record"; then
+        success "an empty record is reported rather than ending the command"
+        passed=$((passed + 1))
+    else
+        error "an empty record did not produce the warning: $(run_status | tr '\n' ' ')"
+    fi
+
+    printf 'ok\n' >"${state}/tailscale-peers-summary"
+    total=$((total + 1))
+    if run_status | grep -q "no usable discovery record"; then
+        success "a record missing its counts is reported rather than ending the command"
+        passed=$((passed + 1))
+    else
+        error "a truncated record did not produce the warning: $(run_status | tr '\n' ' ')"
+    fi
+
+    # A count with a leading zero is not a shape this service writes, and bash
+    # reads it as octal, so 08 is both wrong and an arithmetic error.
+    printf 'ok\n9 08\n' >"${state}/tailscale-peers-summary"
+    total=$((total + 1))
+    if run_status 2>&1 | grep -q "no usable discovery record"; then
+        success "a count with a leading zero is treated as an unrecognised record"
+        passed=$((passed + 1))
+    else
+        error "a leading-zero count was rendered: $(run_status 2>&1 | tr '\n' ' ')"
+    fi
+
+    # A row is a name, a tab and its hostnames. Anything else is not a row this
+    # service writes, and counting it invents a machine or a hostname.
+    printf 'ok\n9 4\ndesktop\n' >"${state}/tailscale-peers-summary"
+    total=$((total + 1))
+    if run_status | grep -q "no usable discovery record"; then
+        success "a machine row without hostnames is an unrecognised record"
+        passed=$((passed + 1))
+    else
+        error "a row with no hostnames was counted: $(run_status | tr '\n' ' ')"
+    fi
+
+    printf 'ok\n9 4\ndesktop\tapp.loc\tsomething\n' >"${state}/tailscale-peers-summary"
+    total=$((total + 1))
+    if run_status | grep -q "no usable discovery record"; then
+        success "a machine row with an extra column is an unrecognised record"
+        passed=$((passed + 1))
+    else
+        error "a row with an extra column was rendered: $(run_status | tr '\n' ' ')"
+    fi
+
+    rm -rf "${home}" "${defs}"
+    log "Status summary tests: ${passed}/${total} passed"
+    [ "${passed}" -eq "${total}" ]
+}
+
 test_refresh_peers() {
     local passed=0 total=0
     local home stub_dir state
@@ -1824,6 +2011,12 @@ main() {
     local vpath_fallthrough_passed=0
     test_virtual_path_fallthrough && vpath_fallthrough_passed=1
     [ "$vpath_fallthrough_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing what status reports about peer routing..."
+    total=$((total + 1))
+    local status_summary_passed=0
+    test_status_summary && status_summary_passed=1
+    [ "$status_summary_passed" -eq 1 ] && passed=$((passed + 1))
 
     log "Testing tailscale-refresh-peers..."
     total=$((total + 1))

@@ -594,12 +594,66 @@ func (d *discovery) writeReport(report *Report) error {
 	if err := writeFileAtomically(renderedStateFile(d.config.StateFile), []byte(report.Render()), stateFilePermissions); err != nil {
 		return err
 	}
+	if err := d.writeSummary(report); err != nil {
+		return err
+	}
 	// Written last, so a reader that sees it change knows the rest is on disk.
 	return writeFileAtomically(completedStateFile(d.config.StateFile),
 		[]byte(report.UpdatedAt.Format(time.RFC3339Nano)), stateFilePermissions)
 }
 
 // writeFileAtomically writes through a temporary file and a rename.
+// writeSummary records what `status` reads: a state token, three counts, and a
+// line per forwarding machine. A cycle that probed nothing keeps the previous
+// counts and machines, because those routes are still in place.
+func (d *discovery) writeSummary(report *Report) error {
+	path := summaryStateFile(d.config.StateFile)
+
+	if report.LocalError != "" {
+		previous, err := os.ReadFile(path)
+		if err != nil {
+			// Absent means there is nothing to carry. Anything else means the
+			// routes are still in place and must not be written away as zeroes.
+			if !os.IsNotExist(err) {
+				return fmt.Errorf("failed to read the previous summary %s: %w", path, err)
+			}
+			return writeFileAtomically(path, []byte("aborted\n0 0\n"), stateFilePermissions)
+		}
+		return writeFileAtomically(path, retokenise(previous, "aborted"), stateFilePermissions)
+	}
+
+	var b strings.Builder
+	var probed int
+	var machines strings.Builder
+	for _, peer := range report.Peers {
+		// A skipped machine was never contacted, so nothing about it is known.
+		if peer.Status != statusSkipped {
+			probed++
+		}
+		if peer.Status != statusOK || len(peer.Hosts) == 0 {
+			continue
+		}
+		fmt.Fprintf(&machines, "%s\t%s\n", peer.Name, strings.Join(peer.Hosts, ","))
+	}
+
+	// Only what the rows cannot say. How many machines forward, and how many
+	// hostnames they carry, is the rows counted.
+	b.WriteString("ok\n")
+	fmt.Fprintf(&b, "%d %d\n", len(report.Peers), probed)
+	b.WriteString(machines.String())
+
+	return writeFileAtomically(path, []byte(b.String()), stateFilePermissions)
+}
+
+// retokenise replaces the state token on the first line, keeping the rest.
+func retokenise(summary []byte, token string) []byte {
+	_, rest, found := strings.Cut(string(summary), "\n")
+	if !found {
+		return []byte(token + "\n")
+	}
+	return []byte(token + "\n" + rest)
+}
+
 func writeFileAtomically(path string, data []byte, permissions os.FileMode) error {
 	temp := path + ".tmp"
 	if err := os.WriteFile(temp, data, permissions); err != nil {

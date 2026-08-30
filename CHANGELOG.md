@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `spark-http-proxy status` names the machines forwarding hostnames and what each serves, says how many machines were seen when nothing is forwarded, and reports a cycle that could not run as a warning rather than a success. Peer discovery writes `tailscale-peers-summary` in the state directory for it, so the CLI reads a datum rather than searching a report meant for people ([#142](https://github.com/sparkfabrik/http-proxy/issues/142))
 - Every base image is pinned to an immutable digest beside its version tag, so a rebuild of the same commit cannot pick up different image contents if a tag is repointed ([#139](https://github.com/sparkfabrik/http-proxy/issues/139))
 - The service image is built on `alpine:3.24` rather than `alpine:latest`, so a rebuild produces the same base until the pin is moved deliberately ([#123](https://github.com/sparkfabrik/http-proxy/issues/123))
 - Peer discovery writes `tailscale-peers-completed-at` in the state directory, holding the timestamp of the last completed cycle and nothing else. It is written after the state file and the report, so a reader that sees it change knows both are already on disk. `tailscale-refresh-peers` waits on it rather than searching the other two files for a timestamp ([#134](https://github.com/sparkfabrik/http-proxy/issues/134))
