@@ -1227,9 +1227,16 @@ show_tailscale_summary() {
 
   # How many machines forward, and how many hostnames they carry, is the rows
   # counted. The record does not state it twice, so it cannot disagree.
-  local forwarding=0 hostnames=0 commas name hosts
-  while IFS=$'\t' read -r name hosts; do
+  local forwarding=0 hostnames=0 commas name hosts trailing
+  while IFS=$'\t' read -r name hosts trailing; do
     [[ -z "${name}" ]] && continue
+    # A row is a name, one tab, and its hostnames. Anything else would have
+    # counted a machine or a hostname the service never wrote.
+    if [[ -z "${hosts}" || -n "${trailing}" ]]; then
+      echo "⚠️  Tailnet peer routing is enabled, but there is no usable discovery record"
+      echo "   💡 Detail: ${0} tailscale-peers"
+      return 0
+    fi
     forwarding=$((forwarding + 1))
     commas="${hosts//[^,]/}"
     hostnames=$((hostnames + ${#commas} + 1))
