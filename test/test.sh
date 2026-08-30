@@ -1287,8 +1287,10 @@ while [ "$#" -gt 0 ]; do
         *) domain="$1"; shift ;;
     esac
 done
+# stderr is deliberately not discarded: a stub that hides why it failed makes
+# the CLI look broken and says nothing about the machine it ran on.
 openssl req -x509 -newkey rsa:2048 -nodes -keyout "${key}" -out "${cert}" \
-    -days 1 -subj "/CN=${domain}" -addext "subjectAltName=DNS:${domain}" >/dev/null 2>&1
+    -days 1 -subj "/CN=${domain}" -addext "subjectAltName=DNS:${domain}" 2>&1 >/dev/null
 MKCERT
         chmod +x "${mkcert_stub}/mkcert"
     fi
@@ -1444,6 +1446,7 @@ STUB
         return 1
     fi
 
+    certs="${CERT_DIR:-${HOME}/.local/spark/http-proxy/certs}"
     rc=0
     out="$(env PATH="${mkcert_stub:+${mkcert_stub}:}${PATH}" \
         timeout 60 bin/spark-http-proxy generate-mkcert "${host}" </dev/null 2>&1)" || rc=$?
@@ -1453,7 +1456,11 @@ STUB
         success "generate-mkcert succeeds against the running stack"
         passed=$((passed + 1))
     else
+        # The directory is named because a stack brought up before it existed has
+        # docker create it, owned by root, and then nothing the user runs can
+        # write a certificate into it.
         error "generate-mkcert exited ${rc}: $(echo "${out}" | tr '\n' ' ')"
+        error "  certificate directory: $(ls -ld "${certs}" 2>&1), running as $(id -un)"
     fi
 
     started_after="$(docker inspect -f '{{.State.StartedAt}}' http-proxy 2>/dev/null || true)"
@@ -1491,7 +1498,6 @@ STUB
     # Removal, driven through the scan rather than through remove-cert, because
     # confirming a removal needs a terminal and CI has none. What remove-cert
     # does with the proxy is covered by the stubbed assertions above.
-    certs="${CERT_DIR:-${HOME}/.local/spark/http-proxy/certs}"
     rm -f "${certs}/${host}.pem" "${certs}/${host}-key.pem"
     docker exec http-proxy /entrypoint.sh --tls-only >/dev/null 2>&1 || true
 
