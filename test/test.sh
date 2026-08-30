@@ -1295,6 +1295,37 @@ test_status_summary() {
         error "an unknown state token was rendered anyway: $(echo "${out}" | tr '\n' ' ')"
     fi
 
+    # An empty or truncated record must not take the whole command down: read
+    # returns non-zero at end of file, and the CLI runs under errexit.
+    : >"${state}/tailscale-peers-summary"
+    total=$((total + 1))
+    if run_status | grep -q "no usable discovery record"; then
+        success "an empty record is reported rather than ending the command"
+        passed=$((passed + 1))
+    else
+        error "an empty record did not produce the warning: $(run_status | tr '\n' ' ')"
+    fi
+
+    printf 'ok\n' >"${state}/tailscale-peers-summary"
+    total=$((total + 1))
+    if run_status | grep -q "no usable discovery record"; then
+        success "a record missing its counts is reported rather than ending the command"
+        passed=$((passed + 1))
+    else
+        error "a truncated record did not produce the warning: $(run_status | tr '\n' ' ')"
+    fi
+
+    # A count with a leading zero is not a shape this service writes, and bash
+    # reads it as octal, so 08 is both wrong and an arithmetic error.
+    printf 'ok\n9 4 08 2\n' >"${state}/tailscale-peers-summary"
+    total=$((total + 1))
+    if run_status 2>&1 | grep -q "no usable discovery record"; then
+        success "a count with a leading zero is treated as an unrecognised record"
+        passed=$((passed + 1))
+    else
+        error "a leading-zero count was rendered: $(run_status 2>&1 | tr '\n' ' ')"
+    fi
+
     rm -rf "${home}" "${defs}"
     log "Status summary tests: ${passed}/${total} passed"
     [ "${passed}" -eq "${total}" ]

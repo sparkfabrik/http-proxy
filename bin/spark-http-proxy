@@ -1197,14 +1197,20 @@ show_tailscale_summary() {
   fi
 
   local state counts seen probed forwarding hostnames extra
-  { read -r state; read -r counts; } <"${TAILSCALE_SUMMARY_FILE}"
+  # read returns non-zero at end of file, and this script runs under errexit,
+  # so an empty or truncated record would otherwise end the whole command.
+  if ! { read -r state && read -r counts; } <"${TAILSCALE_SUMMARY_FILE}"; then
+    echo "⚠️  Tailnet peer routing is enabled, but there is no usable discovery record"
+    echo "   💡 Detail: ${0} tailscale-peers"
+    return 0
+  fi
   read -r seen probed forwarding hostnames extra <<<"${counts}"
 
   # A shape this CLI does not know is not a summary: read leaves the missing
   # fields empty rather than failing, so the counts would shift a column.
   if [[ "${state}" != "ok" && "${state}" != "aborted" ]] || [[ -n "${extra}" ]] ||
-    ! [[ "${seen}" =~ ^[0-9]+$ && "${probed}" =~ ^[0-9]+$ &&
-    "${forwarding}" =~ ^[0-9]+$ && "${hostnames}" =~ ^[0-9]+$ ]]; then
+    ! [[ "${seen}" =~ ^(0|[1-9][0-9]*)$ && "${probed}" =~ ^(0|[1-9][0-9]*)$ &&
+    "${forwarding}" =~ ^(0|[1-9][0-9]*)$ && "${hostnames}" =~ ^(0|[1-9][0-9]*)$ ]]; then
     echo "⚠️  Tailnet peer routing is enabled, but there is no usable discovery record"
     echo "   💡 Detail: ${0} tailscale-peers"
     return 0
