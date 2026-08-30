@@ -629,6 +629,49 @@ install_mkcert() {
   fi
 }
 
+# Applies a certificate change to the proxy. Traefik serves a certificate only
+# when the dynamic configuration references it, and that reference is written by
+# the container's certificate scan, so re-running the scan is what applies a
+# change. A restart applies it too, by running the same scan on the way up, but
+# it drops every connection on the machine.
+apply_certificates() {
+  if ! is_running http-proxy; then
+    log_info "The proxy is not running. The change applies when it starts."
+    return 0
+  fi
+
+  # An image predating the scan guard would pass --tls-only through to Traefik
+  # and run the rest of its entrypoint on the way, withdrawing peer routes.
+  # The guard itself, not the flag anywhere in the file. A mention in a comment
+  # would otherwise read as support and send the scan to an entrypoint that runs
+  # its whole body, withdrawing peer routes on the way. A pattern that stops
+  # matching costs a restart, which still applies the certificate, so the
+  # tighter test fails in the safe direction.
+  if docker exec http-proxy grep -qE '^[[:space:]]*if .*--tls-only' /entrypoint.sh 2>/dev/null; then
+    log_info "Applying certificates..."
+    # Only the proxy knows why a scan failed, and without its message the
+    # warning says a thing did not work and nothing about what to look at.
+    local scan_error
+    if ! scan_error="$(docker exec http-proxy /entrypoint.sh --tls-only 2>&1 >/dev/null)"; then
+      log_warning "The proxy did not apply the certificates"
+      if [ -n "${scan_error}" ]; then
+        log_info "The proxy said: ${scan_error}"
+      fi
+      log_info "Apply them with: $(basename "${0}") restart"
+      # The certificate exists but the proxy is not serving it, so the command
+      # did not do what it says it does. Reporting success here would have a
+      # script move on to a hostname that is not answering yet.
+      return 1
+    fi
+    return 0
+  fi
+
+  # An older proxy cannot run the scan on its own, and nothing references a new
+  # certificate, so nothing would ever apply it. The restart runs the scan.
+  log_info "Restarting Traefik to apply the change..."
+  dc_cmd restart traefik
+}
+
 generate_mkcert() {
   local domain="$1"
 
@@ -664,9 +707,7 @@ generate_mkcert() {
   log_info "  Certificate: ${CERT_DIR}/${safe_filename}.pem"
   log_info "  Private key: ${CERT_DIR}/${safe_filename}-key.pem"
 
-  # Restart traefik to apply new certificates.
-  log_info "Restarting Traefik to apply new certificates..."
-  dc_cmd restart traefik
+  apply_certificates
 }
 
 # Reject a certificate argument that names a path rather than a hostname.
@@ -802,11 +843,7 @@ remove_cert() {
   rm -f "${files[@]}"
   log_success "Removed ${#matched[@]} certificate(s): ${matched[*]}"
 
-  # Restart traefik so it stops serving the removed certificates.
-  if is_running http-proxy; then
-    log_info "Restarting Traefik to apply the change..."
-    dc_cmd restart traefik
-  fi
+  apply_certificates
 }
 
 open_dashboard() {

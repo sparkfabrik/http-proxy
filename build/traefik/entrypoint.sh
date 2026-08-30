@@ -9,12 +9,29 @@ TLS_CONFIG_FILE="${DYNAMIC_DIR}/auto-tls.yml"
 # Outside the tailscale-peer-*.yaml glob cleared below.
 DECLARATION_FILE="spark-http-proxy-declaration.yaml"
 
+# Leaves no certificate referenced. Removing the last certificate lands here, and
+# without this the previous file survives, pointing at files that are gone.
+write_empty_tls_config() {
+    if ! cat > "${TLS_CONFIG_FILE}" << 'EOF'
+# Auto-generated TLS configuration from user certificates
+tls:
+  certificates: []
+EOF
+    then
+        echo "Failed to write ${TLS_CONFIG_FILE}" >&2
+        return 1
+    fi
+
+    echo "No certificates to reference, wrote an empty list to ${TLS_CONFIG_FILE}"
+}
+
 generate_tls_config() {
     echo "Scanning for certificates in ${CERTS_DIR}..."
 
     # Check if certificates directory exists and has files
     if [ ! -d "${CERTS_DIR}" ]; then
         echo "No certificates directory found at ${CERTS_DIR}"
+        write_empty_tls_config
         return
     fi
 
@@ -23,6 +40,7 @@ generate_tls_config() {
 
     if [ -z "$cert_files" ]; then
         echo "No certificate files found in ${CERTS_DIR}"
+        write_empty_tls_config
         return
     fi
 
@@ -115,6 +133,16 @@ remove_peer_config() {
         rm -f "${peer_config}"
     done
 }
+
+# Re-run the certificate scan on its own, for a proxy that is already up. The
+# CLI uses this to apply a certificate without restarting and dropping every
+# connection on the machine.
+if [ "${1:-}" = "--tls-only" ]; then
+    # The exit status is what the CLI reads to decide whether to tell the user
+    # the certificates were applied, so it must be the scan's, not a constant.
+    generate_tls_config
+    exit $?
+fi
 
 # Declare this proxy to other machines
 write_proxy_declaration

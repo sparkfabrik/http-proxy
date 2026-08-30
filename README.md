@@ -513,7 +513,8 @@ The `generate-mkcert` command automatically:
 - **Installs mkcert** if not already available (using Homebrew on macOS)
 - **Creates the certificate directory** (`~/.local/spark/http-proxy/certs`)
 - **Generates certificates** with safe filenames for wildcard domains
-- **Restarts Traefik** to load the new certificates immediately
+- **Applies the certificate** to the running proxy, without restarting it and
+  without dropping connections to anything else it is serving
 
 #### Listing and Removing Certificates
 
@@ -523,7 +524,7 @@ List the certificates currently installed in the certificate directory:
 spark-http-proxy list-certs
 ```
 
-Remove certificate pairs for one or more domains. This deletes both the `.pem` and `-key.pem` files and restarts Traefik so it stops serving the removed certificates:
+Remove certificate pairs for one or more domains. This deletes both the `.pem` and `-key.pem` files and applies the change to the running proxy, which stops serving the removed certificates without being restarted:
 
 ```bash
 spark-http-proxy remove-cert "nginx.spark.loc"
@@ -550,7 +551,7 @@ mkcert -cert-file ~/.local/spark/http-proxy/certs/wildcard.loc.pem \
        "*.loc"
 ```
 
-**Note**: When using manual generation, you'll need to restart the proxy to load new certificates: `docker compose restart`
+**Note**: A certificate written by hand is not picked up on its own. It is applied the next time the proxy starts, or immediately with `docker compose restart`. Certificates made with `spark-http-proxy generate-mkcert` need neither.
 
 #### Start the proxy
 
