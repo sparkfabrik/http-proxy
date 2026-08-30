@@ -1264,9 +1264,34 @@ test_prompts_without_a_terminal() {
 # the only way to apply it.
 test_certificates_apply_without_a_restart() {
     local passed=0 total=0 body host started_before started_after out rc served
-    local stub home log caroot traefik_image scratch
+    local stub home log caroot traefik_image scratch mkcert_stub certs
 
     host="cert-restart-test.spark.loc"
+
+    # CI runners carry no mkcert, and without one the CLI stops at certificate
+    # generation and never reaches the code under test. What is under test is
+    # what the CLI does with the proxy once a certificate exists, not how the
+    # certificate is made, so openssl stands in where mkcert is missing.
+    mkcert_stub=""
+    if ! command -v mkcert >/dev/null 2>&1; then
+        mkcert_stub="$(mktemp -d)"
+        cat >"${mkcert_stub}/mkcert" <<'MKCERT'
+#!/usr/bin/env bash
+cert=""; key=""; domain=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -install) exit 0 ;;
+        -CAROOT) echo "${TMPDIR:-/tmp}"; exit 0 ;;
+        -cert-file) cert="$2"; shift 2 ;;
+        -key-file) key="$2"; shift 2 ;;
+        *) domain="$1"; shift ;;
+    esac
+done
+openssl req -x509 -newkey rsa:2048 -nodes -keyout "${key}" -out "${cert}" \
+    -days 1 -subj "/CN=${domain}" -addext "subjectAltName=DNS:${domain}" >/dev/null 2>&1
+MKCERT
+        chmod +x "${mkcert_stub}/mkcert"
+    fi
 
     # The restart belongs to the shared helper, which reaches it only when the
     # guard is absent. A restart in either command's own body is unconditional.
@@ -1313,8 +1338,8 @@ STUB
 
     stub_generate() {
         : >"${log}"
-        env PATH="${stub}:${PATH}" HOME="${home}" CAROOT="${caroot}" \
-            STUB_LOG="${log}" "$@" \
+        env PATH="${stub}:${mkcert_stub:+${mkcert_stub}:}${PATH}" HOME="${home}" \
+            CAROOT="${caroot}" STUB_LOG="${log}" "$@" \
             timeout 60 bin/spark-http-proxy generate-mkcert "${host}" </dev/null 2>&1
     }
 
@@ -1405,8 +1430,8 @@ STUB
         rm -rf "${scratch}"
     fi
 
-    if ! command -v mkcert >/dev/null 2>&1; then
-        log "Certificate application tests: ${passed}/${total} passed (mkcert absent, live checks skipped)"
+    if [ -z "${mkcert_stub}" ] && ! command -v mkcert >/dev/null 2>&1; then
+        log "Certificate application tests: ${passed}/${total} passed (no certificate tool, live checks skipped)"
         [ "${passed}" -eq "${total}" ]
         return
     fi
@@ -1419,7 +1444,9 @@ STUB
         return 1
     fi
 
-    rc=0; out="$(timeout 60 bin/spark-http-proxy generate-mkcert "${host}" </dev/null 2>&1)" || rc=$?
+    rc=0
+    out="$(env PATH="${mkcert_stub:+${mkcert_stub}:}${PATH}" \
+        timeout 60 bin/spark-http-proxy generate-mkcert "${host}" </dev/null 2>&1)" || rc=$?
 
     total=$((total + 1))
     if [ "${rc}" -eq 0 ]; then
@@ -1461,8 +1488,45 @@ STUB
             ;;
     esac
 
-    rm -f "${CERT_DIR:-${HOME}/.local/spark/http-proxy/certs}/${host}.pem" \
-        "${CERT_DIR:-${HOME}/.local/spark/http-proxy/certs}/${host}-key.pem"
+    # Removal, driven through the scan rather than through remove-cert, because
+    # confirming a removal needs a terminal and CI has none. What remove-cert
+    # does with the proxy is covered by the stubbed assertions above.
+    certs="${CERT_DIR:-${HOME}/.local/spark/http-proxy/certs}"
+    rm -f "${certs}/${host}.pem" "${certs}/${host}-key.pem"
+    docker exec http-proxy /entrypoint.sh --tls-only >/dev/null 2>&1 || true
+
+    served=""
+    for _ in $(seq 1 10); do
+        sleep 1
+        served="$(echo | timeout 5 openssl s_client -connect 127.0.0.1:443 -servername "${host}" 2>/dev/null |
+            openssl x509 -noout -ext subjectAltName 2>/dev/null || true)"
+        case "${served}" in
+            *"${host}"*) ;;
+            *) break ;;
+        esac
+    done
+
+    total=$((total + 1))
+    case "${served}" in
+        *"${host}"*)
+            error "the removed certificate is still served after 10 seconds"
+            ;;
+        *)
+            success "a removed certificate stops being served, with no restart"
+            passed=$((passed + 1))
+            ;;
+    esac
+
+    started_after="$(docker inspect -f '{{.State.StartedAt}}' http-proxy 2>/dev/null || true)"
+    total=$((total + 1))
+    if [ "${started_after}" = "${started_before}" ]; then
+        success "the proxy was not restarted at any point in this test"
+        passed=$((passed + 1))
+    else
+        error "the proxy restarted during the test: ${started_before} became ${started_after}"
+    fi
+
+    [ -n "${mkcert_stub}" ] && rm -rf "${mkcert_stub}"
 
     log "Certificate application tests: ${passed}/${total} passed"
     [ "${passed}" -eq "${total}" ]
