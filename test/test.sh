@@ -1286,6 +1286,10 @@ test_certificates_apply_without_a_restart() {
     log="${stub}/calls"
     cat >"${stub}/docker" <<'STUB'
 #!/usr/bin/env bash
+# The guard probe carries --tls-only too, so it is matched before the scan.
+case "$*" in
+    *grep*--tls-only*) exit "${STUB_GUARD_MISSING:-0}" ;;
+esac
 for arg in "$@"; do
     case "${arg}" in
         restart) echo "restart" >>"${STUB_LOG}"; exit 0 ;;
@@ -1293,7 +1297,6 @@ for arg in "$@"; do
     esac
 done
 case "$*" in
-    *grep*tls-only*) exit "${STUB_GUARD_MISSING:-0}" ;;
     *ps*) [ -n "${STUB_NOT_RUNNING:-}" ] || echo "http-proxy"; exit 0 ;;
 esac
 exit 0

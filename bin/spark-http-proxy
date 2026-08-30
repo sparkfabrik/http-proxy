@@ -629,6 +629,34 @@ install_mkcert() {
   fi
 }
 
+# Applies a certificate change to the proxy. Traefik serves a certificate only
+# when the dynamic configuration references it, and that reference is written by
+# the container's certificate scan, so re-running the scan is what applies a
+# change. A restart applies it too, by running the same scan on the way up, but
+# it drops every connection on the machine.
+apply_certificates() {
+  if ! is_running http-proxy; then
+    log_info "The proxy is not running. The change applies when it starts."
+    return 0
+  fi
+
+  # An image predating the scan guard would pass --tls-only through to Traefik
+  # and run the rest of its entrypoint on the way, withdrawing peer routes.
+  if docker exec http-proxy grep -q -- '--tls-only' /entrypoint.sh 2>/dev/null; then
+    log_info "Applying certificates..."
+    if ! docker exec http-proxy /entrypoint.sh --tls-only >/dev/null 2>&1; then
+      log_warning "The proxy did not apply the certificates"
+      log_info "Apply them with: $(basename "${0}") restart"
+    fi
+    return 0
+  fi
+
+  # An older proxy cannot run the scan on its own, and nothing references a new
+  # certificate, so nothing would ever apply it. The restart runs the scan.
+  log_info "Restarting Traefik to apply the change..."
+  dc_cmd restart traefik
+}
+
 generate_mkcert() {
   local domain="$1"
 
@@ -664,9 +692,7 @@ generate_mkcert() {
   log_info "  Certificate: ${CERT_DIR}/${safe_filename}.pem"
   log_info "  Private key: ${CERT_DIR}/${safe_filename}-key.pem"
 
-  # Restart traefik to apply new certificates.
-  log_info "Restarting Traefik to apply new certificates..."
-  dc_cmd restart traefik
+  apply_certificates
 }
 
 # Reject a certificate argument that names a path rather than a hostname.
@@ -802,11 +828,7 @@ remove_cert() {
   rm -f "${files[@]}"
   log_success "Removed ${#matched[@]} certificate(s): ${matched[*]}"
 
-  # Restart traefik so it stops serving the removed certificates.
-  if is_running http-proxy; then
-    log_info "Restarting Traefik to apply the change..."
-    dc_cmd restart traefik
-  fi
+  apply_certificates
 }
 
 open_dashboard() {
