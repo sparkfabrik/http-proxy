@@ -46,12 +46,18 @@ generate_tls_config() {
 
     echo "Found certificates, generating TLS configuration..."
 
-    # Start TLS configuration
-    cat > "${TLS_CONFIG_FILE}" << 'EOF'
+    # Start TLS configuration. Every write is checked: the file is what makes
+    # Traefik serve these certificates, and the CLI reads this function's status
+    # to decide whether to tell the user they were applied.
+    if ! cat > "${TLS_CONFIG_FILE}" << 'EOF'
 # Auto-generated TLS configuration from user certificates
 tls:
   certificates:
 EOF
+    then
+        echo "Failed to write ${TLS_CONFIG_FILE}" >&2
+        return 1
+    fi
 
     # Process each certificate file
     for cert_file in $cert_files; do
@@ -87,16 +93,19 @@ EOF
 
             if [ -n "$domains" ]; then
                 echo "  - Adding certificate: $(basename "$cert_file") for domains: $domains"
-                cat >> "${TLS_CONFIG_FILE}" << EOF
-    - certFile: ${cert_file}
-      keyFile: ${key_file}
-EOF
             else
                 echo "  - Adding certificate: $(basename "$cert_file") (auto-detect domains)"
-                cat >> "${TLS_CONFIG_FILE}" << EOF
+            fi
+
+            # Both branches wrote the same two lines, so they share one write
+            # and one check rather than carrying a copy of each.
+            if ! cat >> "${TLS_CONFIG_FILE}" << EOF
     - certFile: ${cert_file}
       keyFile: ${key_file}
 EOF
+            then
+                echo "Failed to add $(basename "$cert_file") to ${TLS_CONFIG_FILE}" >&2
+                return 1
             fi
         else
             echo "  - Warning: No key file found for certificate $(basename "$cert_file")"

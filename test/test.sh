@@ -1501,6 +1501,49 @@ STUB
             error "a scan that could not write reported success"
         fi
         rm -rf "${scratch}"
+
+        # The same, with a certificate present, which takes the other write path
+        # through the function. The files need no valid contents: the scan pairs
+        # them by name and the image carries no openssl to read them with.
+        scratch="$(mktemp -d)"
+        mkdir -p "${scratch}/certs" "${scratch}/dynamic"
+        touch "${scratch}/certs/probe.spark.loc.pem" "${scratch}/certs/probe.spark.loc-key.pem"
+        rc=0
+        docker run --rm \
+            -v "$(pwd)/build/traefik/entrypoint.sh:/ep.sh:ro" \
+            -v "${scratch}/certs:/traefik/certs:ro" \
+            -v "${scratch}/dynamic:/traefik/dynamic:ro" \
+            --entrypoint sh "${traefik_image}" /ep.sh --tls-only >/dev/null 2>&1 || rc=$?
+
+        total=$((total + 1))
+        if [ "${rc}" -ne 0 ]; then
+            success "a scan with certificates that cannot write exits non-zero"
+            passed=$((passed + 1))
+        else
+            error "a scan with certificates could not write and reported success"
+        fi
+        rm -rf "${scratch}"
+
+        # A failed write must not stop the proxy starting. Without a TLS
+        # configuration Traefik serves its default certificate, which is a
+        # working proxy; refusing to start would be a worse outcome than the
+        # failure it is reacting to.
+        scratch="$(mktemp -d)"
+        mkdir -p "${scratch}/certs" "${scratch}/dynamic"
+        touch "${scratch}/certs/probe.spark.loc.pem" "${scratch}/certs/probe.spark.loc-key.pem"
+        total=$((total + 1))
+        if docker run --rm \
+            -v "$(pwd)/build/traefik/entrypoint.sh:/entrypoint.sh:ro" \
+            -v "${scratch}/certs:/traefik/certs:ro" \
+            -v "${scratch}/dynamic:/traefik/dynamic:ro" \
+            --entrypoint sh "${traefik_image}" /entrypoint.sh --help 2>&1 |
+            grep -q "Starting Traefik"; then
+            success "a failed configuration write still lets the proxy start"
+            passed=$((passed + 1))
+        else
+            error "a failed configuration write stopped the proxy starting"
+        fi
+        rm -rf "${scratch}"
     fi
 
     if [ -z "${mkcert_stub}" ] && ! command -v mkcert >/dev/null 2>&1; then

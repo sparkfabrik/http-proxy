@@ -563,6 +563,13 @@ spark-http-proxy start
 
 Start it this way rather than with `docker compose` directly. The command creates the directories the proxy bind-mounts before the containers do. Docker creates a missing bind-mount source itself, owned by root, and a certificate directory owned by root cannot be written to afterwards.
 
+If a machine already reached that state, `generate-mkcert` fails with a permission error and peer routing stops with a `chmod` error. Take the directories back:
+
+```bash
+sudo chown -R "$(id -un)" ~/.local/spark/http-proxy/certs ~/.local/spark/http-proxy/state
+chmod 700 ~/.local/spark/http-proxy/state
+```
+
 The Traefik container's entrypoint script scans `~/.local/spark/http-proxy/certs/` for certificate files and automatically generates the TLS configuration in `/traefik/dynamic/auto-tls.yml`. You don't need to manually edit any configuration files!
 
 Now your `.loc` domains will use trusted certificates! 🎉
