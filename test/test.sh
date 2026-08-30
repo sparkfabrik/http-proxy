@@ -1166,6 +1166,25 @@ STUB
 # what matters is that the command reports the truth when one does not.
 # What `status` reports about peer routing, across the four states a user can
 # be in. The summary file is the contract, so the fixtures are that file.
+# Commands printed for a reader to copy must survive being pasted. Angle
+# brackets are shell redirections, so a placeholder in a suggested command is a
+# syntax error rather than a hint.
+test_suggested_commands_are_pasteable() {
+    local passed=0 total=0 offenders
+
+    total=$((total + 1))
+    offenders="$(grep -nE '(echo|log_[a-z]+|printf).*(generate-mkcert|remove-cert|start-with-tailscale|tailscale-refresh-peers)[^"]*<[a-z_-]+>' bin/spark-http-proxy || true)"
+    if [ -z "${offenders}" ]; then
+        success "suggested commands carry no shell metacharacters"
+        passed=$((passed + 1))
+    else
+        error "a suggested command would break when pasted: ${offenders}"
+    fi
+
+    log "Pasteable command tests: ${passed}/${total} passed"
+    [ "${passed}" -eq "${total}" ]
+}
+
 test_status_summary() {
     local passed=0 total=0
     local home state defs
@@ -1195,6 +1214,16 @@ test_status_summary() {
         passed=$((passed + 1))
     else
         error "status did not name the forwarding machine: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # The advice sits beside the hostnames it applies to, and has to survive
+    # being copied: a placeholder pastes as arguments or as a redirection.
+    total=$((total + 1))
+    if echo "${out}" | grep -q "generate-mkcert 'nest.spark.loc'"; then
+        success "status shows a certificate command for a hostname it just listed"
+        passed=$((passed + 1))
+    else
+        error "status gave no usable certificate command: $(echo "${out}" | tr '\n' ' ')"
     fi
 
     # Nothing forwarded, which is the usual state with one proxy on a tailnet.
@@ -1228,6 +1257,16 @@ test_status_summary() {
         error "nothing forwarded was not reported as working: $(echo "${out}" | tr '\n' ' ')"
     fi
 
+    # On a tailnet with one proxy this is the permanent state, so certificate
+    # advice here would print on every status forever.
+    total=$((total + 1))
+    if echo "${out}" | grep -q "generate-mkcert"; then
+        error "status advised on certificates with nothing forwarded: $(echo "${out}" | tr '\n' ' ')"
+    else
+        success "nothing forwarded means no certificate advice"
+        passed=$((passed + 1))
+    fi
+
     # A cycle that could not run is not a working state.
     printf 'aborted\n9 4\npaolo-cto-arch-p620\tnest.spark.loc,react.spark.loc\n' >"${state}/tailscale-peers-summary"
     out="$(run_status)"
@@ -1259,8 +1298,9 @@ test_status_summary() {
 
     total=$((total + 1))
     local col_long col_short
-    col_long="$(echo "${out}" | grep "macos.spark.loc" | grep -bo "macos.spark.loc" | cut -d: -f1)"
-    col_short="$(echo "${out}" | grep "app.spark.loc" | grep -bo "app.spark.loc" | cut -d: -f1)"
+    # Only the table rows: the example command names a hostname too.
+    col_long="$(echo "${out}" | grep -v generate-mkcert | grep "macos.spark.loc" | grep -bo "macos.spark.loc" | cut -d: -f1)"
+    col_short="$(echo "${out}" | grep -v generate-mkcert | grep "app.spark.loc" | grep -bo "app.spark.loc" | cut -d: -f1)"
     if [ -n "${col_long}" ] && [ "${col_long}" = "${col_short}" ]; then
         success "the hostname column lines up whatever the machine names are"
         passed=$((passed + 1))
@@ -2011,6 +2051,12 @@ main() {
     local vpath_fallthrough_passed=0
     test_virtual_path_fallthrough && vpath_fallthrough_passed=1
     [ "$vpath_fallthrough_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing that suggested commands can be pasted..."
+    total=$((total + 1))
+    local pasteable_passed=0
+    test_suggested_commands_are_pasteable && pasteable_passed=1
+    [ "$pasteable_passed" -eq 1 ] && passed=$((passed + 1))
 
     log "Testing what status reports about peer routing..."
     total=$((total + 1))

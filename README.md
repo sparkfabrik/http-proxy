@@ -968,6 +968,38 @@ re-read it would find fresh routes from machines already known while missing a
 machine that came online two minutes ago. Rewriting the document first makes the
 command mean the same thing on both platforms.
 
+**HTTPS needs a certificate on this machine.** TLS terminates on the machine the
+browser is talking to, so the peer's certificate is never presented and never
+matters. What matters is whether this machine holds a certificate covering the
+forwarded hostname.
+
+When it does not, Traefik serves its default certificate and the browser refuses:
+
+```console
+$ curl https://macos.test.spark.loc/
+* SSL: no alternative certificate subject name matches target hostname 'macos.test.spark.loc'
+*   subject: CN=TRAEFIK DEFAULT CERT
+```
+
+The fix is the usual command, run on the machine doing the reaching:
+
+```bash
+spark-http-proxy generate-mkcert 'macos.test.spark.loc'
+```
+
+**A wildcard covers exactly one label, which is the part that surprises people.**
+Holding `*.spark.loc` is not enough for `macos.test.spark.loc`, because that name
+has an extra label. Observed against a machine holding `*.spark.loc`:
+
+| Hostname               | Certificate served |
+| ---------------------- | ------------------ |
+| `test123.spark.loc`    | `*.spark.loc`      |
+| `a.b.spark.loc`        | Traefik's default  |
+| `macos.test.spark.loc` | Traefik's default  |
+
+So a nested name needs either its own certificate or a wildcard at its own level,
+`*.test.spark.loc`, which then covers every name directly under it.
+
 **Turn it off again** without stopping the proxy:
 
 ```bash
