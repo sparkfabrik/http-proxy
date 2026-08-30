@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -117,8 +118,7 @@ func TestTheCycleTimestampIsReadableByTheCLI(t *testing.T) {
 		t.Fatalf("writing the report: %v", err)
 	}
 
-	const cliExpression = `s/.*"updatedAt"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p`
-	out, err := exec.Command("sed", "-n", cliExpression, d.config.StateFile).Output()
+	out, err := exec.Command("sed", "-n", cliExpression(t), d.config.StateFile).Output()
 	if err != nil {
 		t.Fatalf("running the CLI expression: %v", err)
 	}
@@ -142,4 +142,20 @@ func stateFileHead(t *testing.T, path string) string {
 		raw = raw[:200]
 	}
 	return string(raw)
+}
+
+// cliExpression is read out of the CLI rather than restated here, so editing
+// one without the other fails this test instead of going unnoticed.
+func cliExpression(t *testing.T) string {
+	t.Helper()
+	const script = "../../bin/spark-http-proxy"
+	raw, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatalf("reading %s: %v", script, err)
+	}
+	matches := regexp.MustCompile(`sed -n '([^']*"updatedAt"[^']*)'`).FindAllStringSubmatch(string(raw), -1)
+	if len(matches) != 1 {
+		t.Fatalf("expected one updatedAt expression in %s, found %d", script, len(matches))
+	}
+	return matches[0][1]
 }
