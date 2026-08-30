@@ -188,3 +188,38 @@ func TestACompletedCycleWaitsTheInterval(t *testing.T) {
 		t.Fatalf("a completed cycle was retried early, after %s, so the fast retry is not limited to failures", gap)
 	}
 }
+
+func TestTheBackoffStaysBoundedHoweverLongTheFailureLasts(t *testing.T) {
+	const interval = time.Minute
+	retry := localRetryInitial
+
+	// Far beyond the point where doubling a time.Duration overflows int64,
+	// which it does after 34 consecutive failures from a two second start.
+	for cycle := 1; cycle <= 1000; cycle++ {
+		var wait time.Duration
+		wait, retry = nextWait(true, retry, interval)
+
+		if wait <= 0 {
+			t.Fatalf("cycle %d: wait is %v, so the timer fires at once and the loop spins", cycle, wait)
+		}
+		if wait > interval {
+			t.Fatalf("cycle %d: wait is %v, longer than the refresh interval %v", cycle, wait, interval)
+		}
+	}
+}
+
+func TestTheBackoffStartsOverAfterASuccess(t *testing.T) {
+	const interval = time.Minute
+	retry := localRetryInitial
+	for range 5 {
+		_, retry = nextWait(true, retry, interval)
+	}
+
+	wait, next := nextWait(false, retry, interval)
+	if wait != interval {
+		t.Errorf("a completed cycle waited %v rather than the interval %v", wait, interval)
+	}
+	if next != localRetryInitial {
+		t.Errorf("the backoff carried %v into the next failure instead of starting over", next)
+	}
+}
