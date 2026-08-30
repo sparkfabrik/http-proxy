@@ -1524,6 +1524,49 @@ STUB
         fi
         rm -rf "${scratch}"
 
+        # A write that fails partway leaves a file that is neither absent nor
+        # complete: the header and some entries, with the last one cut mid-path.
+        # That is the case the two above do not reach, because a read-only
+        # directory fails the very first write. A small tmpfs lets the header
+        # through and runs out during the loop.
+        scratch="$(mktemp -d)"
+        mkdir -p "${scratch}/certs"
+        local i
+        for i in $(seq 1 120); do
+            touch "${scratch}/certs/c${i}.spark.loc.pem" "${scratch}/certs/c${i}.spark.loc-key.pem"
+        done
+        rc=0
+        docker run --rm \
+            -v "$(pwd)/build/traefik/entrypoint.sh:/ep.sh:ro" \
+            -v "${scratch}/certs:/traefik/certs:ro" \
+            --tmpfs /traefik/dynamic:size=4k \
+            --entrypoint sh "${traefik_image}" /ep.sh --tls-only >/dev/null 2>&1 || rc=$?
+
+        total=$((total + 1))
+        if [ "${rc}" -ne 0 ]; then
+            success "a scan that fails partway through reports failure"
+            passed=$((passed + 1))
+        else
+            error "a scan that wrote a partial configuration reported success"
+        fi
+
+        # And the proxy still starts on top of that partial file. Traefik's file
+        # provider rejects the truncated document and carries on, which is a
+        # working proxy serving its default certificate.
+        total=$((total + 1))
+        if docker run --rm \
+            -v "$(pwd)/build/traefik/entrypoint.sh:/ep.sh:ro" \
+            -v "${scratch}/certs:/traefik/certs:ro" \
+            --tmpfs /traefik/dynamic:size=4k \
+            --entrypoint sh "${traefik_image}" /ep.sh --help 2>&1 |
+            grep -q "Starting Traefik"; then
+            success "a partially written configuration still lets the proxy start"
+            passed=$((passed + 1))
+        else
+            error "a partially written configuration stopped the proxy starting"
+        fi
+        rm -rf "${scratch}"
+
         # A failed write must not stop the proxy starting. Without a TLS
         # configuration Traefik serves its default certificate, which is a
         # working proxy; refusing to start would be a worse outcome than the
