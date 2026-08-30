@@ -1553,17 +1553,24 @@ STUB
         # And the proxy still starts on top of that partial file. Traefik's file
         # provider rejects the truncated document and carries on, which is a
         # working proxy serving its default certificate.
-        total=$((total + 1))
-        if docker run --rm \
+        # The run's own status as well as the line. A pipeline carries grep's
+        # status, so the entrypoint could print "Starting Traefik" and then fail
+        # to exec Traefik at all and this would still pass. Here the entrypoint
+        # execs "traefik --help", which exits 0 when it runs and 1 when it does
+        # not, so the status is the part that proves Traefik ran.
+        rc=0
+        out="$(docker run --rm \
             -v "$(pwd)/build/traefik/entrypoint.sh:/ep.sh:ro" \
             -v "${scratch}/certs:/traefik/certs:ro" \
             --tmpfs /traefik/dynamic:size=4k \
-            --entrypoint sh "${traefik_image}" /ep.sh --help 2>&1 |
-            grep -q "Starting Traefik"; then
+            --entrypoint sh "${traefik_image}" /ep.sh --help 2>&1)" || rc=$?
+
+        total=$((total + 1))
+        if [ "${rc}" -eq 0 ] && printf '%s\n' "${out}" | grep -q "Starting Traefik"; then
             success "a partially written configuration still lets the proxy start"
             passed=$((passed + 1))
         else
-            error "a partially written configuration stopped the proxy starting"
+            error "a partial configuration stopped the proxy starting: exit ${rc}"
         fi
         rm -rf "${scratch}"
 
@@ -1574,17 +1581,19 @@ STUB
         scratch="$(mktemp -d)"
         mkdir -p "${scratch}/certs" "${scratch}/dynamic"
         touch "${scratch}/certs/probe.spark.loc.pem" "${scratch}/certs/probe.spark.loc-key.pem"
-        total=$((total + 1))
-        if docker run --rm \
+        rc=0
+        out="$(docker run --rm \
             -v "$(pwd)/build/traefik/entrypoint.sh:/entrypoint.sh:ro" \
             -v "${scratch}/certs:/traefik/certs:ro" \
             -v "${scratch}/dynamic:/traefik/dynamic:ro" \
-            --entrypoint sh "${traefik_image}" /entrypoint.sh --help 2>&1 |
-            grep -q "Starting Traefik"; then
+            --entrypoint sh "${traefik_image}" /entrypoint.sh --help 2>&1)" || rc=$?
+
+        total=$((total + 1))
+        if [ "${rc}" -eq 0 ] && printf '%s\n' "${out}" | grep -q "Starting Traefik"; then
             success "a failed configuration write still lets the proxy start"
             passed=$((passed + 1))
         else
-            error "a failed configuration write stopped the proxy starting"
+            error "a failed write stopped the proxy starting: exit ${rc}"
         fi
         rm -rf "${scratch}"
     fi
