@@ -1162,6 +1162,107 @@ STUB
     [ "${passed}" -eq "${total}" ]
 }
 
+# tailscale-refresh-peers, exercised with a stub docker so no cycle can run:
+# what matters is that the command reports the truth when one does not.
+test_refresh_peers() {
+    local passed=0 total=0
+    local home stub_dir state
+    home="$(mktemp -d)"
+    stub_dir="${home}/stubs"
+    state="${home}/.local/spark/http-proxy/state"
+    mkdir -p "${stub_dir}" "${state}" "${home}/.local/spark/http-proxy"
+
+    local defs="bin/.refresh-peers-defs"
+    sed '/^case "$1" in/,$d' bin/spark-http-proxy >"${defs}"
+
+    # A docker whose compose ps lists the services as running, and whose kill
+    # does nothing, so the state file never advances.
+    cat >"${stub_dir}/docker" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = "ps" ]; then echo "http-proxy"; echo "tailscale_peers"; exit 0; fi
+done
+exit 0
+STUB
+    chmod +x "${stub_dir}/docker"
+
+    # A client that cannot produce a document, so the document path is decided
+    # by the stub rather than by whether the host happens to run Tailscale.
+    printf '#!/bin/sh\nexit 1\n' >"${stub_dir}/tailscale"
+    chmod +x "${stub_dir}/tailscale"
+
+    printf '{"updatedAt":"2026-01-01T00:00:00Z","peers":[]}\n' >"${state}/tailscale-peers.json"
+    printf 'Tailnet peers, from the cycle at 2026-01-01T00:00:00Z\nSTALE-REPORT-MARKER\n' >"${state}/tailscale-peers.txt"
+
+    # The source is forced so the document path is exercised deliberately
+    # rather than incidentally by whichever machine runs the suite.
+    run_refresh() {
+        HOME="${home}" \
+            PATH="${stub_dir}:/usr/bin:/bin" \
+            HTTP_PROXY_TAILSCALE_REFRESH_TIMEOUT="${1:-3}" \
+            HTTP_PROXY_TAILSCALE_SOURCE="${3:-socket}" \
+            TAILSCALE_ENABLED_OVERRIDE="${2:-true}" \
+            DEFS="${defs}" \
+            bash -c '
+                . "${DEFS}"
+                TAILSCALE_ENABLED="${TAILSCALE_ENABLED_OVERRIDE}"
+                tailscale_refresh_peers' 2>&1
+        echo "exit=$?"
+    }
+
+    local out
+    out="$(run_refresh 3 true)"
+
+    total=$((total + 1))
+    if echo "${out}" | grep -qi "did not complete\|timed out"; then
+        success "a cycle that never completes is reported as a timeout"
+        passed=$((passed + 1))
+    else
+        error "a cycle that never completed was not reported as a timeout"
+    fi
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "STALE-REPORT-MARKER"; then
+        error "the previous cycle's report was printed as though it were fresh"
+    else
+        success "the previous cycle's report is not printed after a timeout"
+        passed=$((passed + 1))
+    fi
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "exit=0"; then
+        error "a timed-out refresh exited zero"
+    else
+        success "a timed-out refresh exits non-zero"
+        passed=$((passed + 1))
+    fi
+
+    # Peer routing switched off is a choice, not a failure.
+    out="$(run_refresh 3 false)"
+    total=$((total + 1))
+    if echo "${out}" | grep -qi "disabled" && echo "${out}" | grep -q "start-with-tailscale"; then
+        success "peer routing disabled is reported with how to enable it"
+        passed=$((passed + 1))
+    else
+        error "peer routing disabled was not reported with how to enable it"
+    fi
+
+    # With no Tailscale client the document cannot be written, and a cycle run
+    # against the stale one would answer the wrong question.
+    out="$(run_refresh 3 true file)"
+    total=$((total + 1))
+    if echo "${out}" | grep -q "Not forcing a cycle" && ! echo "${out}" | grep -q "exit=0"; then
+        success "a document that cannot be refreshed stops the cycle"
+        passed=$((passed + 1))
+    else
+        error "a cycle was forced against a document that could not be refreshed"
+    fi
+
+    rm -rf "${home}" "${defs}"
+    log "Refresh peers tests: ${passed}/${total} passed"
+    [ "${passed}" -eq "${total}" ]
+}
+
 test_tailscale_peer_routing() {
     local passed=0 total=0
     local traefik_image peer_address
@@ -1616,6 +1717,12 @@ main() {
     local vpath_fallthrough_passed=0
     test_virtual_path_fallthrough && vpath_fallthrough_passed=1
     [ "$vpath_fallthrough_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing tailscale-refresh-peers..."
+    total=$((total + 1))
+    local refresh_passed=0
+    test_refresh_peers && refresh_passed=1
+    [ "$refresh_passed" -eq 1 ] && passed=$((passed + 1))
 
     log "Testing the launchd status agent..."
     total=$((total + 1))

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `spark-http-proxy tailscale-refresh-peers` runs a peer discovery cycle now instead of waiting up to a minute for the next one. It signals the service rather than restarting it, so the per-machine probe backoff survives and routes that have not changed are not withdrawn and re-added. Where a tailnet status document is used, the document is refreshed first, so a machine that came online since the last one was written is found ([#132](https://github.com/sparkfabrik/http-proxy/issues/132))
 - Tailnet peer routing: a hostname served by a container on one machine is reachable, under the same name, from the other machines of the same Tailscale account. Off by default, started with `spark-http-proxy start-with-tailscale`. Every proxy publishes a declaration of itself and a machine is adopted only when that declaration is present, so **both machines need this version or newer before anything is forwarded**
 - `spark-http-proxy tailscale-peers` (and `--json`) reports the machines found on the proxy's most recent discovery cycle, the hostnames each contributes, and why any of them contributed nothing
 - `spark-http-proxy start-with-tailscale` and `stop-tailscale` start the proxy with peer routing and stop peer routing alone, mirroring `start-with-metrics` and `stop-metrics`. Stopping it withdraws every forwarded hostname immediately, without restarting the proxy

@@ -55,7 +55,11 @@ func main() {
 		"refresh_interval", cfg.RefreshInterval.String(),
 		"status_max_age", cfg.StatusMaxAge.String())
 
-	run(ctx, d)
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+
+	run(ctx, d, hup)
 
 	// Withdraws every route on the way out.
 	if err := d.reconcileConfigs(nil); err != nil {
@@ -76,8 +80,8 @@ func newSource(cfg *config.TailscaleConfig) (tailscale.Source, error) {
 	}
 }
 
-// run polls until the context is cancelled.
-func run(ctx context.Context, d *discovery) {
+// run polls until the context is cancelled, and runs a cycle at once on a signal.
+func run(ctx context.Context, d *discovery, hup <-chan os.Signal) {
 	ticker := time.NewTicker(d.config.RefreshInterval)
 	defer ticker.Stop()
 
@@ -90,6 +94,8 @@ func run(ctx context.Context, d *discovery) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-hup:
+			ticker.Reset(d.config.RefreshInterval)
 		case <-ticker.C:
 		}
 	}
