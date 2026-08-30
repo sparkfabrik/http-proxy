@@ -1162,6 +1162,220 @@ STUB
     [ "${passed}" -eq "${total}" ]
 }
 
+# tailscale-refresh-peers, exercised with a stub docker so no cycle can run:
+# what matters is that the command reports the truth when one does not.
+test_refresh_peers() {
+    local passed=0 total=0
+    local home stub_dir state
+    home="$(mktemp -d)"
+    stub_dir="${home}/stubs"
+    state="${home}/.local/spark/http-proxy/state"
+    mkdir -p "${stub_dir}" "${state}" "${home}/.local/spark/http-proxy"
+
+    local defs="bin/.refresh-peers-defs"
+    sed '/^case "$1" in/,$d' bin/spark-http-proxy >"${defs}"
+
+    # A docker whose compose ps lists the services as running, and whose kill
+    # does nothing, so the state file never advances.
+    cat >"${stub_dir}/docker" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = "ps" ]; then echo "http-proxy"; echo "tailscale_peers"; exit 0; fi
+done
+exit 0
+STUB
+    chmod +x "${stub_dir}/docker"
+
+    # A client that cannot produce a document, so the document path is decided
+    # by the stub rather than by whether the host happens to run Tailscale.
+    printf '#!/bin/sh\nexit 1\n' >"${stub_dir}/tailscale"
+    chmod +x "${stub_dir}/tailscale"
+
+    # Written the way the service writes it, indented, so the assertions are
+    # about the format it actually produces.
+    cat >"${state}/tailscale-peers.json" <<'STATE'
+{
+  "updatedAt": "2026-01-01T00:00:00Z",
+  "source": "socket",
+  "peers": []
+}
+STATE
+    printf 'Tailnet peers, from the cycle at 2026-01-01T00:00:00Z\nSTALE-REPORT-MARKER\n' >"${state}/tailscale-peers.txt"
+
+    # The source is forced so the document path is exercised deliberately
+    # rather than incidentally by whichever machine runs the suite.
+    run_refresh() {
+        HOME="${home}" \
+            PATH="${stub_dir}:/usr/bin:/bin" \
+            HTTP_PROXY_TAILSCALE_REFRESH_TIMEOUT="${1:-3}" \
+            HTTP_PROXY_TAILSCALE_SOURCE="${3:-socket}" \
+            PROBE_STATE="${PROBE_STATE:-}" \
+            TAILSCALE_ENABLED_OVERRIDE="${2:-true}" \
+            DEFS="${defs}" \
+            bash -c '
+                . "${DEFS}"
+                TAILSCALE_ENABLED="${TAILSCALE_ENABLED_OVERRIDE}"
+                tailscale_refresh_peers' 2>&1
+        echo "exit=$?"
+    }
+
+    local out
+    out="$(run_refresh 3 true)"
+
+    total=$((total + 1))
+    if echo "${out}" | grep -qi "did not complete\|timed out"; then
+        success "a cycle that never completes is reported as a timeout"
+        passed=$((passed + 1))
+    else
+        error "a cycle that never completed was not reported as a timeout"
+    fi
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "STALE-REPORT-MARKER"; then
+        error "the previous cycle's report was printed as though it were fresh"
+    else
+        success "the previous cycle's report is not printed after a timeout"
+        passed=$((passed + 1))
+    fi
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "exit=0"; then
+        error "a timed-out refresh exited zero"
+    else
+        success "a timed-out refresh exits non-zero"
+        passed=$((passed + 1))
+    fi
+
+    # Peer routing switched off is a choice, not a failure.
+    out="$(run_refresh 3 false)"
+    total=$((total + 1))
+    if echo "${out}" | grep -qi "disabled" && echo "${out}" | grep -q "start-with-tailscale" &&
+        ! echo "${out}" | grep -q "exit=0"; then
+        success "peer routing disabled is reported, with how to enable it, and does not claim success"
+        passed=$((passed + 1))
+    else
+        error "peer routing disabled was not reported as a failure with how to enable it"
+    fi
+
+    # A service that is not running is a fault: the cycle the user asked for
+    # did not happen.
+    cat >"${stub_dir}/docker" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = "ps" ]; then echo "http-proxy"; exit 0; fi
+done
+exit 0
+STUB
+    chmod +x "${stub_dir}/docker"
+
+    out="$(run_refresh 3 true)"
+    total=$((total + 1))
+    if echo "${out}" | grep -q "not running" && ! echo "${out}" | grep -q "exit=0"; then
+        success "a service that is not running is reported as a failure"
+        passed=$((passed + 1))
+    else
+        error "a service that is not running claimed success"
+    fi
+
+    # Back to a running service for the cases below.
+    cat >"${stub_dir}/docker" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = "ps" ]; then echo "http-proxy"; echo "tailscale_peers"; exit 0; fi
+done
+exit 0
+STUB
+    chmod +x "${stub_dir}/docker"
+
+    total=$((total + 1))
+    if [ "$(HOME="${home}" DEFS="${defs}" bash -c '. "${DEFS}"; cycle_stamp')" = "2026-01-01T00:00:00Z" ]; then
+        success "the cycle timestamp is read from a state file in the service's format"
+        passed=$((passed + 1))
+    else
+        error "the cycle timestamp could not be read from the service's own format"
+    fi
+
+    # With no Tailscale client the document cannot be written, and a cycle run
+    # against the stale one would answer the wrong question.
+    out="$(run_refresh 3 true file)"
+    total=$((total + 1))
+    if echo "${out}" | grep -q "Not forcing a cycle" && ! echo "${out}" | grep -q "exit=0"; then
+        success "a document that cannot be refreshed stops the cycle"
+        passed=$((passed + 1))
+    else
+        error "a cycle was forced against a document that could not be refreshed"
+    fi
+
+    reset_state() {
+        cat >"${state}/tailscale-peers.json" <<'STATE'
+{
+  "updatedAt": "2026-01-01T00:00:00Z",
+  "source": "socket",
+  "peers": []
+}
+STATE
+        printf 'Tailnet peers, from the cycle at 2026-01-01T00:00:00Z\nSTALE-REPORT-MARKER\n' >"${state}/tailscale-peers.txt"
+    }
+
+    # The service writes the state file and then the rendered report, so a
+    # reader that trusts the state file alone can print the previous cycle.
+    # This docker advances the state file on kill and leaves the report behind.
+    cat >"${stub_dir}/docker" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = "ps" ]; then echo "http-proxy"; echo "tailscale_peers"; exit 0; fi
+  if [ "$a" = "kill" ]; then
+    printf '{\n  "updatedAt": "2026-01-01T00:00:09.123456789Z",\n  "source": "socket",\n  "peers": []\n}\n' >"${PROBE_STATE}/tailscale-peers.json"
+    exit 0
+  fi
+done
+exit 0
+STUB
+    chmod +x "${stub_dir}/docker"
+
+    reset_state
+    out="$(PROBE_STATE="${state}" run_refresh 5 true)"
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "STALE-REPORT-MARKER"; then
+        error "the report from the previous cycle was printed while the new one was still being written"
+    else
+        success "a state file ahead of the report does not print the previous cycle"
+        passed=$((passed + 1))
+    fi
+
+    # And the wait must still end when the report does catch up, or the fix
+    # would turn every refresh into a timeout.
+    cat >"${stub_dir}/docker" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = "ps" ]; then echo "http-proxy"; echo "tailscale_peers"; exit 0; fi
+  if [ "$a" = "kill" ]; then
+    printf '{\n  "updatedAt": "2026-01-01T00:00:09.123456789Z",\n  "source": "socket",\n  "peers": []\n}\n' >"${PROBE_STATE}/tailscale-peers.json"
+    printf 'Tailnet peers, from the cycle at 2026-01-01T00:00:09Z\nFRESH-REPORT-MARKER\n' >"${PROBE_STATE}/tailscale-peers.txt"
+    exit 0
+  fi
+done
+exit 0
+STUB
+    chmod +x "${stub_dir}/docker"
+
+    reset_state
+    out="$(PROBE_STATE="${state}" run_refresh 5 true)"
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "FRESH-REPORT-MARKER" && echo "${out}" | grep -q "exit=0"; then
+        success "a completed cycle prints its report and succeeds"
+        passed=$((passed + 1))
+    else
+        error "a completed cycle was not reported: $(echo "${out}" | tr '\n' ' ' | head -c 120)"
+    fi
+
+    rm -rf "${home}" "${defs}"
+    log "Refresh peers tests: ${passed}/${total} passed"
+    [ "${passed}" -eq "${total}" ]
+}
+
 test_tailscale_peer_routing() {
     local passed=0 total=0
     local traefik_image peer_address
@@ -1616,6 +1830,12 @@ main() {
     local vpath_fallthrough_passed=0
     test_virtual_path_fallthrough && vpath_fallthrough_passed=1
     [ "$vpath_fallthrough_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing tailscale-refresh-peers..."
+    total=$((total + 1))
+    local refresh_passed=0
+    test_refresh_peers && refresh_passed=1
+    [ "$refresh_passed" -eq 1 ] && passed=$((passed + 1))
 
     log "Testing the launchd status agent..."
     total=$((total + 1))
