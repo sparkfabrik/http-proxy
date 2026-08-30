@@ -153,3 +153,38 @@ func TestTheCompletedFileDoesNotAdvanceWhenAnEarlierWriteFails(t *testing.T) {
 		t.Errorf("the barrier advanced to %q while the report was never written", got)
 	}
 }
+
+func TestAFailedLocalReadIsRetriedWithoutWaitingTheInterval(t *testing.T) {
+	// The local API is unreachable here, which is the startup race: Traefik is
+	// not listening yet, so the cycle aborts and nothing is probed.
+	cfg := &config.TailscaleConfig{Enabled: true, RefreshInterval: time.Hour}
+	probe := &fakeProbe{routes: map[string][]traefikapi.Route{}}
+	d := testDiscovery(t, cfg, fakeSource{document: tailnetStatus}, probe)
+
+	hup := make(chan os.Signal, 1)
+	runService(t, d, hup)
+	first := cycleTime(t, d.config.StateFile)
+
+	if _, ran := awaitCycleAfter(t, d.config.StateFile, first, 10*time.Second); !ran {
+		t.Fatal("a cycle that could not read the local routing table waited the full interval before trying again")
+	}
+}
+
+func TestACompletedCycleWaitsTheInterval(t *testing.T) {
+	const interval = time.Second
+	cfg := &config.TailscaleConfig{Enabled: true, RefreshInterval: interval, LocalAPIURL: "http://local"}
+	probe := &fakeProbe{routes: map[string][]traefikapi.Route{"http://local": {}}}
+	d := testDiscovery(t, cfg, fakeSource{document: tailnetStatus}, probe)
+
+	hup := make(chan os.Signal, 1)
+	runService(t, d, hup)
+	first := cycleTime(t, d.config.StateFile)
+
+	next, ran := awaitCycleAfter(t, d.config.StateFile, first, 3*interval)
+	if !ran {
+		t.Fatal("the loop stopped after a completed cycle")
+	}
+	if gap := next.Sub(first); gap < interval-100*time.Millisecond {
+		t.Fatalf("a completed cycle was retried early, after %s, so the fast retry is not limited to failures", gap)
+	}
+}

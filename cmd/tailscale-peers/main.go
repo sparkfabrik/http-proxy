@@ -80,10 +80,15 @@ func newSource(cfg *config.TailscaleConfig) (tailscale.Source, error) {
 	}
 }
 
+// The first wait after a cycle that could not read the local routing table.
+const localRetryInitial = 2 * time.Second
+
 // run polls until the context is cancelled, and runs a cycle at once on a signal.
 func run(ctx context.Context, d *discovery, hup <-chan os.Signal) {
-	ticker := time.NewTicker(d.config.RefreshInterval)
-	defer ticker.Stop()
+	timer := time.NewTimer(d.config.RefreshInterval)
+	defer timer.Stop()
+
+	retry := localRetryInitial
 
 	for {
 		report := d.runCycle(ctx)
@@ -91,12 +96,24 @@ func run(ctx context.Context, d *discovery, hup <-chan os.Signal) {
 			d.logger.Error("Failed to write the peer report", "error", err, "state_file", d.config.StateFile)
 		}
 
+		// A cycle that read nothing locally probed nothing, so it is retried
+		// before the interval rather than after it.
+		wait := d.config.RefreshInterval
+		if report.LocalError != "" {
+			wait = min(retry, d.config.RefreshInterval)
+			retry *= 2
+		} else {
+			retry = localRetryInitial
+		}
+
+		timer.Stop()
+		timer.Reset(wait)
+
 		select {
 		case <-ctx.Done():
 			return
 		case <-hup:
-			ticker.Reset(d.config.RefreshInterval)
-		case <-ticker.C:
+		case <-timer.C:
 		}
 	}
 }
