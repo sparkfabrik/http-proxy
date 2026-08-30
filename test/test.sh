@@ -1209,6 +1209,7 @@ STATE
             PATH="${stub_dir}:/usr/bin:/bin" \
             HTTP_PROXY_TAILSCALE_REFRESH_TIMEOUT="${1:-3}" \
             HTTP_PROXY_TAILSCALE_SOURCE="${3:-socket}" \
+            PROBE_STATE="${PROBE_STATE:-}" \
             TAILSCALE_ENABLED_OVERRIDE="${2:-true}" \
             DEFS="${defs}" \
             bash -c '
@@ -1303,6 +1304,71 @@ STUB
         passed=$((passed + 1))
     else
         error "a cycle was forced against a document that could not be refreshed"
+    fi
+
+    reset_state() {
+        cat >"${state}/tailscale-peers.json" <<'STATE'
+{
+  "updatedAt": "2026-01-01T00:00:00Z",
+  "source": "socket",
+  "peers": []
+}
+STATE
+        printf 'Tailnet peers, from the cycle at 2026-01-01T00:00:00Z\nSTALE-REPORT-MARKER\n' >"${state}/tailscale-peers.txt"
+    }
+
+    # The service writes the state file and then the rendered report, so a
+    # reader that trusts the state file alone can print the previous cycle.
+    # This docker advances the state file on kill and leaves the report behind.
+    cat >"${stub_dir}/docker" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = "ps" ]; then echo "http-proxy"; echo "tailscale_peers"; exit 0; fi
+  if [ "$a" = "kill" ]; then
+    printf '{\n  "updatedAt": "2026-01-01T00:00:09.123456789Z",\n  "source": "socket",\n  "peers": []\n}\n' >"${PROBE_STATE}/tailscale-peers.json"
+    exit 0
+  fi
+done
+exit 0
+STUB
+    chmod +x "${stub_dir}/docker"
+
+    reset_state
+    out="$(PROBE_STATE="${state}" run_refresh 5 true)"
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "STALE-REPORT-MARKER"; then
+        error "the report from the previous cycle was printed while the new one was still being written"
+    else
+        success "a state file ahead of the report does not print the previous cycle"
+        passed=$((passed + 1))
+    fi
+
+    # And the wait must still end when the report does catch up, or the fix
+    # would turn every refresh into a timeout.
+    cat >"${stub_dir}/docker" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = "ps" ]; then echo "http-proxy"; echo "tailscale_peers"; exit 0; fi
+  if [ "$a" = "kill" ]; then
+    printf '{\n  "updatedAt": "2026-01-01T00:00:09.123456789Z",\n  "source": "socket",\n  "peers": []\n}\n' >"${PROBE_STATE}/tailscale-peers.json"
+    printf 'Tailnet peers, from the cycle at 2026-01-01T00:00:09Z\nFRESH-REPORT-MARKER\n' >"${PROBE_STATE}/tailscale-peers.txt"
+    exit 0
+  fi
+done
+exit 0
+STUB
+    chmod +x "${stub_dir}/docker"
+
+    reset_state
+    out="$(PROBE_STATE="${state}" run_refresh 5 true)"
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "FRESH-REPORT-MARKER" && echo "${out}" | grep -q "exit=0"; then
+        success "a completed cycle prints its report and succeeds"
+        passed=$((passed + 1))
+    else
+        error "a completed cycle was not reported: $(echo "${out}" | tr '\n' ' ' | head -c 120)"
     fi
 
     rm -rf "${home}" "${defs}"

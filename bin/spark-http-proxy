@@ -1044,7 +1044,11 @@ tailscale_refresh_peers() {
   local waited current
   for ((waited = 0; waited < timeout; waited++)); do
     current="$(cycle_stamp)"
-    if [[ -n "${current}" && "${current}" != "${before}" ]]; then
+    # The report is written after the state file, so it is the report that has
+    # to carry the new cycle before it is worth printing. Its header keeps
+    # whole seconds where the state file keeps nanoseconds.
+    if [[ -n "${current}" && "${current}" != "${before}" ]] &&
+      grep -Fq "from the cycle at ${current/.[0-9]*Z/Z}" "${TAILSCALE_RENDERED_FILE}" 2>/dev/null; then
       cat "${TAILSCALE_RENDERED_FILE}"
       return 0
     fi
