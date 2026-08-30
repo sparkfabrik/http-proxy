@@ -1550,6 +1550,26 @@ STUB
             error "a scan that wrote a partial configuration reported success"
         fi
 
+        # And the configuration that was already there survives it. The scan
+        # builds into a temporary file and renames it into place, so a write
+        # that runs out of space leaves the previous certificates serving
+        # rather than replacing them with a truncated file serving none.
+        total=$((total + 1))
+        if docker run --rm \
+            -v "$(pwd)/build/traefik/entrypoint.sh:/ep.sh:ro" \
+            -v "${scratch}/certs:/traefik/certs:ro" \
+            --tmpfs /traefik/dynamic:size=8k \
+            --entrypoint sh "${traefik_image}" -c '
+                printf "tls:\n  certificates:\n    - certFile: /previous.pem\n      keyFile: /previous-key.pem\n" \
+                    > /traefik/dynamic/auto-tls.yml
+                sh /ep.sh --tls-only >/dev/null 2>&1
+                grep -q previous.pem /traefik/dynamic/auto-tls.yml' 2>/dev/null; then
+            success "a failed scan leaves the previous configuration in place"
+            passed=$((passed + 1))
+        else
+            error "a failed scan destroyed the configuration that was already serving"
+        fi
+
         # And the proxy still starts on top of that partial file. Traefik's file
         # provider rejects the truncated document and carries on, which is a
         # working proxy serving its default certificate.
