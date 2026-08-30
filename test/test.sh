@@ -1452,6 +1452,26 @@ STUB
         else
             error "the empty scan exited ${rc} and left: $(cat "${scratch}/dynamic/auto-tls.yml" 2>&1 | tr '\n' ' ')"
         fi
+        # A scan that could not write must say so, because the CLI reads its
+        # exit status to decide whether to tell the user the certificates were
+        # applied. A read-only dynamic directory is the cheapest way to make the
+        # write fail for real rather than simulating it.
+        scratch="$(mktemp -d)"
+        mkdir -p "${scratch}/certs" "${scratch}/dynamic"
+        rc=0
+        docker run --rm \
+            -v "$(pwd)/build/traefik/entrypoint.sh:/ep.sh:ro" \
+            -v "${scratch}/certs:/traefik/certs" \
+            -v "${scratch}/dynamic:/traefik/dynamic:ro" \
+            --entrypoint sh "${traefik_image}" /ep.sh --tls-only >/dev/null 2>&1 || rc=$?
+
+        total=$((total + 1))
+        if [ "${rc}" -ne 0 ]; then
+            success "a scan that cannot write its configuration exits non-zero"
+            passed=$((passed + 1))
+        else
+            error "a scan that could not write reported success"
+        fi
         rm -rf "${scratch}"
     fi
 
