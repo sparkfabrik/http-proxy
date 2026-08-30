@@ -1269,9 +1269,13 @@ test_certificates_apply_without_a_restart() {
     # A per-run hostname. The live checks write into the machine's real
     # certificate directory and delete what they wrote, so a fixed name would
     # overwrite and then destroy a developer's certificate if they happened to
-    # hold one. The prefix is swept first, in case an interrupted run left one.
+    # hold one.
+    #
+    # Only the exact two files this run creates are ever removed. Sweeping the
+    # prefix would collect orphans from an interrupted run, but a glob delete in
+    # a directory the test does not own can take a file it did not write, and an
+    # unused stray certificate is a smaller problem than a deleted real one.
     host="cert-restart-test-$$-${RANDOM}.spark.loc"
-    rm -f "${CERT_DIR:-${HOME}/.local/spark/http-proxy/certs}"/cert-restart-test-*.pem
 
     # CI runners carry no mkcert, and without one the CLI stops at certificate
     # generation and never reaches the code under test. What is under test is
