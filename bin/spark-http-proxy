@@ -139,6 +139,7 @@ STATE_DIR="${CONFIG_DIR}/state"
 TAILSCALE_STATUS_FILE="${STATE_DIR}/tailscale-status.json"
 TAILSCALE_STATE_FILE="${STATE_DIR}/tailscale-peers.json"
 TAILSCALE_RENDERED_FILE="${STATE_DIR}/tailscale-peers.txt"
+TAILSCALE_COMPLETED_FILE="${STATE_DIR}/tailscale-peers-completed-at"
 TAILSCALE_SOCKET_OVERRIDE="$(dirname "${COMPOSE_FILE}")/compose.tailscale-socket.yml"
 TAILSCALE_STATUS_LOG="${STATE_DIR}/tailscale-status.log"
 STATUS_AGENT_LABEL="com.sparkfabrik.http-proxy.tailscale-status"
@@ -1003,11 +1004,6 @@ remove_status_agent() {
   log_info "Status refresh removed"
 }
 
-# The timestamp of the last completed cycle, read from the state file.
-cycle_stamp() {
-  sed -n 's/.*"updatedAt"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${TAILSCALE_STATE_FILE}" 2>/dev/null | head -1
-}
-
 # Runs a discovery cycle now instead of waiting for the next one.
 tailscale_refresh_peers() {
   if [[ "${TAILSCALE_ENABLED}" != "true" ]]; then
@@ -1032,7 +1028,7 @@ tailscale_refresh_peers() {
   fi
 
   local before timeout
-  before="$(cycle_stamp)"
+  before="$(cat "${TAILSCALE_COMPLETED_FILE}" 2>/dev/null)"
   timeout="$(duration_seconds "${HTTP_PROXY_TAILSCALE_REFRESH_TIMEOUT:-30s}")"
 
   if ! dc_tailscale kill -s SIGHUP tailscale_peers >/dev/null 2>&1; then
@@ -1043,12 +1039,9 @@ tailscale_refresh_peers() {
 
   local waited current
   for ((waited = 0; waited < timeout; waited++)); do
-    current="$(cycle_stamp)"
-    # The report is written after the state file, so it is the report that has
-    # to carry the new cycle before it is worth printing. Its header keeps
-    # whole seconds where the state file keeps nanoseconds.
-    if [[ -n "${current}" && "${current}" != "${before}" ]] &&
-      grep -Fq "from the cycle at ${current/.[0-9]*Z/Z}" "${TAILSCALE_RENDERED_FILE}" 2>/dev/null; then
+    # The service writes this file last, so the report beside it is already the new one.
+    current="$(cat "${TAILSCALE_COMPLETED_FILE}" 2>/dev/null)"
+    if [[ -n "${current}" && "${current}" != "${before}" ]]; then
       cat "${TAILSCALE_RENDERED_FILE}"
       return 0
     fi

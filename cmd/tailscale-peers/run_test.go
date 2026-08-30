@@ -4,9 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
-	"regexp"
-	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -105,10 +102,7 @@ func TestASignalResetsTheInterval(t *testing.T) {
 	}
 }
 
-// The CLI reads the cycle timestamp out of the state file with sed, so the
-// expression it uses is checked against a file this service actually wrote
-// rather than against a fixture written by hand.
-func TestTheCycleTimestampIsReadableByTheCLI(t *testing.T) {
+func TestTheCompletedFileHoldsTheTimestampAndNothingElse(t *testing.T) {
 	cfg := &config.TailscaleConfig{Enabled: true, RefreshInterval: time.Hour}
 	probe := &fakeProbe{routes: map[string][]traefikapi.Route{}}
 	d := testDiscovery(t, cfg, fakeSource{document: tailnetStatus}, probe)
@@ -118,44 +112,44 @@ func TestTheCycleTimestampIsReadableByTheCLI(t *testing.T) {
 		t.Fatalf("writing the report: %v", err)
 	}
 
-	out, err := exec.Command("sed", "-n", cliExpression(t), d.config.StateFile).Output()
+	raw, err := os.ReadFile(completedStateFile(cfg.StateFile))
 	if err != nil {
-		t.Fatalf("running the CLI expression: %v", err)
+		t.Fatalf("reading the completed file: %v", err)
 	}
-
-	got := strings.TrimSpace(string(out))
-	if got == "" {
-		t.Fatalf("the CLI expression read no timestamp from the state file this service wrote:\n%s", stateFileHead(t, d.config.StateFile))
-	}
-	if want := written.Format(time.RFC3339Nano); got != want {
-		t.Errorf("the CLI read %q, the service wrote %q", got, want)
+	if got, want := string(raw), written.Format(time.RFC3339Nano); got != want {
+		t.Errorf("the completed file holds %q, the CLI expects exactly %q", got, want)
 	}
 }
 
-func stateFileHead(t *testing.T, path string) string {
-	t.Helper()
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return err.Error()
-	}
-	if len(raw) > 200 {
-		raw = raw[:200]
-	}
-	return string(raw)
-}
+func TestTheCompletedFileDoesNotAdvanceWhenAnEarlierWriteFails(t *testing.T) {
+	cfg := &config.TailscaleConfig{Enabled: true, RefreshInterval: time.Hour}
+	probe := &fakeProbe{routes: map[string][]traefikapi.Route{}}
+	d := testDiscovery(t, cfg, fakeSource{document: tailnetStatus}, probe)
 
-// cliExpression is read out of the CLI rather than restated here, so editing
-// one without the other fails this test instead of going unnoticed.
-func cliExpression(t *testing.T) string {
-	t.Helper()
-	const script = "../../bin/spark-http-proxy"
-	raw, err := os.ReadFile(script)
+	first := time.Now().UTC()
+	if err := d.writeReport(&Report{UpdatedAt: first, Source: "socket"}); err != nil {
+		t.Fatalf("writing the first report: %v", err)
+	}
+
+	// A rendered path that cannot be written, so the report write fails while
+	// the state file succeeds: the barrier must not move past it.
+	if err := os.Remove(renderedStateFile(cfg.StateFile)); err != nil {
+		t.Fatalf("clearing the rendered report: %v", err)
+	}
+	if err := os.Mkdir(renderedStateFile(cfg.StateFile), 0o755); err != nil {
+		t.Fatalf("blocking the rendered report: %v", err)
+	}
+
+	second := first.Add(time.Minute)
+	if err := d.writeReport(&Report{UpdatedAt: second, Source: "socket"}); err == nil {
+		t.Fatal("writing the report succeeded with an unwritable rendered path")
+	}
+
+	raw, err := os.ReadFile(completedStateFile(cfg.StateFile))
 	if err != nil {
-		t.Fatalf("reading %s: %v", script, err)
+		t.Fatalf("reading the completed file: %v", err)
 	}
-	matches := regexp.MustCompile(`sed -n '([^']*"updatedAt"[^']*)'`).FindAllStringSubmatch(string(raw), -1)
-	if len(matches) != 1 {
-		t.Fatalf("expected one updatedAt expression in %s, found %d", script, len(matches))
+	if got := string(raw); got != first.Format(time.RFC3339Nano) {
+		t.Errorf("the barrier advanced to %q while the report was never written", got)
 	}
-	return matches[0][1]
 }
