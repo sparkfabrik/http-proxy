@@ -188,6 +188,11 @@ func plural(count int, noun string) string {
 	return fmt.Sprintf("%d %ss", count, noun)
 }
 
+// completedStateFile holds the timestamp of the last completed cycle and nothing else.
+func completedStateFile(stateFile string) string {
+	return strings.TrimSuffix(stateFile, filepath.Ext(stateFile)) + "-completed-at"
+}
+
 // renderedStateFile is the state file's rendered twin, written beside it.
 func renderedStateFile(stateFile string) string {
 	return strings.TrimSuffix(stateFile, filepath.Ext(stateFile)) + ".txt"

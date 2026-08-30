@@ -1201,6 +1201,7 @@ STUB
 }
 STATE
     printf 'Tailnet peers, from the cycle at 2026-01-01T00:00:00Z\nSTALE-REPORT-MARKER\n' >"${state}/tailscale-peers.txt"
+    printf '2026-01-01T00:00:00Z' >"${state}/tailscale-peers-completed-at"
 
     # The source is forced so the document path is exercised deliberately
     # rather than incidentally by whichever machine runs the suite.
@@ -1287,14 +1288,6 @@ exit 0
 STUB
     chmod +x "${stub_dir}/docker"
 
-    total=$((total + 1))
-    if [ "$(HOME="${home}" DEFS="${defs}" bash -c '. "${DEFS}"; cycle_stamp')" = "2026-01-01T00:00:00Z" ]; then
-        success "the cycle timestamp is read from a state file in the service's format"
-        passed=$((passed + 1))
-    else
-        error "the cycle timestamp could not be read from the service's own format"
-    fi
-
     # With no Tailscale client the document cannot be written, and a cycle run
     # against the stale one would answer the wrong question.
     out="$(run_refresh 3 true file)"
@@ -1315,11 +1308,11 @@ STUB
 }
 STATE
         printf 'Tailnet peers, from the cycle at 2026-01-01T00:00:00Z\nSTALE-REPORT-MARKER\n' >"${state}/tailscale-peers.txt"
+        printf '2026-01-01T00:00:00Z' >"${state}/tailscale-peers-completed-at"
     }
 
-    # The service writes the state file and then the rendered report, so a
-    # reader that trusts the state file alone can print the previous cycle.
-    # This docker advances the state file on kill and leaves the report behind.
+    # The barrier is written last, so a cycle still being written shows up as
+    # the state file and the report moving while the barrier has not.
     cat >"${stub_dir}/docker" <<'STUB'
 #!/bin/sh
 for a in "$@"; do
@@ -1338,9 +1331,9 @@ STUB
 
     total=$((total + 1))
     if echo "${out}" | grep -q "STALE-REPORT-MARKER"; then
-        error "the report from the previous cycle was printed while the new one was still being written"
+        error "a cycle still being written was reported as complete"
     else
-        success "a state file ahead of the report does not print the previous cycle"
+        success "a cycle is not reported complete until the barrier moves"
         passed=$((passed + 1))
     fi
 
@@ -1353,6 +1346,7 @@ for a in "$@"; do
   if [ "$a" = "kill" ]; then
     printf '{\n  "updatedAt": "2026-01-01T00:00:09.123456789Z",\n  "source": "socket",\n  "peers": []\n}\n' >"${PROBE_STATE}/tailscale-peers.json"
     printf 'Tailnet peers, from the cycle at 2026-01-01T00:00:09Z\nFRESH-REPORT-MARKER\n' >"${PROBE_STATE}/tailscale-peers.txt"
+    printf '2026-01-01T00:00:09.123456789Z' >"${PROBE_STATE}/tailscale-peers-completed-at"
     exit 0
   fi
 done

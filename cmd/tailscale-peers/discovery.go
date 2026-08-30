@@ -591,7 +591,12 @@ func (d *discovery) writeReport(report *Report) error {
 	if err := writeFileAtomically(d.config.StateFile, data, stateFilePermissions); err != nil {
 		return err
 	}
-	return writeFileAtomically(renderedStateFile(d.config.StateFile), []byte(report.Render()), stateFilePermissions)
+	if err := writeFileAtomically(renderedStateFile(d.config.StateFile), []byte(report.Render()), stateFilePermissions); err != nil {
+		return err
+	}
+	// Written last, so a reader that sees it change knows the rest is on disk.
+	return writeFileAtomically(completedStateFile(d.config.StateFile),
+		[]byte(report.UpdatedAt.Format(time.RFC3339Nano)), stateFilePermissions)
 }
 
 // writeFileAtomically writes through a temporary file and a rename.
