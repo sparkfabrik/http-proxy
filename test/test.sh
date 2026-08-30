@@ -1293,7 +1293,12 @@ esac
 for arg in "$@"; do
     case "${arg}" in
         restart) echo "restart" >>"${STUB_LOG}"; exit 0 ;;
-        --tls-only) echo "scan" >>"${STUB_LOG}"; exit 0 ;;
+        --tls-only)
+            echo "scan" >>"${STUB_LOG}"
+            [ -z "${STUB_SCAN_FAILS:-}" ] && exit 0
+            echo "permission denied" >&2
+            exit 126
+            ;;
     esac
 done
 case "$*" in
@@ -1329,6 +1334,17 @@ STUB
         passed=$((passed + 1))
     else
         error "the output announced a restart: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # A scan that fails must say what the proxy said. Without it the warning
+    # reports that something did not work and nothing about what to look at.
+    out="$(stub_generate STUB_SCAN_FAILS=1)"
+    total=$((total + 1))
+    if echo "${out}" | grep -q "did not apply" && echo "${out}" | grep -q "permission denied"; then
+        success "a failed scan reports the proxy's own reason"
+        passed=$((passed + 1))
+    else
+        error "a failed scan gave no reason: $(echo "${out}" | grep -E "⚠️|ℹ" | tr '\n' ' ')"
     fi
 
     # An image predating the guard: the restart is still the only way to apply a

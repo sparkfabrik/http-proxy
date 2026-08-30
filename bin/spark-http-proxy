@@ -644,8 +644,14 @@ apply_certificates() {
   # and run the rest of its entrypoint on the way, withdrawing peer routes.
   if docker exec http-proxy grep -q -- '--tls-only' /entrypoint.sh 2>/dev/null; then
     log_info "Applying certificates..."
-    if ! docker exec http-proxy /entrypoint.sh --tls-only >/dev/null 2>&1; then
+    # Only the proxy knows why a scan failed, and without its message the
+    # warning says a thing did not work and nothing about what to look at.
+    local scan_error
+    if ! scan_error="$(docker exec http-proxy /entrypoint.sh --tls-only 2>&1 >/dev/null)"; then
       log_warning "The proxy did not apply the certificates"
+      if [ -n "${scan_error}" ]; then
+        log_info "The proxy said: ${scan_error}"
+      fi
       log_info "Apply them with: $(basename "${0}") restart"
     fi
     return 0
