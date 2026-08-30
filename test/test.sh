@@ -1594,6 +1594,34 @@ STUB
         fi
         rm -rf "${scratch}"
 
+        # Two scans at once. One can run at container start while another runs
+        # from the CLI, and a shared temporary name would have them build a
+        # single file between them and rename the result into place, where it
+        # looks intact and is not.
+        scratch="$(mktemp -d)"
+        mkdir -p "${scratch}/certs" "${scratch}/dynamic"
+        touch "${scratch}/certs/probe.spark.loc.pem" "${scratch}/certs/probe.spark.loc-key.pem"
+        out="$(docker run --rm \
+            -v "$(pwd)/build/traefik/entrypoint.sh:/ep.sh:ro" \
+            -v "${scratch}/certs:/traefik/certs:ro" \
+            -v "${scratch}/dynamic:/traefik/dynamic" \
+            --entrypoint sh "${traefik_image}" -c '
+                sh /ep.sh --tls-only >/dev/null 2>&1 &
+                sh /ep.sh --tls-only >/dev/null 2>&1 &
+                wait
+                echo "entries=$(grep -c certFile /traefik/dynamic/auto-tls.yml)"
+                echo "files=$(ls -A /traefik/dynamic | tr "\n" ",")"' 2>&1)"
+
+        total=$((total + 1))
+        if printf '%s\n' "${out}" | grep -q "entries=1" &&
+            printf '%s\n' "${out}" | grep -q "files=auto-tls.yml,$"; then
+            success "two scans at once leave one correct configuration"
+            passed=$((passed + 1))
+        else
+            error "concurrent scans left: $(printf '%s' "${out}" | tr '\n' ' ')"
+        fi
+        rm -rf "${scratch}"
+
         # A failed write must not stop the proxy starting. Without a TLS
         # configuration Traefik serves its default certificate, which is a
         # working proxy; refusing to start would be a worse outcome than the

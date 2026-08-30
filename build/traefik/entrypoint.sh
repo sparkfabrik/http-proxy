@@ -8,8 +8,10 @@ TLS_CONFIG_FILE="${DYNAMIC_DIR}/auto-tls.yml"
 # Built here and renamed into place, so a write that fails partway leaves the
 # previous configuration serving rather than a truncated file serving nothing.
 # The .tmp suffix is what dinghy-layer and tailscale-peers already use in this
-# directory, and the provider ignores it.
-TLS_CONFIG_TMP="${TLS_CONFIG_FILE}.tmp"
+# directory. The pid is ours: a scan can run at container start and from the CLI
+# at the same time, and a shared name would have them build one file between
+# them and rename the result into place looking intact.
+TLS_CONFIG_TMP="${TLS_CONFIG_FILE}.$$.tmp"
 
 # Outside the tailscale-peer-*.yaml glob cleared below.
 DECLARATION_FILE="spark-http-proxy-declaration.yaml"
