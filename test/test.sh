@@ -1169,6 +1169,90 @@ STUB
 # Commands printed for a reader to copy must survive being pasted. Angle
 # brackets are shell redirections, so a placeholder in a suggested command is a
 # syntax error rather than a hint.
+# Every interactive prompt, run with no terminal. read returns non-zero at end
+# of file and this script runs under errexit, so an unguarded prompt ends the
+# command before the message it prepared for exactly this case.
+test_prompts_without_a_terminal() {
+    local passed=0 total=0 home certs out rc
+
+    home="$(mktemp -d)"
+    certs="${home}/.local/spark/http-proxy/certs"
+    mkdir -p "${certs}"
+
+    run_cli() {
+        HOME="${home}" timeout 30 bin/spark-http-proxy "$@" </dev/null 2>&1
+    }
+
+    # A missing argument has a message waiting for it.
+    rc=0; out="$(run_cli generate-mkcert)" || rc=$?
+    total=$((total + 1))
+    if echo "${out}" | grep -qi "domain name required" && [ "${rc}" -ne 0 ]; then
+        success "generate-mkcert without a domain says so and fails"
+        passed=$((passed + 1))
+    else
+        error "generate-mkcert exited ${rc} saying: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    rc=0; out="$(run_cli remove-cert)" || rc=$?
+    total=$((total + 1))
+    if echo "${out}" | grep -qi "domain name required" && [ "${rc}" -ne 0 ]; then
+        success "remove-cert without a domain says so and fails"
+        passed=$((passed + 1))
+    else
+        error "remove-cert exited ${rc} saying: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # A destructive action that cannot be confirmed must not happen, and must
+    # say why rather than stopping silently.
+    touch "${certs}/app.spark.loc.pem" "${certs}/app.spark.loc-key.pem"
+    rc=0; out="$(run_cli remove-cert app.spark.loc)" || rc=$?
+    total=$((total + 1))
+    if [ -f "${certs}/app.spark.loc.pem" ]; then
+        success "remove-cert leaves the certificate when it cannot confirm"
+        passed=$((passed + 1))
+    else
+        error "remove-cert deleted a certificate without confirmation"
+    fi
+
+    total=$((total + 1))
+    if echo "${out}" | grep -qi "terminal" && [ "${rc}" -ne 0 ]; then
+        success "remove-cert says why it stopped without a terminal"
+        passed=$((passed + 1))
+    else
+        error "remove-cert stopped without explaining: exit ${rc}, $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # destroy, against a project holding nothing, so a wrong answer here costs
+    # nothing while still exercising the real command.
+    local scratch
+    scratch="$(mktemp -d)"
+    printf 'services:\n  nothing:\n    image: alpine\n    command: ["true"]\n' >"${scratch}/compose.yml"
+    rc=0
+    out="$(HOME="${home}" COMPOSE_FILE="${scratch}/compose.yml" \
+        COMPOSE_PROJECT_NAME="http-proxy-test-147" \
+        timeout 60 bin/spark-http-proxy destroy </dev/null 2>&1)" || rc=$?
+
+    total=$((total + 1))
+    if echo "${out}" | grep -qi "terminal" && [ "${rc}" -ne 0 ]; then
+        success "destroy says why it stopped without a terminal"
+        passed=$((passed + 1))
+    else
+        error "destroy stopped without explaining: exit ${rc}, $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    total=$((total + 1))
+    if ! echo "${out}" | grep -qi "resources destroyed"; then
+        success "destroy does not proceed without confirmation"
+        passed=$((passed + 1))
+    else
+        error "destroy proceeded without confirmation"
+    fi
+
+    rm -rf "${home}" "${scratch}"
+    log "Prompt tests: ${passed}/${total} passed"
+    [ "${passed}" -eq "${total}" ]
+}
+
 test_suggested_commands_are_pasteable() {
     local passed=0 total=0 offenders
 
@@ -2051,6 +2135,12 @@ main() {
     local vpath_fallthrough_passed=0
     test_virtual_path_fallthrough && vpath_fallthrough_passed=1
     [ "$vpath_fallthrough_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing prompts without a terminal..."
+    total=$((total + 1))
+    local prompts_passed=0
+    test_prompts_without_a_terminal && prompts_passed=1
+    [ "$prompts_passed" -eq 1 ] && passed=$((passed + 1))
 
     log "Testing that suggested commands can be pasted..."
     total=$((total + 1))

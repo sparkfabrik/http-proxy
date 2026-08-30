@@ -632,7 +632,7 @@ install_mkcert() {
 generate_mkcert() {
   local domain="$1"
 
-  if [ -z "${domain}" ]; then
+  if [ -z "${domain}" ] && [ -t 0 ]; then
     read -rp "Enter domain name: " domain
   fi
 
@@ -743,8 +743,10 @@ list_certs() {
 remove_cert() {
   if [ "$#" -eq 0 ]; then
     local -a prompted=()
-    read -rp "Enter domain name(s) to remove: " -a prompted
-    set -- "${prompted[@]}"
+    if [ -t 0 ]; then
+      read -rp "Enter domain name(s) to remove: " -a prompted
+      set -- "${prompted[@]}"
+    fi
   fi
 
   if [ "$#" -eq 0 ]; then
@@ -782,6 +784,12 @@ remove_cert() {
   if [[ "${#matched[@]}" -eq 0 ]]; then
     log_info "List installed certificates with: $(basename "${0}") list-certs"
     exit 1
+  fi
+
+  if [ ! -t 0 ]; then
+    log_error "Cannot confirm removal without a terminal, so nothing was removed"
+    log_info "Re-run this interactively to confirm"
+    return 1
   fi
 
   read -p "Remove ${#matched[@]} certificate(s)? (y/N): " -n 1 -r
@@ -1752,6 +1760,12 @@ clean)
   ;;
 destroy)
   log_warning "This will completely remove all containers, volumes, networks, and images"
+  if [ ! -t 0 ]; then
+    log_error "Cannot confirm without a terminal, so nothing was destroyed"
+    log_info "Re-run this interactively to confirm"
+    exit 1
+  fi
+
   read -p "Are you sure? (y/N): " -n 1 -r
   echo
   if [[ $REPLY =~ ^[Yy]$ ]]; then
