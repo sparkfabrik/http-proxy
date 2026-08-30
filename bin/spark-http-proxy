@@ -729,13 +729,14 @@ list_certs() {
 
   if [[ "${found}" -eq 0 ]]; then
     echo ""
-    log_warning "No certificates found. Generate one with: $(basename "${0}") generate-mkcert <domain>"
+    log_warning "No certificates found. Generate one with: $(basename "${0}") generate-mkcert '*.spark.loc'"
     return 0
   fi
 
   echo ""
   log_info "${found} certificate(s) installed"
-  log_info "Remove one with: $(basename "${0}") remove-cert <domain>"
+  # A domain just listed, so the line works when it is copied.
+  log_info "Remove one with: $(basename "${0}") remove-cert '${domain}'"
 }
 
 # Remove installed certificate pairs for one or more domains

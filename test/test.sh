@@ -1166,6 +1166,25 @@ STUB
 # what matters is that the command reports the truth when one does not.
 # What `status` reports about peer routing, across the four states a user can
 # be in. The summary file is the contract, so the fixtures are that file.
+# Commands printed for a reader to copy must survive being pasted. Angle
+# brackets are shell redirections, so a placeholder in a suggested command is a
+# syntax error rather than a hint.
+test_suggested_commands_are_pasteable() {
+    local passed=0 total=0 offenders
+
+    total=$((total + 1))
+    offenders="$(grep -nE '(echo|log_[a-z]+|printf).*(generate-mkcert|remove-cert|start-with-tailscale|tailscale-refresh-peers)[^"]*<[a-z_-]+>' bin/spark-http-proxy || true)"
+    if [ -z "${offenders}" ]; then
+        success "suggested commands carry no shell metacharacters"
+        passed=$((passed + 1))
+    else
+        error "a suggested command would break when pasted: ${offenders}"
+    fi
+
+    log "Pasteable command tests: ${passed}/${total} passed"
+    [ "${passed}" -eq "${total}" ]
+}
+
 test_status_summary() {
     local passed=0 total=0
     local home state defs
@@ -2032,6 +2051,12 @@ main() {
     local vpath_fallthrough_passed=0
     test_virtual_path_fallthrough && vpath_fallthrough_passed=1
     [ "$vpath_fallthrough_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing that suggested commands can be pasted..."
+    total=$((total + 1))
+    local pasteable_passed=0
+    test_suggested_commands_are_pasteable && pasteable_passed=1
+    [ "$pasteable_passed" -eq 1 ] && passed=$((passed + 1))
 
     log "Testing what status reports about peer routing..."
     total=$((total + 1))
