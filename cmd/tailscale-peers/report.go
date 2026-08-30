@@ -191,6 +191,11 @@ func plural(count int, noun string) string {
 	return fmt.Sprintf("%d %ss", count, noun)
 }
 
+// summaryStateFile holds what `status` needs, in a form that needs no parser.
+func summaryStateFile(stateFile string) string {
+	return strings.TrimSuffix(stateFile, filepath.Ext(stateFile)) + "-summary"
+}
+
 // completedStateFile holds the timestamp of the last completed cycle and nothing else.
 func completedStateFile(stateFile string) string {
 	return strings.TrimSuffix(stateFile, filepath.Ext(stateFile)) + "-completed-at"

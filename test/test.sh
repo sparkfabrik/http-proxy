@@ -1164,6 +1164,88 @@ STUB
 
 # tailscale-refresh-peers, exercised with a stub docker so no cycle can run:
 # what matters is that the command reports the truth when one does not.
+# What `status` reports about peer routing, across the four states a user can
+# be in. The summary file is the contract, so the fixtures are that file.
+test_status_summary() {
+    local passed=0 total=0
+    local home state defs
+    home="$(mktemp -d)"
+    state="${home}/.local/spark/http-proxy/state"
+    mkdir -p "${state}"
+
+    defs="bin/.status-summary-defs"
+    sed '/^case "$1" in/,$d' bin/spark-http-proxy >"${defs}"
+
+    run_status() {
+        HOME="${home}" DEFS="${defs}" bash -c '
+            . "${DEFS}"
+            TAILSCALE_ENABLED=true
+            show_tailscale_summary' 2>/dev/null
+    }
+
+    # Forwarding: the machines and what they serve.
+    printf 'ok\n9 1 2\npaolo-cto-arch-p620\tnest.spark.loc,react.spark.loc\n' >"${state}/tailscale-peers-summary"
+    : >"${state}/tailscale-peers.txt"
+    local out
+    out="$(run_status)"
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "paolo-cto-arch-p620" && echo "${out}" | grep -q "nest.spark.loc"; then
+        success "status names the forwarding machine and its hostnames"
+        passed=$((passed + 1))
+    else
+        error "status did not name the forwarding machine: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # Nothing forwarded, which is the usual state with one proxy on a tailnet.
+    printf 'ok\n9 0 0\n' >"${state}/tailscale-peers-summary"
+    out="$(run_status)"
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "9"; then
+        success "status says how many machines were seen when nothing is forwarded"
+        passed=$((passed + 1))
+    else
+        error "status gave no evidence discovery ran: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "✅"; then
+        success "nothing forwarded is reported as working"
+        passed=$((passed + 1))
+    else
+        error "nothing forwarded was not reported as working: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # A cycle that could not run is not a working state.
+    printf 'aborted\n9 1 2\npaolo-cto-arch-p620\tnest.spark.loc,react.spark.loc\n' >"${state}/tailscale-peers-summary"
+    out="$(run_status)"
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "✅"; then
+        error "an aborted cycle was reported with a success tick: $(echo "${out}" | tr '\n' ' ')"
+    else
+        success "an aborted cycle is not reported as working"
+        passed=$((passed + 1))
+    fi
+
+    # And it goes to stdout, since status produces one report.
+    # The message itself, not merely the lines under it, which always go to
+    # stdout and would make an emptiness check pass either way.
+    total=$((total + 1))
+    if HOME="${home}" DEFS="${defs}" bash -c '. "${DEFS}"; TAILSCALE_ENABLED=true; show_tailscale_summary' 2>/dev/null |
+        grep -q "could not read the local routing table"; then
+        success "the aborted message itself goes to stdout"
+        passed=$((passed + 1))
+    else
+        error "the aborted message went to stderr, so it splits from the rest of status"
+    fi
+
+    rm -rf "${home}" "${defs}"
+    log "Status summary tests: ${passed}/${total} passed"
+    [ "${passed}" -eq "${total}" ]
+}
+
 test_refresh_peers() {
     local passed=0 total=0
     local home stub_dir state
@@ -1824,6 +1906,12 @@ main() {
     local vpath_fallthrough_passed=0
     test_virtual_path_fallthrough && vpath_fallthrough_passed=1
     [ "$vpath_fallthrough_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing what status reports about peer routing..."
+    total=$((total + 1))
+    local status_summary_passed=0
+    test_status_summary && status_summary_passed=1
+    [ "$status_summary_passed" -eq 1 ] && passed=$((passed + 1))
 
     log "Testing tailscale-refresh-peers..."
     total=$((total + 1))

@@ -228,3 +228,122 @@ func TestTheBackoffStartsOverAfterASuccess(t *testing.T) {
 		t.Errorf("the backoff carried %v into the next failure instead of starting over", next)
 	}
 }
+
+func readSummary(t *testing.T, stateFile string) string {
+	t.Helper()
+	raw, err := os.ReadFile(summaryStateFile(stateFile))
+	if err != nil {
+		t.Fatalf("reading the summary: %v", err)
+	}
+	return string(raw)
+}
+
+func TestTheSummaryDescribesACompletedCycle(t *testing.T) {
+	cfg := &config.TailscaleConfig{Enabled: true, RefreshInterval: time.Hour}
+	probe := &fakeProbe{routes: map[string][]traefikapi.Route{}}
+	d := testDiscovery(t, cfg, fakeSource{document: tailnetStatus}, probe)
+
+	report := &Report{
+		UpdatedAt: time.Now().UTC(),
+		Peers: []PeerReport{
+			{Name: "desktop", Address: "100.64.0.1", Status: statusOK, Hosts: []string{"app.loc", "api.loc"}},
+			{Name: "phone", Address: "100.64.0.2", Status: statusSkipped, Reason: "offline"},
+		},
+	}
+	if err := d.writeReport(report); err != nil {
+		t.Fatalf("writing the report: %v", err)
+	}
+
+	want := "ok\n2 1 2\ndesktop\tapp.loc,api.loc\n"
+	if got := readSummary(t, cfg.StateFile); got != want {
+		t.Errorf("summary is\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestASummaryWithNothingForwardedIsStillOk(t *testing.T) {
+	cfg := &config.TailscaleConfig{Enabled: true, RefreshInterval: time.Hour}
+	probe := &fakeProbe{routes: map[string][]traefikapi.Route{}}
+	d := testDiscovery(t, cfg, fakeSource{document: tailnetStatus}, probe)
+
+	report := &Report{
+		UpdatedAt: time.Now().UTC(),
+		Peers: []PeerReport{
+			{Name: "phone", Address: "100.64.0.2", Status: statusSkipped, Reason: "offline"},
+		},
+	}
+	if err := d.writeReport(report); err != nil {
+		t.Fatalf("writing the report: %v", err)
+	}
+
+	// Nothing forwarded is the usual state on a tailnet with one proxy, and it
+	// is a completed cycle rather than a state of its own.
+	want := "ok\n1 0 0\n"
+	if got := readSummary(t, cfg.StateFile); got != want {
+		t.Errorf("summary is\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestAnAbortedCycleKeepsWhatIsStillInPlace(t *testing.T) {
+	cfg := &config.TailscaleConfig{Enabled: true, RefreshInterval: time.Hour}
+	probe := &fakeProbe{routes: map[string][]traefikapi.Route{}}
+	d := testDiscovery(t, cfg, fakeSource{document: tailnetStatus}, probe)
+
+	forwarding := &Report{
+		UpdatedAt: time.Now().UTC(),
+		Peers: []PeerReport{
+			{Name: "desktop", Address: "100.64.0.1", Status: statusOK, Hosts: []string{"app.loc"}},
+		},
+	}
+	if err := d.writeReport(forwarding); err != nil {
+		t.Fatalf("writing the first report: %v", err)
+	}
+
+	aborted := &Report{
+		UpdatedAt:  time.Now().UTC().Add(time.Minute),
+		LocalError: "machine did not answer: connection refused",
+		Peers: []PeerReport{
+			{Name: "desktop", Address: "100.64.0.1", Status: statusSkipped, Reason: "not probed this cycle"},
+		},
+	}
+	if err := d.writeReport(aborted); err != nil {
+		t.Fatalf("writing the aborted report: %v", err)
+	}
+
+	// Those routes are still in place, so only the token changes.
+	want := "aborted\n1 1 1\ndesktop\tapp.loc\n"
+	if got := readSummary(t, cfg.StateFile); got != want {
+		t.Errorf("summary is\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestTheBarrierDoesNotAdvanceWhenTheSummaryCannotBeWritten(t *testing.T) {
+	cfg := &config.TailscaleConfig{Enabled: true, RefreshInterval: time.Hour}
+	probe := &fakeProbe{routes: map[string][]traefikapi.Route{}}
+	d := testDiscovery(t, cfg, fakeSource{document: tailnetStatus}, probe)
+
+	first := time.Now().UTC()
+	if err := d.writeReport(&Report{UpdatedAt: first}); err != nil {
+		t.Fatalf("writing the first report: %v", err)
+	}
+
+	// A summary path that cannot be written, so the barrier must not move past
+	// a cycle whose summary never landed.
+	if err := os.Remove(summaryStateFile(cfg.StateFile)); err != nil {
+		t.Fatalf("clearing the summary: %v", err)
+	}
+	if err := os.Mkdir(summaryStateFile(cfg.StateFile), 0o755); err != nil {
+		t.Fatalf("blocking the summary: %v", err)
+	}
+
+	if err := d.writeReport(&Report{UpdatedAt: first.Add(time.Minute)}); err == nil {
+		t.Fatal("writing the report succeeded with an unwritable summary path")
+	}
+
+	raw, err := os.ReadFile(completedStateFile(cfg.StateFile))
+	if err != nil {
+		t.Fatalf("reading the completed file: %v", err)
+	}
+	if got := string(raw); got != first.Format(time.RFC3339Nano) {
+		t.Errorf("the barrier advanced to %q while the summary was never written", got)
+	}
+}

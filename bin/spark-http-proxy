@@ -140,6 +140,7 @@ TAILSCALE_STATUS_FILE="${STATE_DIR}/tailscale-status.json"
 TAILSCALE_STATE_FILE="${STATE_DIR}/tailscale-peers.json"
 TAILSCALE_RENDERED_FILE="${STATE_DIR}/tailscale-peers.txt"
 TAILSCALE_COMPLETED_FILE="${STATE_DIR}/tailscale-peers-completed-at"
+TAILSCALE_SUMMARY_FILE="${STATE_DIR}/tailscale-peers-summary"
 TAILSCALE_SOCKET_OVERRIDE="$(dirname "${COMPOSE_FILE}")/compose.tailscale-socket.yml"
 TAILSCALE_STATUS_LOG="${STATE_DIR}/tailscale-status.log"
 STATUS_AGENT_LABEL="com.sparkfabrik.http-proxy.tailscale-status"
@@ -1182,22 +1183,52 @@ show_tailscale_peers() {
 
 # Prints one summary line for the status command.
 show_tailscale_summary() {
-  local summary
-
   if [[ "${TAILSCALE_ENABLED}" != "true" ]]; then
     return 0
   fi
 
   echo ""
-  if [[ ! -f "${TAILSCALE_RENDERED_FILE}" ]]; then
-    log_warning "Tailnet peer routing is enabled, but no discovery cycle has been recorded yet"
+  if [[ ! -f "${TAILSCALE_SUMMARY_FILE}" ]]; then
+    # Not log_warning: status is one report, and this is a state of the system
+    # rather than a diagnostic about the CLI, so it belongs on stdout.
+    echo "⚠️  Tailnet peer routing is enabled, but no discovery cycle has been recorded yet"
     echo "   💡 Detail: ${0} tailscale-peers"
     return 0
   fi
 
-  summary="$(grep -m1 "considered," "${TAILSCALE_RENDERED_FILE}" || true)"
-  log_success "Tailnet peer routing: ${summary:-cycle recorded}"
+  local state counts seen forwarding hostnames
+  { read -r state; read -r counts; } <"${TAILSCALE_SUMMARY_FILE}"
+  read -r seen forwarding hostnames <<<"${counts}"
+
+  if [[ "${state}" == "aborted" ]]; then
+    echo "⚠️  Tailnet peer routing: the last cycle could not read the local routing table"
+    echo "   The routes from the previous cycle are still in place, and this clears within seconds of a restart."
+    echo "   💡 Detail: ${0} tailscale-peers"
+    return 0
+  fi
+
+  if [[ "${forwarding:-0}" -eq 0 ]]; then
+    log_success "Tailnet peer routing: nothing forwarded, $(count_noun "${seen:-0}" machine) seen and none running this proxy"
+    echo "   💡 Detail: ${0} tailscale-peers"
+    return 0
+  fi
+
+  log_success "Tailnet peer routing: $(count_noun "${forwarding}" machine) forwarding $(count_noun "${hostnames}" hostname)"
+  local name hosts
+  while IFS=$'\t' read -r name hosts; do
+    [[ -n "${name}" ]] && printf '     %-24s %s\n' "${name}" "${hosts//,/, }"
+  done < <(tail -n +3 "${TAILSCALE_SUMMARY_FILE}")
   echo "   💡 Detail: ${0} tailscale-peers"
+}
+
+# Renders a count with its noun, singular or plural.
+count_noun() {
+  local count="$1" noun="$2"
+  if [[ "${count}" -eq 1 ]]; then
+    echo "${count} ${noun}"
+  else
+    echo "${count} ${noun}s"
+  fi
 }
 
 # Docker Compose helpers
