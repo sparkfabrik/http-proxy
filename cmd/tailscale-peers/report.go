@@ -70,61 +70,56 @@ func rejectedRules(peers []PeerReport) []string {
 	return lines
 }
 
-// Groups of the table, in the order they are shown. Every status maps to
-// exactly one group and the groups follow the sentences renderSummary prints
-// below the table, so a reader sees the same partition twice rather than two
-// different ones.
-//
-// The labels say what the group means. Repeating the status token would leave
-// "unreachable" and "skipped" looking like the same fact, which is the
-// distinction the summary exists to keep.
+// Useful rows first; every status that is not ok lands in EXCLUDED.
 var peerGroups = []struct {
 	label    string
 	lastCol  string
 	statuses []string
 }{
-	{"RUNNING THIS PROXY", "HOSTNAMES", []string{statusOK}},
-	{"DID NOT ANSWER AS A PROXY", "DETAIL", []string{statusUnreachable, statusNoProxy}},
-	{"ANSWERED BUT NOT THIS PROXY", "DETAIL", []string{statusUndeclared}},
-	{"OFFLINE OR EXCLUDED", "REASON", []string{statusSkipped}},
+	{"PROXY", "HOSTNAMES", []string{statusOK}},
+	{"EXCLUDED", "STATUS", []string{statusNoProxy, statusUndeclared, statusUnreachable, statusSkipped}},
 }
 
-// renderTable renders every non-empty group, forwarding first. An empty group
-// is omitted entirely: a heading with no rows under it reads as a failure to
-// find something, and on a tailnet with one proxy the first group is empty
-// every cycle.
+// renderTable renders each non-empty group. An empty one is omitted entirely.
 func renderTable(peers []PeerReport, cycle time.Time) string {
-	grouped := make(map[string][]PeerReport, len(peerGroups))
-	claimed := make(map[string]bool, len(peers))
-
-	for _, group := range peerGroups {
-		for _, status := range group.statuses {
-			claimed[status] = true
-		}
-	}
+	proxy := make([]PeerReport, 0, len(peers))
+	excluded := make([]PeerReport, 0, len(peers))
 
 	for _, peer := range peers {
-		key := peer.Status
-		if !claimed[key] {
-			// A status no group names would otherwise vanish from the table
-			// while still being counted in the summary. It goes last, under its
-			// own name, rather than being filed under a meaning it may not have.
-			key = ""
+		if peer.Status == statusOK {
+			proxy = append(proxy, peer)
+			continue
 		}
-		grouped[key] = append(grouped[key], peer)
+		excluded = append(excluded, peer)
 	}
 
 	var b strings.Builder
-	for _, group := range peerGroups {
-		var rows []PeerReport
-		for _, status := range group.statuses {
-			rows = append(rows, grouped[status]...)
-		}
-		writeGroup(&b, group.label, group.lastCol, rows, cycle)
-	}
-	writeGroup(&b, "OTHER", "STATUS AND DETAIL", grouped[""], cycle)
+	writeGroup(&b, peerGroups[0].label, peerGroups[0].lastCol, proxy, cycle)
+	writeGroup(&b, peerGroups[1].label, peerGroups[1].lastCol, excluded, cycle)
 
 	return b.String()
+}
+
+// knownStatuses are the ones whose reason text explains itself in the table.
+var knownStatuses = map[string]bool{
+	statusOK:          true,
+	statusNoProxy:     true,
+	statusUndeclared:  true,
+	statusUnreachable: true,
+	statusSkipped:     true,
+}
+
+// peerStatusCell names the status itself when it is not one this table knows, so
+// a status added later cannot appear as a bare reason or as nothing.
+func peerStatusCell(peer PeerReport, cycle time.Time) string {
+	detail := peerDetail(peer, cycle)
+	if knownStatuses[peer.Status] {
+		return detail
+	}
+	if peer.Reason == "" {
+		return peer.Status
+	}
+	return peer.Status + ": " + detail
 }
 
 // writeGroup writes one labelled block, or nothing when it holds no machine.
@@ -136,16 +131,12 @@ func writeGroup(b *strings.Builder, label, lastCol string, peers []PeerReport, c
 	}
 
 	slices.SortStableFunc(peers, func(a, b PeerReport) int {
-		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+		return strings.Compare(a.Name, b.Name)
 	})
 
 	rows := make([][3]string, 0, len(peers))
 	for _, peer := range peers {
-		detail := peerDetail(peer, cycle)
-		if lastCol == "STATUS AND DETAIL" {
-			detail = strings.TrimSpace(peer.Status + " " + detail)
-		}
-		rows = append(rows, [3]string{peer.Name, peer.Address, detail})
+		rows = append(rows, [3]string{peer.Name, peer.Address, peerStatusCell(peer, cycle)})
 	}
 
 	headers := [3]string{"MACHINE", "ADDRESS", lastCol}
@@ -224,40 +215,23 @@ func compactReason(reason string) string {
 
 // renderSummary counts what the cycle found and names the ordinary outcomes.
 func renderSummary(peers []PeerReport) string {
-	var forwarding, hostnames, noProxy, undeclared, unreachable, skipped int
+	var running, hostnames int
 	for _, peer := range peers {
-		switch peer.Status {
-		case statusOK:
+		if peer.Status == statusOK {
+			running++
 			hostnames += len(peer.Hosts)
-			if len(peer.Hosts) > 0 {
-				forwarding++
-			}
-		case statusNoProxy:
-			noProxy++
-		case statusUndeclared:
-			undeclared++
-		case statusUnreachable:
-			unreachable++
-		case statusSkipped:
-			skipped++
 		}
 	}
+	excluded := len(peers) - running
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "\n%s considered, %s forwarding %s.\n",
-		plural(len(peers), "machine"), plural(forwarding, "machine"), plural(hostnames, "hostname"))
+	if running == 0 {
+		fmt.Fprintf(&b, "\n%s, none running this proxy, %d excluded.\n", plural(len(peers), "machine"), excluded)
+		return b.String()
+	}
 
-	if noProxy+unreachable > 0 {
-		fmt.Fprintf(&b, "%s did not answer as a proxy, which is usual on a tailnet carrying phones, routers and the like.\n",
-			plural(noProxy+unreachable, "machine"))
-	}
-	if undeclared > 0 {
-		fmt.Fprintf(&b, "%s answered but did not declare itself as this proxy, so its routes were not used.\n",
-			plural(undeclared, "machine"))
-	}
-	if skipped > 0 {
-		fmt.Fprintf(&b, "%s excluded, with the reason in the table.\n", plural(skipped, "machine"))
-	}
+	fmt.Fprintf(&b, "\n%s, %d running this proxy forwarding %s, %d excluded.\n",
+		plural(len(peers), "machine"), running, plural(hostnames, "hostname"), excluded)
 
 	return b.String()
 }

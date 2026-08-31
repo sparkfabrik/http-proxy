@@ -936,28 +936,19 @@ $ spark-http-proxy tailscale-peers
 Tailnet peers, from the cycle at 2026-01-02T09:15:04Z
 Source: socket, tailnet status produced at 2026-01-02T09:15:04Z
 
-RUNNING THIS PROXY
+PROXY
   MACHINE    ADDRESS       HOSTNAMES
   machine-a  100.100.0.11  app.loc, api.loc
 
-DID NOT ANSWER AS A PROXY
-  MACHINE  ADDRESS       DETAIL
-  router   100.100.0.20  connection refused
-
-ANSWERED BUT NOT THIS PROXY
-  MACHINE    ADDRESS       DETAIL
+EXCLUDED
+  MACHINE    ADDRESS       STATUS
   machine-b  100.100.0.12  answered, but does not declare itself as this proxy
-
-OFFLINE OR EXCLUDED
-  MACHINE  ADDRESS       REASON
-  phone    100.100.0.32  offline
-  tv       100.100.0.31  offline
+  phone      100.100.0.32  offline
+  router     100.100.0.20  connection refused
+  tv         100.100.0.31  offline
 
 
-5 machines considered, 1 machine forwarding 2 hostnames.
-1 machine did not answer as a proxy, which is usual on a tailnet carrying phones, routers and the like.
-1 machine answered but did not declare itself as this proxy, so its routes were not used.
-2 machines excluded, with the reason in the table.
+5 machines, 1 running this proxy forwarding 2 hostnames, 4 excluded.
 ```
 
 Most rows on a real tailnet are phones, routers and televisions. They are
@@ -968,32 +959,23 @@ so a container started on another machine takes up to a minute to become
 reachable. This runs a cycle now instead:
 
 ```console
-$ spark-http-proxy tailscale-refresh-peers
+$ spark-http-proxy tailscale-peers --refresh
 Tailnet peers, from the cycle at 2026-01-02T09:16:58Z
 Source: socket, tailnet status produced at 2026-01-02T09:16:58Z
 
-RUNNING THIS PROXY
+PROXY
   MACHINE    ADDRESS       HOSTNAMES
   machine-a  100.100.0.11  app.loc, api.loc, new-thing.loc
 
-DID NOT ANSWER AS A PROXY
-  MACHINE  ADDRESS       DETAIL
-  router   100.100.0.20  connection refused
-
-ANSWERED BUT NOT THIS PROXY
-  MACHINE    ADDRESS       DETAIL
+EXCLUDED
+  MACHINE    ADDRESS       STATUS
   machine-b  100.100.0.12  answered, but does not declare itself as this proxy
-
-OFFLINE OR EXCLUDED
-  MACHINE  ADDRESS       REASON
-  phone    100.100.0.32  offline
-  tv       100.100.0.31  offline
+  phone      100.100.0.32  offline
+  router     100.100.0.20  connection refused
+  tv         100.100.0.31  offline
 
 
-5 machines considered, 1 machine forwarding 3 hostnames.
-1 machine did not answer as a proxy, which is usual on a tailnet carrying phones, routers and the like.
-1 machine answered but did not declare itself as this proxy, so its routes were not used.
-2 machines excluded, with the reason in the table.
+5 machines, 1 running this proxy forwarding 3 hostnames, 4 excluded.
 ```
 
 It waits for the cycle to finish and prints its report, so what you see is the
@@ -1071,7 +1053,7 @@ Disabling it and restarting removes every forwarded hostname.
 | `HTTP_PROXY_TAILSCALE_SOCKET`           | `/var/run/tailscale/tailscaled.sock` | The daemon socket, for the `socket` source                                                                                           |
 | `HTTP_PROXY_TAILSCALE_STATUS_FILE`      | `/state/tailscale-status.json`       | The status document, for the `file` source                                                                                           |
 | `HTTP_PROXY_TAILSCALE_AGENT_PATH`       | standard system and Homebrew paths   | The `PATH` the macOS refresh agent runs with, for a Tailscale client installed somewhere else                                        |
-| `HTTP_PROXY_TAILSCALE_REFRESH_TIMEOUT`  | `30s`                                | How long `tailscale-refresh-peers` waits for the forced cycle before reporting that it did not complete                              |
+| `HTTP_PROXY_TAILSCALE_REFRESH_TIMEOUT`  | `30s`                                | How long `tailscale-peers --refresh` waits for the cycle before reporting that it did not complete                                   |
 
 Discovery is polling, so a container appearing on another machine takes up to
 one interval to become reachable. The interval is paced for a background daemon:
@@ -1141,19 +1123,17 @@ nothing, with the reason:
 The rows are grouped, the useful ones first, and a group holding no machine is
 not shown at all:
 
-| Group                         | Holds                                                        | Statuses in `--json`      |
-| ----------------------------- | ------------------------------------------------------------ | ------------------------- |
-| `RUNNING THIS PROXY`          | probed, running this proxy, and the hostnames it contributes | `ok`                      |
-| `DID NOT ANSWER AS A PROXY`   | nothing answered, or nothing answered with a routing table   | `unreachable`, `no proxy` |
-| `ANSWERED BUT NOT THIS PROXY` | something answered but did not declare itself as this proxy  | `not this proxy`          |
-| `OFFLINE OR EXCLUDED`         | never probed, with the reason: offline, or another account   | `skipped`                 |
+| Group      | Holds                                                          | Statuses in `--json`                                   |
+| ---------- | -------------------------------------------------------------- | ------------------------------------------------------ |
+| `PROXY`    | machines running this proxy, and the hostnames they contribute | `ok`                                                   |
+| `EXCLUDED` | everything else, with the reason in the `STATUS` column        | `unreachable`, `no proxy`, `not this proxy`, `skipped` |
 
 The group says what the status used to say in a column of its own, so
 `--json` remains the place to read the status token itself. Column widths are
 computed per group, and rows stay alphabetical within one.
 
 Most machines on a tailnet are phones, routers and televisions, so the
-`DID NOT ANSWER AS A PROXY` group is the ordinary case rather than a fault. The command
+`EXCLUDED` group is the ordinary case rather than a fault. The command
 reports the proxy's most recent cycle rather than performing discovery of its
 own, so it cannot disagree with what the proxy is doing, and it still answers
 when the proxy is stopped, saying that what it shows is not current.

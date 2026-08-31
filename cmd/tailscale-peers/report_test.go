@@ -48,14 +48,16 @@ func TestRenderNamesCollisionsAndTheirWinner(t *testing.T) {
 	}
 }
 
-func TestRenderTreatsMachinesWithoutAProxyAsUsual(t *testing.T) {
+func TestRenderSummarisesInOneLine(t *testing.T) {
 	rendered := testReport().Render()
 
-	if !strings.Contains(rendered, "4 machines considered, 1 machine forwarding 2 hostnames.") {
+	if !strings.Contains(rendered, "4 machines, 1 running this proxy forwarding 2 hostnames, 3 excluded.") {
 		t.Errorf("rendered report lacks its summary line:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "usual on a tailnet") {
-		t.Errorf("rendered report does not say that machines without a proxy are usual:\n%s", rendered)
+	for _, gone := range []string{"considered", "usual on a tailnet", "reason in the table"} {
+		if strings.Contains(rendered, gone) {
+			t.Errorf("the summary still carries %q:\n%s", gone, rendered)
+		}
 	}
 }
 
@@ -210,7 +212,7 @@ func TestRenderStillSummarisesACompletedCycle(t *testing.T) {
 
 	out := r.Render()
 
-	if !strings.Contains(out, "1 machine forwarding 1 hostname") {
+	if !strings.Contains(out, "1 running this proxy forwarding 1 hostname") {
 		t.Errorf("a completed cycle lost its counts:\n%s", out)
 	}
 	if !strings.Contains(out, "excluded") {
@@ -232,14 +234,13 @@ func TestRenderGroupsUsefulRowsFirst(t *testing.T) {
 	}}
 
 	out := r.Render()
-	forwarding := strings.Index(out, "RUNNING THIS PROXY")
-	answered := strings.Index(out, "DID NOT ANSWER AS A PROXY")
-	offline := strings.Index(out, "OFFLINE OR EXCLUDED")
+	proxy := strings.Index(out, "PROXY")
+	excluded := strings.Index(out, "EXCLUDED")
 
-	if forwarding < 0 || answered < 0 || offline < 0 {
+	if proxy < 0 || excluded < 0 {
 		t.Fatalf("a group is missing:\n%s", out)
 	}
-	if !(forwarding < answered && answered < offline) {
+	if proxy > excluded {
 		t.Errorf("groups are not in order, the useful rows come first:\n%s", out)
 	}
 }
@@ -251,13 +252,10 @@ func TestRenderOmitsEmptyGroups(t *testing.T) {
 	}}
 
 	out := r.Render()
-	if strings.Contains(out, "RUNNING THIS PROXY") {
+	if strings.Contains(out, "PROXY\n") {
 		t.Errorf("an empty group printed its heading, which reads as a failure to find something:\n%s", out)
 	}
-	if strings.Contains(out, "OFFLINE OR EXCLUDED") {
-		t.Errorf("an empty group printed its heading:\n%s", out)
-	}
-	if !strings.Contains(out, "DID NOT ANSWER AS A PROXY") {
+	if !strings.Contains(out, "EXCLUDED") {
 		t.Errorf("the group holding the only machine is missing:\n%s", out)
 	}
 }
@@ -266,8 +264,8 @@ func TestRenderSizesEachGroupOnItsOwn(t *testing.T) {
 	// A very long name in one group must not pad the columns of another.
 	long := "a-machine-with-a-very-long-name-indeed"
 	r := &Report{UpdatedAt: time.Now(), Source: "socket", Peers: []PeerReport{
-		peerAt(long, "100.0.0.1", statusSkipped),
-		peerAt("b", "100.0.0.2", statusUnreachable),
+		peerAt(long, "100.0.0.1", statusOK),
+		peerAt("b", "100.0.0.2", statusSkipped),
 	}}
 
 	out := r.Render()
@@ -314,8 +312,11 @@ func TestRenderKeepsAStatusNoGroupNames(t *testing.T) {
 	if !strings.Contains(out, "oddity") {
 		t.Errorf("a machine with an unrecognised status vanished from the table:\n%s", out)
 	}
+	if !strings.Contains(out, "EXCLUDED") {
+		t.Errorf("a machine with an unrecognised status is not in the excluded group:\n%s", out)
+	}
 	if !strings.Contains(out, "something new") {
-		t.Errorf("the unrecognised status itself is not shown:\n%s", out)
+		t.Errorf("the unrecognised status itself is not named, so a new status shows as a bare reason:\n%s", out)
 	}
 }
 
