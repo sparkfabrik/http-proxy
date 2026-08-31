@@ -1780,9 +1780,23 @@ test_self_update_applies_the_update() {
         passed=$((passed + 1))
     fi
 
-    # End to end, against a throwaway origin so nothing touches this checkout.
+    # End to end, against a repository the test builds itself. It does not clone
+    # this checkout: CI checks out a detached HEAD, and a clone of that has no
+    # branch to pull, which is a property of the harness and not of the command.
     root="$(mktemp -d)"
-    git clone -q --bare . "${root}/origin" 2>/dev/null
+    mkdir -p "${root}/src/bin"
+    cp bin/spark-http-proxy "${root}/src/bin/"
+    # Beside the script, which is one of the two places the CLI looks and the
+    # one that does not depend on HOME.
+    cp compose.yml "${root}/src/bin/"
+    (
+        cd "${root}/src" || exit 1
+        git init -q -b probe .
+        git config user.email t@t
+        git config user.name t
+        git add -A && git commit -qm base
+    )
+    git clone -q --bare "${root}/src" "${root}/origin" 2>/dev/null
     git clone -q "${root}/origin" "${root}/work" 2>/dev/null
     git clone -q "${root}/origin" "${root}/push" 2>/dev/null
     (
@@ -1923,6 +1937,20 @@ test_tailscale_status_says_what_it_wrote() {
         passed=$((passed + 1))
     else
         error "a logged-out client produced: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # This machine down with a peer up. The online count is one and it is not
+    # this machine, so a warning about no other machine being online would be
+    # false. The state is what to report.
+    printf '{\n  "BackendState": "NeedsLogin",\n  "Self": {\n    "HostName": "a",\n    "Online": false\n  },\n  "Peer": {\n    "k1": {\n      "HostName": "b",\n      "Online": true\n    }\n  }\n}\n' >"${dir}/selfdown.json"
+    out="$(source_summarise "${dir}/selfdown.json")"
+    total=$((total + 1))
+    if echo "${out}" | grep -q "this machine is NeedsLogin" &&
+        ! echo "${out}" | grep -q "No other machine is online"; then
+        success "this machine being down is reported without claiming peers are"
+        passed=$((passed + 1))
+    else
+        error "a peer online with this machine down produced: $(echo "${out}" | tr '\n' ' ')"
     fi
 
     # A shape these counts do not fit must say so rather than report a number.

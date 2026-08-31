@@ -1166,9 +1166,15 @@ summarise_tailscale_status() {
 
   log_info "$(count_noun "${machines}" machine) in the document, ${online:-0} online, this machine ${state:-unknown}"
 
-  if [[ "${online:-0}" -le 1 ]]; then
-    log_warning "No other machine is online, so nothing will be forwarded"
-    log_info "Check that Tailscale is logged in on this machine and on the others"
+  # Only claims that can be read off the counts without knowing which machine
+  # an online count belongs to. An online count of one is not necessarily this
+  # machine: it is also one peer up while this machine is logged out.
+  if [[ "${machines}" -le 1 ]]; then
+    log_warning "The document holds only this machine, so nothing will be forwarded"
+    log_info "Check that Tailscale is logged in and the other machines are on this account"
+  elif [[ -n "${state}" && "${state}" != "Running" ]]; then
+    log_warning "Tailscale on this machine is ${state}, so nothing will be forwarded"
+    log_info "Bring it up with: tailscale up"
   fi
 }
 
