@@ -217,3 +217,116 @@ func TestRenderStillSummarisesACompletedCycle(t *testing.T) {
 		t.Errorf("a completed cycle stopped reporting genuinely excluded machines:\n%s", out)
 	}
 }
+
+// peerAt returns a machine with the given name and status, for grouping tests.
+func peerAt(name, address, status string) PeerReport {
+	return PeerReport{Name: name, Address: address, Status: status, Reason: "reason for " + name}
+}
+
+func TestRenderGroupsUsefulRowsFirst(t *testing.T) {
+	cycle := time.Now()
+	r := &Report{UpdatedAt: cycle, Source: "socket", Peers: []PeerReport{
+		peerAt("zeta", "100.0.0.1", statusSkipped),
+		peerAt("alpha", "100.0.0.2", statusUnreachable),
+		{Name: "beta", Address: "100.0.0.3", Status: statusOK, Hosts: []string{"beta.spark.loc"}},
+	}}
+
+	out := r.Render()
+	forwarding := strings.Index(out, "RUNNING THIS PROXY")
+	answered := strings.Index(out, "DID NOT ANSWER AS A PROXY")
+	offline := strings.Index(out, "OFFLINE OR EXCLUDED")
+
+	if forwarding < 0 || answered < 0 || offline < 0 {
+		t.Fatalf("a group is missing:\n%s", out)
+	}
+	if !(forwarding < answered && answered < offline) {
+		t.Errorf("groups are not in order, the useful rows come first:\n%s", out)
+	}
+}
+
+func TestRenderOmitsEmptyGroups(t *testing.T) {
+	// A tailnet where nothing runs this proxy, which is the usual state.
+	r := &Report{UpdatedAt: time.Now(), Source: "socket", Peers: []PeerReport{
+		peerAt("alpha", "100.0.0.1", statusUnreachable),
+	}}
+
+	out := r.Render()
+	if strings.Contains(out, "RUNNING THIS PROXY") {
+		t.Errorf("an empty group printed its heading, which reads as a failure to find something:\n%s", out)
+	}
+	if strings.Contains(out, "OFFLINE OR EXCLUDED") {
+		t.Errorf("an empty group printed its heading:\n%s", out)
+	}
+	if !strings.Contains(out, "DID NOT ANSWER AS A PROXY") {
+		t.Errorf("the group holding the only machine is missing:\n%s", out)
+	}
+}
+
+func TestRenderSizesEachGroupOnItsOwn(t *testing.T) {
+	// A very long name in one group must not pad the columns of another.
+	long := "a-machine-with-a-very-long-name-indeed"
+	r := &Report{UpdatedAt: time.Now(), Source: "socket", Peers: []PeerReport{
+		peerAt(long, "100.0.0.1", statusSkipped),
+		peerAt("b", "100.0.0.2", statusUnreachable),
+	}}
+
+	out := r.Render()
+	// Sized on its own group, the address sits just past the MACHINE header's
+	// width. Sized on every row, it would sit past the long name instead.
+	perGroup := 2 + len("MACHINE") + 2
+	overall := 2 + len(long) + 2
+
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "  b ") && strings.Contains(line, "100.0.0.2") {
+			at := strings.Index(line, "100.0.0.2")
+			if at != perGroup {
+				t.Errorf("the address is at %d, expected %d for a group sized on itself and %d if sized on every row:\n%q",
+					at, perGroup, overall, line)
+			}
+			return
+		}
+	}
+	t.Errorf("the short row was not found:\n%s", out)
+}
+
+func TestRenderSortsWithinAGroup(t *testing.T) {
+	r := &Report{UpdatedAt: time.Now(), Source: "socket", Peers: []PeerReport{
+		peerAt("charlie", "100.0.0.1", statusUnreachable),
+		peerAt("alpha", "100.0.0.2", statusUnreachable),
+		peerAt("bravo", "100.0.0.3", statusUnreachable),
+	}}
+
+	out := r.Render()
+	a, b, c := strings.Index(out, "alpha"), strings.Index(out, "bravo"), strings.Index(out, "charlie")
+	if !(a < b && b < c) {
+		t.Errorf("rows within a group are not alphabetical, so a machine is hard to find:\n%s", out)
+	}
+}
+
+func TestRenderKeepsAStatusNoGroupNames(t *testing.T) {
+	// The summary counts every machine, so a status the groups do not name must
+	// still be shown rather than disappearing from the table.
+	r := &Report{UpdatedAt: time.Now(), Source: "socket", Peers: []PeerReport{
+		peerAt("oddity", "100.0.0.1", "something new"),
+	}}
+
+	out := r.Render()
+	if !strings.Contains(out, "oddity") {
+		t.Errorf("a machine with an unrecognised status vanished from the table:\n%s", out)
+	}
+	if !strings.Contains(out, "something new") {
+		t.Errorf("the unrecognised status itself is not shown:\n%s", out)
+	}
+}
+
+func TestRenderKeepsTheReasonForExcludedMachines(t *testing.T) {
+	// renderSummary says the reason is in the table, so it has to be there.
+	r := &Report{UpdatedAt: time.Now(), Source: "socket", Peers: []PeerReport{
+		{Name: "alpha", Address: "100.0.0.1", Status: statusSkipped, Reason: "belongs to another account"},
+	}}
+
+	out := r.Render()
+	if !strings.Contains(out, "another account") {
+		t.Errorf("the summary promises the reason is in the table and it is not:\n%s", out)
+	}
+}
