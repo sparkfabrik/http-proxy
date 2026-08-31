@@ -1123,12 +1123,10 @@ nothing, with the reason:
 The rows are grouped, the useful ones first, and a group holding no machine is
 not shown at all:
 
-| Group      | Holds                                                          | Statuses in `--json`                                     |
-| ---------- | -------------------------------------------------------------- | -------------------------------------------------------- |
-| Group      | Holds                                                          | Statuses in `--json`                                     |
-| ---------- | ------------------------------------------------------------   | -------------------------------------------------------- |
-| `PROXY`    | machines running this proxy, and the hostnames they contribute | `ok`                                                     |
-| `EXCLUDED` | everything else, with the reason in the `STATUS` column        | `unreachable`, `no proxy`, `not this proxy`, `skipped`   |
+| Group      | Holds                                                          | Statuses in `--json`                                   |
+| ---------- | -------------------------------------------------------------- | ------------------------------------------------------ |
+| `PROXY`    | machines running this proxy, and the hostnames they contribute | `ok`                                                   |
+| `EXCLUDED` | everything else, with the reason in the `STATUS` column        | `unreachable`, `no proxy`, `not this proxy`, `skipped` |
 
 The group says what the status used to say in a column of its own, so
 `--json` remains the place to read the status token itself. Column widths are
