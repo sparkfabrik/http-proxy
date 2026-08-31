@@ -1763,6 +1763,8 @@ test_self_update_applies_the_update() {
     local passed=0 total=0 root out rc stub
 
     total=$((total + 1))
+    # The literal source text is the point, so the single quotes are deliberate.
+    # shellcheck disable=SC2016
     if awk '/^self_update\(\) \{/,/^\}/' bin/spark-http-proxy | grep -q 'exec "\${SCRIPT_PATH}" upgrade'; then
         success "self-update execs the updated script rather than continuing"
         passed=$((passed + 1))
@@ -1832,6 +1834,121 @@ test_self_update_applies_the_update() {
     rm -rf "${root}" "${stub}"
     log "Self-update tests: ${passed}/${total} passed"
     [ "${passed}" -eq "${total}" ]
+}
+
+# version used to read a file the images do not carry a value in, so every
+# container reported "unknown". It now reads the revision label the release
+# pipeline writes, and falls back to that file.
+test_version_reports_the_image_revision() {
+    local passed=0 total=0 name out revision
+
+    revision="deadbeefcafe1234567890abcdefabcdefabcdef"
+    name="claude-revision-probe-$$"
+
+    docker rm -f "${name}" >/dev/null 2>&1
+    docker run -d --name "${name}" \
+        --label "org.opencontainers.image.revision=${revision}" \
+        alpine:3.20 sleep 60 >/dev/null 2>&1
+
+    out="$(source_container_revision "${name}")"
+    total=$((total + 1))
+    if [ "${out}" = "deadbee" ]; then
+        success "the revision label is reported, shortened"
+        passed=$((passed + 1))
+    else
+        error "expected deadbee from the revision label, got '${out}'"
+    fi
+
+    # Stopped containers used to report nothing, because the file was read with
+    # docker exec. A label is readable either way.
+    docker stop "${name}" >/dev/null 2>&1
+    out="$(source_container_revision "${name}")"
+    total=$((total + 1))
+    if [ "${out}" = "deadbee" ]; then
+        success "a stopped container still reports its revision"
+        passed=$((passed + 1))
+    else
+        error "a stopped container reported '${out}'"
+    fi
+    docker rm -f "${name}" >/dev/null 2>&1
+
+    # Neither a label nor the file: the honest answer is unknown.
+    docker rm -f "${name}" >/dev/null 2>&1
+    docker run -d --name "${name}" alpine:3.20 sleep 60 >/dev/null 2>&1
+    out="$(source_container_revision "${name}")"
+    total=$((total + 1))
+    if [ "${out}" = "unknown" ]; then
+        success "a container carrying neither reports unknown"
+        passed=$((passed + 1))
+    else
+        error "expected unknown, got '${out}'"
+    fi
+    docker rm -f "${name}" >/dev/null 2>&1
+
+    log "Version reporting tests: ${passed}/${total} passed"
+    [ "${passed}" -eq "${total}" ]
+}
+
+# Runs container_revision out of the CLI without running the CLI.
+source_container_revision() {
+    bash -c '
+        source <(sed -n "/^container_revision()/,/^}/p" bin/spark-http-proxy)
+        container_revision "$1"' _ "$1"
+}
+
+# tailscale-status wrote a document and reported only its path, so a client that
+# is running but logged out produced a useless document and a green tick.
+test_tailscale_status_says_what_it_wrote() {
+    local passed=0 total=0 dir out
+
+    dir="$(mktemp -d)"
+
+    printf '{\n  "BackendState": "Running",\n  "Self": {\n    "HostName": "a",\n    "Online": true\n  },\n  "Peer": {\n    "k1": {\n      "HostName": "b",\n      "Online": true\n    },\n    "k2": {\n      "HostName": "c",\n      "Online": false\n    }\n  }\n}\n' >"${dir}/full.json"
+    out="$(source_summarise "${dir}/full.json")"
+    total=$((total + 1))
+    if echo "${out}" | grep -q "3 machines in the document, 2 online, this machine Running"; then
+        success "the summary counts machines, online machines and this machine's state"
+        passed=$((passed + 1))
+    else
+        error "summary said: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # The failure this exists for: running, logged out, empty tailnet, and the
+    # write succeeds.
+    printf '{\n  "BackendState": "NeedsLogin",\n  "Self": {\n    "HostName": "a",\n    "Online": false\n  },\n  "Peer": null\n}\n' >"${dir}/loggedout.json"
+    out="$(source_summarise "${dir}/loggedout.json")"
+    total=$((total + 1))
+    if echo "${out}" | grep -q "NeedsLogin" && echo "${out}" | grep -q "nothing will be forwarded"; then
+        success "a logged-out client is reported rather than passed over"
+        passed=$((passed + 1))
+    else
+        error "a logged-out client produced: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # A shape these counts do not fit must say so rather than report a number.
+    printf '{"BackendState":"Running","Self":{"HostName":"a","Online":true}}' >"${dir}/compact.json"
+    out="$(source_summarise "${dir}/compact.json")"
+    total=$((total + 1))
+    if echo "${out}" | grep -q "could not be summarised"; then
+        success "an unexpected shape is admitted, not counted wrongly"
+        passed=$((passed + 1))
+    else
+        error "a compact document produced: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    rm -rf "${dir}"
+    log "Tailnet status summary tests: ${passed}/${total} passed"
+    [ "${passed}" -eq "${total}" ]
+}
+
+# Runs the summary out of the CLI without invoking the Tailscale client.
+source_summarise() {
+    bash -c '
+        log_info() { echo "$1"; }
+        log_warning() { echo "$1"; }
+        source <(sed -n "/^count_noun()/,/^}/p" bin/spark-http-proxy)
+        source <(sed -n "/^summarise_tailscale_status()/,/^}/p" bin/spark-http-proxy)
+        summarise_tailscale_status "$1" 2>&1' _ "$1"
 }
 
 test_suggested_commands_are_pasteable() {
@@ -2735,6 +2852,24 @@ main() {
     local cert_apply_passed=0
     test_certificates_apply_without_a_restart && cert_apply_passed=1
     [ "$cert_apply_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing that self-update applies the update..."
+    total=$((total + 1))
+    local self_update_passed=0
+    test_self_update_applies_the_update && self_update_passed=1
+    [ "$self_update_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing what version reports about the containers..."
+    total=$((total + 1))
+    local version_passed=0
+    test_version_reports_the_image_revision && version_passed=1
+    [ "$version_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing what tailscale-status reports..."
+    total=$((total + 1))
+    local ts_status_passed=0
+    test_tailscale_status_says_what_it_wrote && ts_status_passed=1
+    [ "$ts_status_passed" -eq 1 ] && passed=$((passed + 1))
 
     log "Testing that suggested commands can be pasted..."
     total=$((total + 1))
