@@ -10,6 +10,7 @@ while [ -h "$SOURCE" ]; do
   [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
 done
 SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
+SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${SOURCE}")"
 
 # Paths
 CONFIG_DIR="${HOME}/.local/spark/http-proxy"
@@ -1137,6 +1138,50 @@ write_tailscale_status() {
   chmod 600 "${temp}"
   mv "${temp}" "${TAILSCALE_STATUS_FILE}"
   log_success "Tailnet status written to ${TAILSCALE_STATUS_FILE}"
+  summarise_tailscale_status "${TAILSCALE_STATUS_FILE}"
+}
+
+# Says what the document holds, because "written" is true even when the document
+# is useless: a client that is running but logged out answers with an empty
+# tailnet, the write succeeds, and peer discovery then finds nothing with no
+# failure reported anywhere in the chain. A count makes that visible without
+# probing anything or reading the client a second time.
+#
+# The counts come from the document itself, by counting keys. There is no jq or
+# python3 dependency in this project and this is not the place to add one. POSIX
+# character classes, because BSD grep does not take \s.
+summarise_tailscale_status() {
+  local document="$1" machines online state
+
+  local online_keys
+  machines="$(grep -cE '^[[:space:]]*"HostName":' "${document}" 2>/dev/null || true)"
+  online="$(grep -cE '^[[:space:]]*"Online":[[:space:]]*true' "${document}" 2>/dev/null || true)"
+  online_keys="$(grep -cE '^[[:space:]]*"Online":' "${document}" 2>/dev/null || true)"
+  state="$(grep -m1 -oE '"BackendState":[[:space:]]*"[^"]*"' "${document}" 2>/dev/null | cut -d'"' -f4 || true)"
+
+  # Every field has to have been found, not just one of them. Self is always a
+  # machine with a state and an online flag, so a miss on any of the three means
+  # the document is not shaped the way these counts read it, and a number from a
+  # half-parsed document is worse than admitting the shape was not recognised.
+  if [[ -z "${machines}" || "${machines}" -eq 0 ]] ||
+    [[ -z "${online_keys}" || "${online_keys}" -eq 0 ]] ||
+    [[ -z "${state}" ]]; then
+    log_warning "The document was written but could not be summarised"
+    return 0
+  fi
+
+  log_info "$(count_noun "${machines}" machine) in the document, ${online:-0} online, this machine ${state:-unknown}"
+
+  # Only claims that can be read off the counts without knowing which machine
+  # an online count belongs to. An online count of one is not necessarily this
+  # machine: it is also one peer up while this machine is logged out.
+  if [[ "${machines}" -le 1 ]]; then
+    log_warning "The document holds only this machine, so nothing will be forwarded"
+    log_info "Check that Tailscale is logged in and the other machines are on this account"
+  elif [[ -n "${state}" && "${state}" != "Running" ]]; then
+    log_warning "Tailscale on this machine is ${state}, so nothing will be forwarded"
+    log_info "Bring it up with: tailscale up"
+  fi
 }
 
 # Writes the status document when the source is the host-written file.
@@ -1564,8 +1609,36 @@ self_update() {
     log_success "Already up to date (${new_commit})"
   else
     log_success "Updated: ${current_commit} → ${new_commit}"
-    log_info "Run '${0} upgrade' to pull new Docker images and apply the changes."
+    log_info "Applying the update..."
+    # The pull has just rewritten this file, and bash reads a script by byte
+    # offset as it runs, so continuing here would run a mix of the old and the
+    # new one. exec replaces the process with the updated script.
+    exec "${SCRIPT_PATH}" upgrade
   fi
+}
+
+# The revision an image was built from. Published images carry it as an OCI
+# label, written by the release pipeline, and reading the label works whether the
+# container is running or stopped. The file the Dockerfiles write is the
+# fallback: it only holds a revision when the build was given GIT_VERSION, which
+# happens through the Makefile and not through compose, so a pulled image has
+# the label and a locally built one usually has neither.
+container_revision() {
+  local container="$1" revision=""
+
+  revision="$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${container}" 2>/dev/null || true)"
+  if [[ -n "${revision}" && "${revision}" != "<no value>" ]]; then
+    echo "${revision:0:7}"
+    return 0
+  fi
+
+  revision="$(docker exec "${container}" cat /.version 2>/dev/null || true)"
+  if [[ -n "${revision}" && "${revision}" != "unknown" ]]; then
+    echo "${revision}"
+    return 0
+  fi
+
+  echo "unknown"
 }
 
 show_version() {
@@ -1601,7 +1674,7 @@ show_version() {
     # Check if container exists and get its git version
     if docker ps -a --format "{{.Names}}" | grep -q "^${container_name}$"; then
       local container_git_version
-      container_git_version=$(docker exec "${container_name}" cat /.version 2>/dev/null || echo "unknown")
+      container_git_version="$(container_revision "${container_name}")"
 
       # Check if container is running
       if docker ps --format "{{.Names}}" | grep -q "^${container_name}$"; then
