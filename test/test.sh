@@ -1901,12 +1901,14 @@ test_self_update_after_a_rewrite() {
     out="$(cd "${root}/work" && env PATH="${stub}:${PATH}" HOME="${root}/home" \
         timeout 120 bin/spark-http-proxy self-update </dev/null 2>&1)" || rc=$?
 
+    # The status too. A self-update that named the rewrite and then failed on the
+    # way through would otherwise satisfy every assertion below it.
     total=$((total + 1))
-    if echo "${out}" | grep -q "history was rewritten"; then
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "history was rewritten"; then
         success "a rewritten upstream is named rather than reported as an ordinary update"
         passed=$((passed + 1))
     else
-        error "a rewritten upstream was not reported: $(echo "${out}" | tr '\n' ' ')"
+        error "the rewrite update exited ${rc}: $(echo "${out}" | tr '\n' ' ')"
     fi
 
     total=$((total + 1))
