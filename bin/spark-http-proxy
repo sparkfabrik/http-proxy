@@ -1595,12 +1595,41 @@ self_update() {
     exit 1
   fi
 
-  local current_branch current_commit
+  local current_branch current_commit upstream head after
   current_branch=$(git -C "${repo_dir}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
   current_commit=$(git -C "${repo_dir}" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
+  upstream="$(git -C "${repo_dir}" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+  if [[ -z "${upstream}" ]]; then
+    log_error "Branch '${current_branch}' tracks no remote branch, so there is nothing to update from"
+    log_info "Set one with: git -C ${repo_dir} branch --set-upstream-to=origin/${current_branch}"
+    exit 1
+  fi
+
   log_info "Checking for updates on branch '${current_branch}' (currently at ${current_commit})..."
-  git -C "${repo_dir}" pull
+  if ! git -C "${repo_dir}" fetch --quiet; then
+    log_error "Could not reach the remote to check for updates"
+    exit 1
+  fi
+
+  head="$(git -C "${repo_dir}" rev-parse HEAD)"
+  after="$(git -C "${repo_dir}" rev-parse '@{upstream}')"
+
+  if [[ "${head}" == "${after}" ]]; then
+    log_success "Already up to date (${current_commit})"
+    return 0
+  fi
+
+  if ! git -C "${repo_dir}" merge-base --is-ancestor "${head}" "${after}"; then
+    log_warning "${upstream} is not a descendant of ${current_commit}, so the commit moves backwards"
+    log_info "Files git does not track, such as built binaries, may be discarded"
+  fi
+
+  # Matches the remote exactly, whether it moved on or was rewritten.
+  if ! git -C "${repo_dir}" reset --hard "${after}" >/dev/null; then
+    log_error "Could not match ${upstream}"
+    exit 1
+  fi
 
   local new_commit
   new_commit=$(git -C "${repo_dir}" rev-parse --short HEAD 2>/dev/null || echo "unknown")

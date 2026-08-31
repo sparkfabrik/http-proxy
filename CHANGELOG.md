@@ -9,78 +9,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Peer routing documents what HTTPS to a forwarded hostname needs: a certificate on the machine doing the reaching, because TLS terminates there. `status` shows the command beside the hostnames it lists, using one of them as the example, and the README shows the failure, the command, and why a `*.spark.loc` wildcard does not cover `macos.test.spark.loc` ([#118](https://github.com/sparkfabrik/http-proxy/issues/118))
-- `spark-http-proxy tailscale-refresh-peers` runs a peer discovery cycle now instead of waiting up to a minute for the next one. It signals the service rather than restarting it, so the per-machine probe backoff survives and routes that have not changed are not withdrawn and re-added. Where a tailnet status document is used, the document is refreshed first, so a machine that came online since the last one was written is found ([#132](https://github.com/sparkfabrik/http-proxy/issues/132))
-- Tailnet peer routing: a hostname served by a container on one machine is reachable, under the same name, from the other machines of the same Tailscale account. Off by default, started with `spark-http-proxy start-with-tailscale`. Every proxy publishes a declaration of itself and a machine is adopted only when that declaration is present, so **both machines need this version or newer before anything is forwarded**
-- `spark-http-proxy tailscale-peers` (and `--json`) reports the machines found on the proxy's most recent discovery cycle, the hostnames each contributes, and why any of them contributed nothing
-- `spark-http-proxy start-with-tailscale` and `stop-tailscale` start the proxy with peer routing and stop peer routing alone, mirroring `start-with-metrics` and `stop-metrics`. Stopping it withdraws every forwarded hostname immediately, without restarting the proxy
-- `spark-http-proxy tailscale-status` writes the tailnet status document peer discovery reads, for platforms whose Tailscale daemon exposes no socket a container can mount
-- Support `VIRTUAL_PATH` to mount a container under a path of its `VIRTUAL_HOST`, so a browser-served frontend and its API can share one origin locally with no CORS, no preflight and one certificate. Matching is by path segment, so `/api` never captures `/api-docs`; nothing is stripped, so the backend receives the prefix it was mounted at; the mounted routers carry an explicit priority while host-only routers keep the ordering they have always had ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
-- `self-test` also checks a mounted path, over HTTP and HTTPS, comparing the response body rather than the status code: a missing path route falls through to the container serving the hostname, which answers `200` and would otherwise hide the failure ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
-- OpenSpec change tracking under `openspec/`. The `VIRTUAL_PATH` requirements now live in `openspec/specs/`, with the change that introduced them archived alongside ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
-- Add `list-certs` command to list installed certificates and `remove-cert` command to remove certificate pairs for one or more domains and restart Traefik ([#107](https://github.com/sparkfabrik/http-proxy/issues/107))
-- Unit tests for the pure parsing/config helpers in `dinghy-layer`, `dns-server`, `config`, and `utils` ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
-- CI `go-checks` job running `gofmt`, `go vet`, and `go test -race` on every non-`main` branch ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
-- Expose DNS server TCP port 19322 alongside UDP port for Lima virtualization compatibility ([#56](https://github.com/sparkfabrik/http-proxy/issues/56))
-- Add `upgrade` command to pull latest Docker images and recreate only changed containers, preserving volumes (grafana/prometheus data) ([#96](https://github.com/sparkfabrik/http-proxy/pull/96))
-- Add `self-update` command to update the script and compose files from the git repository, with guards against non-git installs and dirty working trees ([#96](https://github.com/sparkfabrik/http-proxy/pull/96))
-- CHANGELOG.md file to track project changes
+- HTTPS to a forwarded hostname needs a certificate on the machine reaching it, now documented ([#118](https://github.com/sparkfabrik/http-proxy/issues/118))
+- `tailscale-refresh-peers` runs a discovery cycle now instead of waiting for the next one ([#132](https://github.com/sparkfabrik/http-proxy/issues/132))
+- Tailnet peer routing: reach a hostname served by another machine on the same Tailscale account
+- `tailscale-peers` reports the last discovery cycle, and `--json` the same machine-readably
+- `start-with-tailscale` and `stop-tailscale` start and stop peer routing on their own
+- `tailscale-status` writes the tailnet status document peer discovery reads on macOS
+- `VIRTUAL_PATH` mounts a container under a path of its `VIRTUAL_HOST` ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
+- `self-test` checks a mounted path over HTTP and HTTPS ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
+- OpenSpec change tracking under `openspec/` ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
+- `list-certs` lists installed certificates and `remove-cert` removes them ([#107](https://github.com/sparkfabrik/http-proxy/issues/107))
+- Unit tests for the parsing and config helpers ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
+- CI `go-checks` job running `gofmt`, `go vet` and `go test -race` ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
+- DNS server listens on TCP 19322 as well as UDP, for Lima ([#56](https://github.com/sparkfabrik/http-proxy/issues/56))
+- `upgrade` pulls new images and recreates only the changed containers ([#96](https://github.com/sparkfabrik/http-proxy/pull/96))
+- `self-update` updates the script and compose files from git ([#96](https://github.com/sparkfabrik/http-proxy/pull/96))
+- This CHANGELOG
 
 ### Changed
 
-- `tailscale-peers` and `tailscale-refresh-peers` group the machine table, the useful rows first: what is running this proxy, then what did not answer as a proxy, then what answered as something else, then what was never probed. The group heading carries what the `STATUS` column used to say, so that column is gone and `--json` is where the status token is read. Column widths are computed per group and rows stay alphabetical within one, and a group holding no machine is not shown at all, which is the usual state of the first group on a tailnet with one proxy
-- `self-update` now applies the update it pulled instead of printing the command to do it. **This is a behaviour change:** the command used to touch nothing that was running, and it now recreates containers when it updated something, so anyone running it on its own gets a restart they did not previously get. An unchanged checkout upgrades nothing. It applies the update by replacing its own process with the updated script, because the pull has already rewritten the file it is running from
-- `version` reports the revision each container's image was built from, read from the image's revision label. Every container previously reported `unknown`: the value comes from a build argument that neither the published images nor a local compose build ever supplied. Stopped containers now report a revision too, which reading the label makes possible
-- `tailscale-status` says what the document it wrote contains: how many machines, how many are online, and this machine's state. A client that is running but logged out returns an empty tailnet, so the document was written and reported as a success while peer discovery then found nothing
-- `generate-mkcert` and `remove-cert` no longer restart the proxy. A restart dropped every connection on the machine, so generating one certificate interrupted every other site the developer had open. The container's certificate scan is now run on its own instead, and the certificate is served about three seconds later. A proxy older than this change cannot run the scan, and a new certificate is referenced by nothing until it does, so against one of those the restart still happens rather than leaving the certificate unapplied. If the proxy cannot be asked to apply the certificate, the command says what the proxy reported and exits non-zero rather than reporting success for a hostname that is not being served ([#145](https://github.com/sparkfabrik/http-proxy/issues/145))
-- A destructive command run without a terminal now refuses instead of proceeding. `echo y | spark-http-proxy destroy` used to be accepted, because the piped reply satisfied the confirmation; it is now declined, and the same applies to the `remove-cert` confirmation. Confirming a destructive action is an interactive act ([#147](https://github.com/sparkfabrik/http-proxy/issues/147))
-- `spark-http-proxy status` names the machines forwarding hostnames and what each serves, says how many machines were seen when nothing is forwarded, and reports a cycle that could not run as a warning rather than a success. Peer discovery writes `tailscale-peers-summary` in the state directory for it, so the CLI reads a datum rather than searching a report meant for people ([#142](https://github.com/sparkfabrik/http-proxy/issues/142))
-- Every base image is pinned to an immutable digest beside its version tag, so a rebuild of the same commit cannot pick up different image contents if a tag is repointed ([#139](https://github.com/sparkfabrik/http-proxy/issues/139))
-- The service image is built on `alpine:3.24` rather than `alpine:latest`, so a rebuild produces the same base until the pin is moved deliberately ([#123](https://github.com/sparkfabrik/http-proxy/issues/123))
-- Peer discovery writes `tailscale-peers-completed-at` in the state directory, holding the timestamp of the last completed cycle and nothing else. It is written after the state file and the report, so a reader that sees it change knows both are already on disk. `tailscale-refresh-peers` waits on it rather than searching the other two files for a timestamp ([#134](https://github.com/sparkfabrik/http-proxy/issues/134))
-- `spark-http-proxy` writes errors and warnings to stderr rather than stdout, so a caller capturing its output no longer captures its error text
-
-- Warn instead of staying silent when a container's routing variables are ignored: when it carries any `traefik.` label, which makes the layer skip it entirely, and when `VIRTUAL_PATH` is set without `VIRTUAL_HOST`. Both were debug-level, so invisible at the default log level ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
-- Warn when two containers claim the same host and path, naming both, since which of them answers is otherwise arbitrary. Detected across container events, not only at startup ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
-- `generate-mkcert` and `remove-cert` reject an argument containing a path, pointing at the hostname instead. A certificate covers a hostname, and a container mounted under a path is served by its host's certificate ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
-- `self-test` now verifies end-to-end routing instead of only DNS liveness: it starts a throwaway container with `VIRTUAL_HOST`, asserts DNS resolves the test domain to the configured target IP, and that the proxy serves it over both HTTP and HTTPS (with retries while routes propagate), then cleans up. Exits non-zero with a per-check report on failure ([#104](https://github.com/sparkfabrik/http-proxy/issues/104))
+- `self-update` matches upstream exactly, including after a force push
+- `tailscale-peers` groups the machine table, running-this-proxy first
+- `self-update` applies the update it pulled instead of printing the command to do it
+- `version` reports each container's image revision instead of `unknown`
+- `tailscale-status` says how many machines the document holds and how many are online
+- `generate-mkcert` and `remove-cert` apply certificates without restarting the proxy ([#145](https://github.com/sparkfabrik/http-proxy/issues/145))
+- A destructive command run without a terminal refuses instead of proceeding ([#147](https://github.com/sparkfabrik/http-proxy/issues/147))
+- `status` names the machines forwarding and what each serves ([#142](https://github.com/sparkfabrik/http-proxy/issues/142))
+- Every base image is pinned to a digest beside its tag ([#139](https://github.com/sparkfabrik/http-proxy/issues/139))
+- The service image is built on `alpine:3.24` rather than `alpine:latest` ([#123](https://github.com/sparkfabrik/http-proxy/issues/123))
+- Peer discovery records its last completed cycle in `tailscale-peers-completed-at` ([#134](https://github.com/sparkfabrik/http-proxy/issues/134))
+- Errors and warnings go to stderr rather than stdout
+- Warn when a container's routing variables are ignored ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
+- Warn when two containers claim the same host and path, naming both ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
+- `generate-mkcert` and `remove-cert` reject an argument containing a path ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
+- `self-test` verifies end-to-end routing rather than only DNS liveness ([#104](https://github.com/sparkfabrik/http-proxy/issues/104))
 
 ### Fixed
 
-- The certificate scan reported success when it could not write `auto-tls.yml`. Only the empty-certificate path checked its write, so removing the last certificate on a machine that could not write reported the failure while generating one reported success and served nothing. Every write in the scan is now checked, and the configuration is built in a temporary file and renamed into place, so a write that fails partway leaves the certificates that were already serving rather than replacing them with a truncated file serving none. A failed write still lets the proxy start, because refusing to start is worse than the failure it reacts to ([#151](https://github.com/sparkfabrik/http-proxy/issues/151))
-- The README told users to start the proxy with `docker compose up -d`. On Linux, Docker creates a missing bind-mount source directory itself, owned by root, so anyone starting the containers before ever running the CLI ended up with root-owned proxy directories: `generate-mkcert` then failed with a raw permission error, and peer routing aborted on a `chmod` that named no cause. The documented path now uses `spark-http-proxy start` and `spark-http-proxy restart`, which create those directories first ([#150](https://github.com/sparkfabrik/http-proxy/issues/150))
-- Removing the last certificate left the proxy's generated TLS configuration pointing at files that no longer existed. The scan returned without writing anything when it found no certificates, and a restart did not clear it either, because the scan returned early again on the way up. It now writes an empty certificate list, and a scan that cannot write its configuration reports failure rather than success ([#145](https://github.com/sparkfabrik/http-proxy/issues/145))
-- Commands that prompt no longer exit silently when there is no terminal. `generate-mkcert` and `remove-cert` without arguments now say a domain is required, and `remove-cert` and `destroy` say they cannot confirm rather than stopping with no output. None of them ever performed the destructive action, but none of them said why they had not ([#147](https://github.com/sparkfabrik/http-proxy/issues/147))
-- Commands the CLI suggests can be pasted. `list-certs` printed `generate-mkcert <domain>` and `remove-cert <domain>`, and the angle brackets are shell redirections, so copying either was a syntax error. Both now name a real quoted domain, and `remove-cert` names one it just listed ([#118](https://github.com/sparkfabrik/http-proxy/issues/118))
-- After a restart, peer routing no longer reports itself as broken for up to a minute. A cycle that cannot read the local routing table because the proxy is still starting is retried within seconds instead of after a full interval, and the report says no machine was probed rather than listing every machine as excluded and zero hostnames as a result ([#141](https://github.com/sparkfabrik/http-proxy/issues/141))
-- The macOS status refresh agent reports whether it actually loaded, rather than trusting `launchctl`, which exits 0 on a malformed plist and on a missing file. Removal likewise confirms the agent is unloaded and its plist deleted. The agent's `PATH` no longer varies with the shell that installed it, and can be set with `HTTP_PROXY_TAILSCALE_AGENT_PATH` ([#130](https://github.com/sparkfabrik/http-proxy/issues/130))
-- The tailnet status source is detected from the host rather than defaulting to the daemon socket, so macOS starts against the host-written document without a flag and cannot be started against a socket it does not have. `HTTP_PROXY_TAILSCALE_SOURCE` still overrides it ([#128](https://github.com/sparkfabrik/http-proxy/issues/128))
-- A staleness tolerance written with a leading zero, such as `05m`, no longer aborts the command it is passed to. Bash read it as octal, so the natural way to write five minutes failed with `value too great for base` ([#128](https://github.com/sparkfabrik/http-proxy/issues/128))
-- macOS installs a launchd agent that keeps the status document current, at half the staleness tolerance, removed by `stop-tailscale`, `clean` and `destroy`. Peer routing there previously worked only until the document went stale ([#128](https://github.com/sparkfabrik/http-proxy/issues/128))
-
-- An optional stacks record the CLI cannot read is left alone rather than deleted, and the rewrite is owner-only
-- Clearing one optional stack from the record no longer corrupts it. The rewrite dropped the final newline, so the next stack recorded was appended to the previous line and both became unreadable, leaving every stack disabled
-- The resolved compose profiles are exported even when no optional stack is on, so an inherited `COMPOSE_PROFILES` cannot start a stack that is switched off
-
-- `spark-http-proxy` records which optional stacks are on, so peer routing and monitoring both survive `start`, `restart` and `upgrade`, and every command reports them from any shell. Previously peer routing was read from the caller's environment and monitoring was inferred from a running container, so a plain `start` dropped monitoring and a `restart` from a fresh shell dropped peer routing ([#124](https://github.com/sparkfabrik/http-proxy/issues/124))
-- A stack that is already running when nothing is recorded is recorded on the next command, so upgrading to this version does not turn it off ([#124](https://github.com/sparkfabrik/http-proxy/issues/124))
-- `tailscale-peers`, `status`, `grafana` and `prometheus` distinguish an optional stack being switched off from its services not running ([#124](https://github.com/sparkfabrik/http-proxy/issues/124))
-- `self-test` no longer aborts on the first failed check. Its probes returned non-zero from inside a command substitution, which under `set -e` ended the script before it could report which check failed or remove the containers it had started ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
-- Fix the CORS example in `examples/applications.yml`, which could never have worked: its `traefik.` middleware label made the layer skip the container, so its `VIRTUAL_HOST` was ignored and no route existed. It now declares its routers as labels too ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
-- Correct `AGENTS.md`, which stated that the repository has no unit tests and that `make test` is the verification step. Unit tests exist beside the code, and `make test` runs only the integration suite ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
-- Ignore one-off containers created by `docker compose run` (labelled `com.docker.compose.oneoff=True`) in `dinghy-layer` and `join-networks`; they inherit `VIRTUAL_HOST` from the service definition and could claim the service domain with a backend port nothing listens on, returning `502` ([#111](https://github.com/sparkfabrik/http-proxy/issues/111))
-- Reconcile the generated `dinghy-layer` config files against running containers during the initial scan, removing orphaned files whose container no longer exists; a recreated container previously kept a stale backend IP that returned `502` until a full teardown ([#109](https://github.com/sparkfabrik/http-proxy/issues/109))
-- Make backend IP and port selection deterministic for `VIRTUAL_HOST` containers attached to multiple networks or exposing multiple ports; previously Go map iteration could route to a different network IP or port across restarts ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
-- Lower generated DNS A-record TTL from 3600s to 60s so a changed `HTTP_PROXY_DNS_TARGET_IP` propagates quickly instead of being cached by the OS stub resolver ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
-- Guard against a nil-pointer panic in `join-networks` when a container reports no network settings ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
-- Make signal-driven shutdown deterministic in the event-driven services by giving a single owner control of signal handling, and abort the event-stream reconnect backoff promptly on shutdown ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
-- Reconnect to the Docker event stream when the daemon closes it (for example on daemon restart) instead of busy-looping on the closed channel ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
-- Reject a non-IPv4 `HTTP_PROXY_DNS_TARGET_IP` at startup; the DNS server answers only A records, so an IPv6 target would otherwise be silently truncated ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
-- Fixed restart command to automatically start containers when not running instead of failing ([#40](https://github.com/sparkfabrik/http-proxy/issues/40))
-  - The `spark-http-proxy restart` command now intelligently detects container state
-  - When containers are not running: automatically starts them using existing recreate logic
-  - When containers are running: restarts them as before using `docker compose restart`
-  - Preserves monitoring detection for both basic and metrics-enabled stacks
-- Fixed Docker build issues by removing problematic ca-certificates installation that was causing SSL certificate verification failures in CI environment
-- Remove HSTS (HTTP Strict Transport Security) headers from HTTPS responses in development environments to prevent browser caching issues when certificates change or are revoked
-- Apply `disable-hsts` middleware at the HTTPS entrypoint level to ensure ALL HTTPS traffic (both dinghy-layer and native Traefik routes) benefits from this development-friendly configuration
+- The certificate scan reports a write it could not make ([#151](https://github.com/sparkfabrik/http-proxy/issues/151))
+- The README starts the proxy with the CLI rather than compose, which left directories owned by root ([#150](https://github.com/sparkfabrik/http-proxy/issues/150))
+- Removing the last certificate no longer leaves the TLS configuration pointing at deleted files ([#145](https://github.com/sparkfabrik/http-proxy/issues/145))
+- Prompting commands say why they stopped when there is no terminal ([#147](https://github.com/sparkfabrik/http-proxy/issues/147))
+- Commands the CLI suggests can be pasted ([#118](https://github.com/sparkfabrik/http-proxy/issues/118))
+- Peer routing no longer reports itself broken for up to a minute after a restart ([#141](https://github.com/sparkfabrik/http-proxy/issues/141))
+- The macOS status agent reports whether it actually loaded ([#130](https://github.com/sparkfabrik/http-proxy/issues/130))
+- The tailnet status source is detected from the host rather than defaulted ([#128](https://github.com/sparkfabrik/http-proxy/issues/128))
+- A staleness tolerance written as `05m` no longer aborts the command ([#128](https://github.com/sparkfabrik/http-proxy/issues/128))
+- macOS keeps the status document current with a launchd agent ([#128](https://github.com/sparkfabrik/http-proxy/issues/128))
+- An optional-stacks record the CLI cannot read is left alone rather than deleted
+- Clearing one optional stack no longer corrupts the record
+- Compose profiles are exported even when no optional stack is on
+- Optional stacks survive `start`, `restart` and `upgrade` ([#124](https://github.com/sparkfabrik/http-proxy/issues/124))
+- A stack already running when nothing is recorded is recorded on the next command ([#124](https://github.com/sparkfabrik/http-proxy/issues/124))
+- Commands distinguish an optional stack switched off from its services not running ([#124](https://github.com/sparkfabrik/http-proxy/issues/124))
+- `self-test` no longer aborts on the first failed check ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
+- Fix the CORS example in `examples/applications.yml`, which could never have worked ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
+- Correct `AGENTS.md` on unit tests and the verification step ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
+- Ignore one-off containers created by `docker compose run` ([#111](https://github.com/sparkfabrik/http-proxy/issues/111))
+- Reconcile generated config against running containers on the initial scan ([#109](https://github.com/sparkfabrik/http-proxy/issues/109))
+- Backend IP and port selection is deterministic for multi-network containers ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
+- DNS A-record TTL lowered from 3600s to 60s so a changed target propagates ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
+- Guard a nil-pointer panic in `join-networks` when a container reports no networks ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
+- Signal-driven shutdown is deterministic in the event-driven services ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
+- Reconnect to the Docker event stream when the daemon closes it ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
+- Reject a non-IPv4 `HTTP_PROXY_DNS_TARGET_IP` at startup ([#101](https://github.com/sparkfabrik/http-proxy/issues/101))
+- `restart` starts containers when they are not running instead of failing ([#40](https://github.com/sparkfabrik/http-proxy/issues/40))
+- Remove the ca-certificates install that broke CI builds
+- Remove HSTS headers from HTTPS responses, since they force HTTPS on local domains
+- Apply the `disable-hsts` middleware at the HTTPS entrypoint so all HTTPS traffic gets it

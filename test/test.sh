@@ -1856,6 +1856,114 @@ test_self_update_applies_the_update() {
 # version used to read a file the images do not carry a value in, so every
 # container reported "unknown". It now reads the revision label the release
 # pipeline writes, and falls back to that file.
+# self-update matches upstream exactly, including when history was rewritten.
+test_self_update_after_a_rewrite() {
+    local passed=0 total=0 root stub out rc
+
+    stub="$(mktemp -d)"
+    printf '#!/usr/bin/env bash\ncase "$*" in\n  *ps*) echo "http-proxy" ;;\nesac\nexit 0\n' >"${stub}/docker"
+    chmod +x "${stub}/docker"
+
+    root="$(mktemp -d)"
+    mkdir -p "${root}/src/bin"
+    cp bin/spark-http-proxy "${root}/src/bin/"
+    cp compose.yml "${root}/src/bin/"
+    (
+        cd "${root}/src" || exit 1
+        git init -q -b probe .
+        git config user.email t@t
+        git config user.name t
+        git add -A && git commit -qm base
+        echo notes >notes.txt
+        echo junk >unwanted.bin
+        git add -A && git commit -qm "two files"
+    )
+    git clone -q --bare "${root}/src" "${root}/origin" 2>/dev/null
+    git clone -q "${root}/origin" "${root}/work" 2>/dev/null
+    git clone -q "${root}/origin" "${root}/rewrite" 2>/dev/null
+    # Cloned before the rewrite, or they start at its tip and are merely behind.
+    git clone -q "${root}/origin" "${root}/fetched" 2>/dev/null
+    git clone -q "${root}/origin" "${root}/mine" 2>/dev/null
+
+    (
+        cd "${root}/rewrite" || exit 1
+        git config user.email t@t
+        git config user.name t
+        git rm -q --cached unwanted.bin
+        rm -f unwanted.bin
+        git commit -q --amend -m "two files, without the unwanted one"
+        git push -q --force origin probe
+    )
+
+    rc=0
+    out="$(cd "${root}/work" && env PATH="${stub}:${PATH}" HOME="${root}/home" \
+        timeout 120 bin/spark-http-proxy self-update </dev/null 2>&1)" || rc=$?
+
+    total=$((total + 1))
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "moves backwards"; then
+        success "a commit that is not a descendant is called out rather than passed over"
+        passed=$((passed + 1))
+    else
+        error "the backwards move was not reported, exit ${rc}: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    total=$((total + 1))
+    if [ ! -f "${root}/work/unwanted.bin" ] && [ -f "${root}/work/notes.txt" ]; then
+        success "the checkout matches the rewritten upstream exactly"
+        passed=$((passed + 1))
+    else
+        error "the checkout does not match upstream after the rewrite"
+    fi
+
+    # A machine where something else fetched the force push first.
+    (cd "${root}/fetched" && git fetch -q)
+    rc=0
+    out="$(cd "${root}/fetched" && env PATH="${stub}:${PATH}" HOME="${root}/home" \
+        timeout 120 bin/spark-http-proxy self-update </dev/null 2>&1)" || rc=$?
+
+    total=$((total + 1))
+    if [ "${rc}" -eq 0 ] && [ ! -f "${root}/fetched/unwanted.bin" ]; then
+        success "an already-fetched force push needs no special handling"
+        passed=$((passed + 1))
+    else
+        error "an already-fetched rewrite exited ${rc}: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # Local commits are discarded by design, and stay in the reflog.
+    (
+        cd "${root}/mine" || exit 1
+        git config user.email t@t
+        git config user.name t
+        echo mine >mine.txt
+        git add mine.txt && git commit -qm "my work"
+    )
+    local mine_sha
+    mine_sha="$(cd "${root}/mine" && git rev-parse HEAD)"
+    rc=0
+    out="$(cd "${root}/mine" && env PATH="${stub}:${PATH}" HOME="${root}/home" \
+        timeout 120 bin/spark-http-proxy self-update </dev/null 2>&1)" || rc=$?
+
+    total=$((total + 1))
+    if [ "${rc}" -eq 0 ] && [ ! -f "${root}/mine/mine.txt" ]; then
+        success "a commit in the checkout is discarded, which is the accepted trade"
+        passed=$((passed + 1))
+    else
+        error "the local commit was not discarded, exit ${rc}: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    total=$((total + 1))
+    if (cd "${root}/mine" && git reflog --format=%H | grep -q "${mine_sha}"); then
+        success "and is recoverable from the reflog"
+        passed=$((passed + 1))
+    else
+        error "the discarded commit is not in the reflog, so it is unrecoverable"
+    fi
+
+    rm -rf "${root}" "${stub}"
+    log "Self-update rewrite tests: ${passed}/${total} passed"
+    [ "${passed}" -eq "${total}" ]
+}
+
 test_version_reports_the_image_revision() {
     local passed=0 total=0 name out revision
 
@@ -2895,6 +3003,12 @@ main() {
     local self_update_passed=0
     test_self_update_applies_the_update && self_update_passed=1
     [ "$self_update_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing self-update against a rewritten upstream..."
+    total=$((total + 1))
+    local rewrite_passed=0
+    test_self_update_after_a_rewrite && rewrite_passed=1
+    [ "$rewrite_passed" -eq 1 ] && passed=$((passed + 1))
 
     log "Testing what version reports about the containers..."
     total=$((total + 1))
