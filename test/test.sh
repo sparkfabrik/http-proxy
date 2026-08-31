@@ -1856,7 +1856,7 @@ test_self_update_applies_the_update() {
 # version used to read a file the images do not carry a value in, so every
 # container reported "unknown". It now reads the revision label the release
 # pipeline writes, and falls back to that file.
-# self-update against an upstream branch whose history was rewritten.
+# self-update matches upstream exactly, including when history was rewritten.
 test_self_update_after_a_rewrite() {
     local passed=0 total=0 root stub out rc
 
@@ -1864,7 +1864,6 @@ test_self_update_after_a_rewrite() {
     printf '#!/usr/bin/env bash\ncase "$*" in\n  *ps*) echo "http-proxy" ;;\nesac\nexit 0\n' >"${stub}/docker"
     chmod +x "${stub}/docker"
 
-    # Two files in the second commit, so amending it away leaves something.
     root="$(mktemp -d)"
     mkdir -p "${root}/src/bin"
     cp bin/spark-http-proxy "${root}/src/bin/"
@@ -1884,7 +1883,7 @@ test_self_update_after_a_rewrite() {
     git clone -q "${root}/origin" "${root}/rewrite" 2>/dev/null
     # Cloned before the rewrite, or they start at its tip and are merely behind.
     git clone -q "${root}/origin" "${root}/fetched" 2>/dev/null
-    git clone -q "${root}/origin" "${root}/stale" 2>/dev/null
+    git clone -q "${root}/origin" "${root}/mine" 2>/dev/null
 
     (
         cd "${root}/rewrite" || exit 1
@@ -1901,27 +1900,19 @@ test_self_update_after_a_rewrite() {
         timeout 120 bin/spark-http-proxy self-update </dev/null 2>&1)" || rc=$?
 
     total=$((total + 1))
-    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "history was rewritten"; then
-        success "a rewritten upstream is named rather than reported as an ordinary update"
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "moves backwards"; then
+        success "a commit that is not a descendant is called out rather than passed over"
         passed=$((passed + 1))
     else
-        error "the rewrite update exited ${rc}: $(echo "${out}" | tr '\n' ' ')"
+        error "the backwards move was not reported, exit ${rc}: $(echo "${out}" | tr '\n' ' ')"
     fi
 
     total=$((total + 1))
-    if [ ! -f "${root}/work/unwanted.bin" ]; then
-        success "what the rewrite removed does not come back"
+    if [ ! -f "${root}/work/unwanted.bin" ] && [ -f "${root}/work/notes.txt" ]; then
+        success "the checkout matches the rewritten upstream exactly"
         passed=$((passed + 1))
     else
-        error "the rewritten-away file was restored on the updated machine"
-    fi
-
-    total=$((total + 1))
-    if [ -f "${root}/work/notes.txt" ]; then
-        success "what the rewrite kept is still there"
-        passed=$((passed + 1))
-    else
-        error "the update removed a file the rewrite kept"
+        error "the checkout does not match upstream after the rewrite"
     fi
 
     # A machine where something else fetched the force push first.
@@ -1931,46 +1922,14 @@ test_self_update_after_a_rewrite() {
         timeout 120 bin/spark-http-proxy self-update </dev/null 2>&1)" || rc=$?
 
     total=$((total + 1))
-    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "history was rewritten"; then
-        success "a rewrite already fetched by something else is still recognised"
+    if [ "${rc}" -eq 0 ] && [ ! -f "${root}/fetched/unwanted.bin" ]; then
+        success "an already-fetched force push needs no special handling"
         passed=$((passed + 1))
     else
         error "an already-fetched rewrite exited ${rc}: $(echo "${out}" | tr '\n' ' ')"
     fi
 
-    total=$((total + 1))
-    if [ ! -f "${root}/fetched/unwanted.bin" ]; then
-        success "and what it removed does not come back there either"
-        passed=$((passed + 1))
-    else
-        error "the rewritten-away file survived on the already-fetched machine"
-    fi
-
-    # A machine where the ref moved many times after the rewrite.
-    (
-        cd "${root}/rewrite" || exit 1
-        local n
-        for n in $(seq 1 25); do
-            echo "${n}" >"tick-${n}.txt"
-            git add "tick-${n}.txt" && git commit -qm "tick ${n}"
-            git push -q origin probe
-            (cd "${root}/stale" && git fetch -q)
-        done
-    )
-    rc=0
-    out="$(cd "${root}/stale" && env PATH="${stub}:${PATH}" HOME="${root}/home" \
-        timeout 180 bin/spark-http-proxy self-update </dev/null 2>&1)" || rc=$?
-
-    total=$((total + 1))
-    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "history was rewritten"; then
-        success "a rewrite is recognised however many times the ref moved afterwards"
-        passed=$((passed + 1))
-    else
-        error "a long-since-rewritten upstream exited ${rc}: $(echo "${out}" | tr '\n' ' ')"
-    fi
-
-    # Local commits are somebody's work, not a rewrite.
-    git clone -q "${root}/origin" "${root}/mine" 2>/dev/null
+    # Local commits are discarded by design, and stay in the reflog.
     (
         cd "${root}/mine" || exit 1
         git config user.email t@t
@@ -1978,24 +1937,26 @@ test_self_update_after_a_rewrite() {
         echo mine >mine.txt
         git add mine.txt && git commit -qm "my work"
     )
+    local mine_sha
+    mine_sha="$(cd "${root}/mine" && git rev-parse HEAD)"
     rc=0
     out="$(cd "${root}/mine" && env PATH="${stub}:${PATH}" HOME="${root}/home" \
         timeout 120 bin/spark-http-proxy self-update </dev/null 2>&1)" || rc=$?
 
     total=$((total + 1))
-    if [ "${rc}" -ne 0 ] && echo "${out}" | grep -q "commits that are not on"; then
-        success "a checkout carrying local commits refuses and says why"
+    if [ "${rc}" -eq 0 ] && [ ! -f "${root}/mine/mine.txt" ]; then
+        success "a commit in the checkout is discarded, which is the accepted trade"
         passed=$((passed + 1))
     else
-        error "local commits were not refused, exit ${rc}: $(echo "${out}" | tr '\n' ' ')"
+        error "the local commit was not discarded, exit ${rc}: $(echo "${out}" | tr '\n' ' ')"
     fi
 
     total=$((total + 1))
-    if [ -f "${root}/mine/mine.txt" ]; then
-        success "the local commit is still there after the refusal"
+    if (cd "${root}/mine" && git reflog --format=%H | grep -q "${mine_sha}"); then
+        success "and is recoverable from the reflog"
         passed=$((passed + 1))
     else
-        error "a local commit was discarded"
+        error "the discarded commit is not in the reflog, so it is unrecoverable"
     fi
 
     rm -rf "${root}" "${stub}"

@@ -1579,21 +1579,6 @@ upgrade_stack() {
 }
 
 # Self-update the script and compose files from the git repository
-# Whether a commit was ever reachable from the remote branch.
-commit_was_published() {
-  local repo_dir="$1" commit="$2" ref="$3" value
-  local entry=0
-
-  while value="$(git -C "${repo_dir}" rev-parse "${ref}@{${entry}}" 2>/dev/null)"; do
-    if git -C "${repo_dir}" merge-base --is-ancestor "${commit}" "${value}" 2>/dev/null; then
-      return 0
-    fi
-    entry=$((entry + 1))
-  done
-
-  return 1
-}
-
 self_update() {
   local repo_dir
   repo_dir="$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel 2>/dev/null)" || {
@@ -1610,7 +1595,7 @@ self_update() {
     exit 1
   fi
 
-  local current_branch current_commit upstream before head after
+  local current_branch current_commit upstream head after
   current_branch=$(git -C "${repo_dir}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
   current_commit=$(git -C "${repo_dir}" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
@@ -1620,9 +1605,6 @@ self_update() {
     log_info "Set one with: git -C ${repo_dir} branch --set-upstream-to=origin/${current_branch}"
     exit 1
   fi
-
-  # Read before the fetch moves the ref.
-  before="$(git -C "${repo_dir}" rev-parse '@{upstream}' 2>/dev/null || true)"
 
   log_info "Checking for updates on branch '${current_branch}' (currently at ${current_commit})..."
   if ! git -C "${repo_dir}" fetch --quiet; then
@@ -1638,25 +1620,14 @@ self_update() {
     return 0
   fi
 
-  if git -C "${repo_dir}" merge-base --is-ancestor "${head}" "${after}"; then
-    if ! git -C "${repo_dir}" merge --ff-only "${after}" >/dev/null; then
-      log_error "Could not fast-forward onto ${upstream}"
-      exit 1
-    fi
-  elif { [[ -n "${before}" ]] && git -C "${repo_dir}" merge-base --is-ancestor "${head}" "${before}"; } ||
-    commit_was_published "${repo_dir}" "${head}" "${upstream}"; then
-    # Nothing here is unpublished, so the remote was rewritten.
-    log_warning "Upstream history was rewritten, so this checkout is being moved onto ${upstream}"
-    log_info "The commit changes to one that is not a descendant of ${current_commit}, which is expected here"
+  if ! git -C "${repo_dir}" merge-base --is-ancestor "${head}" "${after}"; then
+    log_warning "${upstream} is not a descendant of ${current_commit}, so the commit moves backwards"
     log_info "Files git does not track, such as built binaries, may be discarded"
-    if ! git -C "${repo_dir}" reset --hard "${after}" >/dev/null; then
-      log_error "Could not move the checkout onto ${upstream}"
-      exit 1
-    fi
-  else
-    log_error "This checkout has commits that are not on ${upstream}"
-    log_info "Push or remove them, then run this again"
-    log_info "See them with: git -C ${repo_dir} log --oneline ${upstream}..HEAD"
+  fi
+
+  # Matches the remote exactly, whether it moved on or was rewritten.
+  if ! git -C "${repo_dir}" reset --hard "${after}" >/dev/null; then
+    log_error "Could not match ${upstream}"
     exit 1
   fi
 
