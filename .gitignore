@@ -8,3 +8,9 @@ test/clihome/
 test/peer-dynamic/
 test/peer-traefik.yml
 test/compose.merged.yml
+
+# Binaries `go build` writes into a command's own directory
+/cmd/dinghy-layer/dinghy-layer
+/cmd/dns-server/dns-server
+/cmd/join-networks/join-networks
+/cmd/tailscale-peers/tailscale-peers
