@@ -936,12 +936,23 @@ $ spark-http-proxy tailscale-peers
 Tailnet peers, from the cycle at 2026-01-02T09:15:04Z
 Source: socket, tailnet status produced at 2026-01-02T09:15:04Z
 
-MACHINE     ADDRESS         STATUS       DETAIL
-machine-a   100.100.0.11    ok           app.loc, api.loc
-machine-b   100.100.0.12    not this proxy  answered, but does not declare itself
-router      100.100.0.20    unreachable  connection refused
-tv          100.100.0.31    skipped      offline
-phone       100.100.0.32    skipped      offline
+RUNNING THIS PROXY
+  MACHINE    ADDRESS       HOSTNAMES
+  machine-a  100.100.0.11  app.loc, api.loc
+
+DID NOT ANSWER AS A PROXY
+  MACHINE  ADDRESS       DETAIL
+  router   100.100.0.20  connection refused
+
+ANSWERED BUT NOT THIS PROXY
+  MACHINE    ADDRESS       DETAIL
+  machine-b  100.100.0.12  answered, but does not declare itself as this proxy
+
+OFFLINE OR EXCLUDED
+  MACHINE  ADDRESS       REASON
+  phone    100.100.0.32  offline
+  tv       100.100.0.31  offline
+
 
 5 machines considered, 1 machine forwarding 2 hostnames.
 1 machine did not answer as a proxy, which is usual on a tailnet carrying phones, routers and the like.
@@ -961,10 +972,28 @@ $ spark-http-proxy tailscale-refresh-peers
 Tailnet peers, from the cycle at 2026-01-02T09:16:58Z
 Source: socket, tailnet status produced at 2026-01-02T09:16:58Z
 
-MACHINE     ADDRESS         STATUS   DETAIL
-machine-a   100.100.0.11    ok       app.loc, api.loc, new-thing.loc
+RUNNING THIS PROXY
+  MACHINE    ADDRESS       HOSTNAMES
+  machine-a  100.100.0.11  app.loc, api.loc, new-thing.loc
+
+DID NOT ANSWER AS A PROXY
+  MACHINE  ADDRESS       DETAIL
+  router   100.100.0.20  connection refused
+
+ANSWERED BUT NOT THIS PROXY
+  MACHINE    ADDRESS       DETAIL
+  machine-b  100.100.0.12  answered, but does not declare itself as this proxy
+
+OFFLINE OR EXCLUDED
+  MACHINE  ADDRESS       REASON
+  phone    100.100.0.32  offline
+  tv       100.100.0.31  offline
+
 
 5 machines considered, 1 machine forwarding 3 hostnames.
+1 machine did not answer as a proxy, which is usual on a tailnet carrying phones, routers and the like.
+1 machine answered but did not declare itself as this proxy, so its routes were not used.
+2 machines excluded, with the reason in the table.
 ```
 
 It waits for the cycle to finish and prints its report, so what you see is the
@@ -1109,15 +1138,22 @@ spark-http-proxy tailscale-peers --json
 Every machine discovery considered is listed, including the ones that gave
 nothing, with the reason:
 
-| Status        | Meaning                                                        |
-| ------------- | -------------------------------------------------------------- |
-| `ok`          | probed, and its hostnames are being forwarded                  |
-| `no proxy`    | answered, but not with a routing table                         |
-| `unreachable` | did not answer within the probe timeout, currently backing off |
-| `skipped`     | found on the tailnet but excluded, with the reason given       |
+The rows are grouped, the useful ones first, and a group holding no machine is
+not shown at all:
 
-Most machines on a tailnet are phones, routers and televisions, so `unreachable`
-and `no proxy` rows are the ordinary case rather than a fault. The command
+| Group                         | Holds                                                        | Statuses in `--json`      |
+| ----------------------------- | ------------------------------------------------------------ | ------------------------- |
+| `RUNNING THIS PROXY`          | probed, running this proxy, and the hostnames it contributes | `ok`                      |
+| `DID NOT ANSWER AS A PROXY`   | nothing answered, or nothing answered with a routing table   | `unreachable`, `no proxy` |
+| `ANSWERED BUT NOT THIS PROXY` | something answered but did not declare itself as this proxy  | `not this proxy`          |
+| `OFFLINE OR EXCLUDED`         | never probed, with the reason: offline, or another account   | `skipped`                 |
+
+The group says what the status used to say in a column of its own, so
+`--json` remains the place to read the status token itself. Column widths are
+computed per group, and rows stay alphabetical within one.
+
+Most machines on a tailnet are phones, routers and televisions, so the
+`DID NOT ANSWER AS A PROXY` group is the ordinary case rather than a fault. The command
 reports the proxy's most recent cycle rather than performing discovery of its
 own, so it cannot disagree with what the proxy is doing, and it still answers
 when the proxy is stopped, saying that what it shows is not current.

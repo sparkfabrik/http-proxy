@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -69,14 +70,86 @@ func rejectedRules(peers []PeerReport) []string {
 	return lines
 }
 
+// Groups of the table, in the order they are shown. Every status maps to
+// exactly one group and the groups follow the sentences renderSummary prints
+// below the table, so a reader sees the same partition twice rather than two
+// different ones.
+//
+// The labels say what the group means. Repeating the status token would leave
+// "unreachable" and "skipped" looking like the same fact, which is the
+// distinction the summary exists to keep.
+var peerGroups = []struct {
+	label    string
+	lastCol  string
+	statuses []string
+}{
+	{"RUNNING THIS PROXY", "HOSTNAMES", []string{statusOK}},
+	{"DID NOT ANSWER AS A PROXY", "DETAIL", []string{statusUnreachable, statusNoProxy}},
+	{"ANSWERED BUT NOT THIS PROXY", "DETAIL", []string{statusUndeclared}},
+	{"OFFLINE OR EXCLUDED", "REASON", []string{statusSkipped}},
+}
+
+// renderTable renders every non-empty group, forwarding first. An empty group
+// is omitted entirely: a heading with no rows under it reads as a failure to
+// find something, and on a tailnet with one proxy the first group is empty
+// every cycle.
 func renderTable(peers []PeerReport, cycle time.Time) string {
-	rows := make([][4]string, 0, len(peers))
-	for _, peer := range peers {
-		rows = append(rows, [4]string{peer.Name, peer.Address, peer.Status, peerDetail(peer, cycle)})
+	grouped := make(map[string][]PeerReport, len(peerGroups))
+	claimed := make(map[string]bool, len(peers))
+
+	for _, group := range peerGroups {
+		for _, status := range group.statuses {
+			claimed[status] = true
+		}
 	}
 
-	headers := [4]string{"MACHINE", "ADDRESS", "STATUS", "DETAIL"}
-	widths := [4]int{}
+	for _, peer := range peers {
+		key := peer.Status
+		if !claimed[key] {
+			// A status no group names would otherwise vanish from the table
+			// while still being counted in the summary. It goes last, under its
+			// own name, rather than being filed under a meaning it may not have.
+			key = ""
+		}
+		grouped[key] = append(grouped[key], peer)
+	}
+
+	var b strings.Builder
+	for _, group := range peerGroups {
+		var rows []PeerReport
+		for _, status := range group.statuses {
+			rows = append(rows, grouped[status]...)
+		}
+		writeGroup(&b, group.label, group.lastCol, rows, cycle)
+	}
+	writeGroup(&b, "OTHER", "STATUS AND DETAIL", grouped[""], cycle)
+
+	return b.String()
+}
+
+// writeGroup writes one labelled block, or nothing when it holds no machine.
+// Widths are computed from the rows in this group alone, so a long name in one
+// group does not pad the others.
+func writeGroup(b *strings.Builder, label, lastCol string, peers []PeerReport, cycle time.Time) {
+	if len(peers) == 0 {
+		return
+	}
+
+	slices.SortStableFunc(peers, func(a, b PeerReport) int {
+		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+	})
+
+	rows := make([][3]string, 0, len(peers))
+	for _, peer := range peers {
+		detail := peerDetail(peer, cycle)
+		if lastCol == "STATUS AND DETAIL" {
+			detail = strings.TrimSpace(peer.Status + " " + detail)
+		}
+		rows = append(rows, [3]string{peer.Name, peer.Address, detail})
+	}
+
+	headers := [3]string{"MACHINE", "ADDRESS", lastCol}
+	widths := [3]int{}
 	for i, header := range headers {
 		widths[i] = len(header)
 	}
@@ -86,15 +159,20 @@ func renderTable(peers []PeerReport, cycle time.Time) string {
 		}
 	}
 
-	var b strings.Builder
-	writeRow(&b, headers, widths)
-	for _, row := range rows {
-		writeRow(&b, row, widths)
+	if b.Len() > 0 {
+		b.WriteString("\n")
 	}
-	return b.String()
+	fmt.Fprintf(b, "%s\n", label)
+	writeRow(b, headers, widths)
+	for _, row := range rows {
+		writeRow(b, row, widths)
+	}
 }
 
-func writeRow(b *strings.Builder, row [4]string, widths [4]int) {
+func writeRow(b *strings.Builder, row [3]string, widths [3]int) {
+	// One indent per row, then the original padding between columns, so the
+	// last column stays separated from the one before it.
+	b.WriteString("  ")
 	for i, cell := range row {
 		if i == len(row)-1 {
 			b.WriteString(cell)
