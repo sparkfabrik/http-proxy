@@ -315,6 +315,9 @@ func TestRenderKeepsAStatusNoGroupNames(t *testing.T) {
 	if !strings.Contains(out, "EXCLUDED") {
 		t.Errorf("a machine with an unrecognised status is not in the excluded group:\n%s", out)
 	}
+	if !strings.Contains(out, "something new") {
+		t.Errorf("the unrecognised status itself is not named, so a new status shows as a bare reason:\n%s", out)
+	}
 }
 
 func TestRenderKeepsTheReasonForExcludedMachines(t *testing.T) {

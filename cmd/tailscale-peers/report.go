@@ -100,6 +100,28 @@ func renderTable(peers []PeerReport, cycle time.Time) string {
 	return b.String()
 }
 
+// knownStatuses are the ones whose reason text explains itself in the table.
+var knownStatuses = map[string]bool{
+	statusOK:          true,
+	statusNoProxy:     true,
+	statusUndeclared:  true,
+	statusUnreachable: true,
+	statusSkipped:     true,
+}
+
+// peerStatusCell names the status itself when it is not one this table knows, so
+// a status added later cannot appear as a bare reason or as nothing.
+func peerStatusCell(peer PeerReport, cycle time.Time) string {
+	detail := peerDetail(peer, cycle)
+	if knownStatuses[peer.Status] {
+		return detail
+	}
+	if peer.Reason == "" {
+		return peer.Status
+	}
+	return peer.Status + ": " + detail
+}
+
 // writeGroup writes one labelled block, or nothing when it holds no machine.
 // Widths are computed from the rows in this group alone, so a long name in one
 // group does not pad the others.
@@ -114,11 +136,7 @@ func writeGroup(b *strings.Builder, label, lastCol string, peers []PeerReport, c
 
 	rows := make([][3]string, 0, len(peers))
 	for _, peer := range peers {
-		detail := peerDetail(peer, cycle)
-		if peer.Status != statusOK && peer.Reason == "" {
-			detail = peer.Status
-		}
-		rows = append(rows, [3]string{peer.Name, peer.Address, detail})
+		rows = append(rows, [3]string{peer.Name, peer.Address, peerStatusCell(peer, cycle)})
 	}
 
 	headers := [3]string{"MACHINE", "ADDRESS", lastCol}
