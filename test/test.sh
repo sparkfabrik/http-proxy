@@ -1856,6 +1856,109 @@ test_self_update_applies_the_update() {
 # version used to read a file the images do not carry a value in, so every
 # container reported "unknown". It now reads the revision label the release
 # pipeline writes, and falls back to that file.
+# A force push upstream leaves a machine holding a commit the remote no longer
+# has. A plain `git pull` there either refuses, leaving self-update broken, or
+# merges and restores whatever the rewrite removed.
+test_self_update_after_a_rewrite() {
+    local passed=0 total=0 root stub out rc
+
+    stub="$(mktemp -d)"
+    printf '#!/usr/bin/env bash\ncase "$*" in\n  *ps*) echo "http-proxy" ;;\nesac\nexit 0\n' >"${stub}/docker"
+    chmod +x "${stub}/docker"
+
+    # A repository the test owns, with a second commit holding two files so that
+    # removing one of them still leaves a commit to amend.
+    root="$(mktemp -d)"
+    mkdir -p "${root}/src/bin"
+    cp bin/spark-http-proxy "${root}/src/bin/"
+    cp compose.yml "${root}/src/bin/"
+    (
+        cd "${root}/src" || exit 1
+        git init -q -b probe .
+        git config user.email t@t
+        git config user.name t
+        git add -A && git commit -qm base
+        echo notes >notes.txt
+        echo junk >unwanted.bin
+        git add -A && git commit -qm "two files"
+    )
+    git clone -q --bare "${root}/src" "${root}/origin" 2>/dev/null
+    git clone -q "${root}/origin" "${root}/work" 2>/dev/null
+    git clone -q "${root}/origin" "${root}/rewrite" 2>/dev/null
+
+    # The rewrite: drop one file and force push over the branch.
+    (
+        cd "${root}/rewrite" || exit 1
+        git config user.email t@t
+        git config user.name t
+        git rm -q --cached unwanted.bin
+        rm -f unwanted.bin
+        git commit -q --amend -m "two files, without the unwanted one"
+        git push -q --force origin probe
+    )
+
+    rc=0
+    out="$(cd "${root}/work" && env PATH="${stub}:${PATH}" HOME="${root}/home" \
+        timeout 120 bin/spark-http-proxy self-update </dev/null 2>&1)" || rc=$?
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "history was rewritten"; then
+        success "a rewritten upstream is named rather than reported as an ordinary update"
+        passed=$((passed + 1))
+    else
+        error "a rewritten upstream was not reported: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    total=$((total + 1))
+    if [ ! -f "${root}/work/unwanted.bin" ]; then
+        success "what the rewrite removed does not come back"
+        passed=$((passed + 1))
+    else
+        error "the rewritten-away file was restored on the updated machine"
+    fi
+
+    total=$((total + 1))
+    if [ -f "${root}/work/notes.txt" ]; then
+        success "what the rewrite kept is still there"
+        passed=$((passed + 1))
+    else
+        error "the update removed a file the rewrite kept"
+    fi
+
+    # Local commits are somebody's work, not a rewrite, and must survive.
+    git clone -q "${root}/origin" "${root}/mine" 2>/dev/null
+    (
+        cd "${root}/mine" || exit 1
+        git config user.email t@t
+        git config user.name t
+        echo mine >mine.txt
+        git add mine.txt && git commit -qm "my work"
+    )
+    rc=0
+    out="$(cd "${root}/mine" && env PATH="${stub}:${PATH}" HOME="${root}/home" \
+        timeout 120 bin/spark-http-proxy self-update </dev/null 2>&1)" || rc=$?
+
+    total=$((total + 1))
+    if [ "${rc}" -ne 0 ] && echo "${out}" | grep -q "commits that are not on"; then
+        success "a checkout carrying local commits refuses and says why"
+        passed=$((passed + 1))
+    else
+        error "local commits were not refused, exit ${rc}: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    total=$((total + 1))
+    if [ -f "${root}/mine/mine.txt" ]; then
+        success "the local commit is still there after the refusal"
+        passed=$((passed + 1))
+    else
+        error "a local commit was discarded"
+    fi
+
+    rm -rf "${root}" "${stub}"
+    log "Self-update rewrite tests: ${passed}/${total} passed"
+    [ "${passed}" -eq "${total}" ]
+}
+
 test_version_reports_the_image_revision() {
     local passed=0 total=0 name out revision
 
@@ -2895,6 +2998,12 @@ main() {
     local self_update_passed=0
     test_self_update_applies_the_update && self_update_passed=1
     [ "$self_update_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing self-update against a rewritten upstream..."
+    total=$((total + 1))
+    local rewrite_passed=0
+    test_self_update_after_a_rewrite && rewrite_passed=1
+    [ "$rewrite_passed" -eq 1 ] && passed=$((passed + 1))
 
     log "Testing what version reports about the containers..."
     total=$((total + 1))
