@@ -1586,13 +1586,18 @@ upgrade_stack() {
 # fetch would call a checkout's commits unpublished on any machine where a
 # background fetch, an editor or the user had already picked the force push up.
 commit_was_published() {
-  local repo_dir="$1" commit="$2" ref="$3" entry value
+  local repo_dir="$1" commit="$2" ref="$3" value
+  local entry=0
 
-  for entry in $(seq 0 20); do
-    value="$(git -C "${repo_dir}" rev-parse "${ref}@{${entry}}" 2>/dev/null)" || break
+  # Walks the ref's whole recorded history. rev-parse fails once the reflog runs
+  # out, which is what ends the loop, so there is no window to fall outside of
+  # and no call to seq. The ref advances once per fetch that moves it, so a
+  # window would be a bet on how often that has happened since the force push.
+  while value="$(git -C "${repo_dir}" rev-parse "${ref}@{${entry}}" 2>/dev/null)"; do
     if git -C "${repo_dir}" merge-base --is-ancestor "${commit}" "${value}" 2>/dev/null; then
       return 0
     fi
+    entry=$((entry + 1))
   done
 
   return 1

@@ -1885,9 +1885,13 @@ test_self_update_after_a_rewrite() {
     git clone -q --bare "${root}/src" "${root}/origin" 2>/dev/null
     git clone -q "${root}/origin" "${root}/work" 2>/dev/null
     git clone -q "${root}/origin" "${root}/rewrite" 2>/dev/null
-    # A second machine, cloned before the rewrite like the first, standing in for
-    # one where something else fetches the force push before self-update runs.
+    # Two more machines, cloned before the rewrite like the first. One stands in
+    # for a machine where something else fetches the force push before
+    # self-update runs, the other for one that keeps fetching for a long time
+    # afterwards. Both have to exist before the rewrite or they simply start at
+    # the rewritten tip and are behind rather than diverged.
     git clone -q "${root}/origin" "${root}/fetched" 2>/dev/null
+    git clone -q "${root}/origin" "${root}/stale" 2>/dev/null
 
     # The rewrite: drop one file and force push over the branch.
     (
@@ -1953,6 +1957,31 @@ test_self_update_after_a_rewrite() {
         passed=$((passed + 1))
     else
         error "the rewritten-away file survived on the already-fetched machine"
+    fi
+
+    # The same again, on a machine where the ref has moved many times since the
+    # force push. The old tip is then far back in the ref's history, and any
+    # fixed window on that history is a bet on how many fetches have happened.
+    (
+        cd "${root}/rewrite" || exit 1
+        local n
+        for n in $(seq 1 25); do
+            echo "${n}" >"tick-${n}.txt"
+            git add "tick-${n}.txt" && git commit -qm "tick ${n}"
+            git push -q origin probe
+            (cd "${root}/stale" && git fetch -q)
+        done
+    )
+    rc=0
+    out="$(cd "${root}/stale" && env PATH="${stub}:${PATH}" HOME="${root}/home" \
+        timeout 180 bin/spark-http-proxy self-update </dev/null 2>&1)" || rc=$?
+
+    total=$((total + 1))
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "history was rewritten"; then
+        success "a rewrite is recognised however many times the ref moved afterwards"
+        passed=$((passed + 1))
+    else
+        error "a long-since-rewritten upstream exited ${rc}: $(echo "${out}" | tr '\n' ' ')"
     fi
 
     # Local commits are somebody's work, not a rewrite, and must survive.
