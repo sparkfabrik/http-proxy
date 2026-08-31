@@ -1756,6 +1756,84 @@ STUB
     [ "${passed}" -eq "${total}" ]
 }
 
+# self-update pulls and then applies what it pulled. The exec is the part worth
+# testing: the pull has rewritten the script, so the update has to be applied by
+# a fresh process rather than by the one already running.
+test_self_update_applies_the_update() {
+    local passed=0 total=0 root out rc stub
+
+    total=$((total + 1))
+    if awk '/^self_update\(\) \{/,/^\}/' bin/spark-http-proxy | grep -q 'exec "\${SCRIPT_PATH}" upgrade'; then
+        success "self-update execs the updated script rather than continuing"
+        passed=$((passed + 1))
+    else
+        error "self-update does not exec, so it would run a mix of old and new code"
+    fi
+
+    total=$((total + 1))
+    if awk '/^self_update\(\) \{/,/^\}/' bin/spark-http-proxy | grep -qi "run '.*upgrade'"; then
+        error "self-update still asks the user to run the next step itself"
+    else
+        success "self-update does not ask the user to run upgrade"
+        passed=$((passed + 1))
+    fi
+
+    # End to end, against a throwaway origin so nothing touches this checkout.
+    root="$(mktemp -d)"
+    git clone -q --bare . "${root}/origin" 2>/dev/null
+    git clone -q "${root}/origin" "${root}/work" 2>/dev/null
+    git clone -q "${root}/origin" "${root}/push" 2>/dev/null
+    (
+        cd "${root}/push" || exit 1
+        git config user.email t@t; git config user.name t
+        echo "probe" >.self-update-probe
+        git add .self-update-probe && git commit -qm "probe" && git push -q origin HEAD 2>/dev/null
+    )
+
+    # A docker that reports the proxy running and swallows everything else, so
+    # upgrade runs its real path without a real stack.
+    stub="$(mktemp -d)"
+    printf '#!/usr/bin/env bash\ncase "$*" in\n  *ps*) echo "http-proxy" ;;\nesac\nexit 0\n' >"${stub}/docker"
+    chmod +x "${stub}/docker"
+
+    rc=0
+    out="$(cd "${root}/work" && env PATH="${stub}:${PATH}" HOME="${root}/home" \
+        timeout 120 bin/spark-http-proxy self-update </dev/null 2>&1)" || rc=$?
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "Applying the update"; then
+        success "self-update says it is applying what it pulled"
+        passed=$((passed + 1))
+    else
+        error "self-update pulled and stopped: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "Upgrading HTTP Proxy images"; then
+        success "the exec reaches upgrade in the updated script"
+        passed=$((passed + 1))
+    else
+        error "upgrade was never reached: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # And an unchanged repository upgrades nothing.
+    rc=0
+    out="$(cd "${root}/work" && env PATH="${stub}:${PATH}" HOME="${root}/home" \
+        timeout 120 bin/spark-http-proxy self-update </dev/null 2>&1)" || rc=$?
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "Already up to date" && ! echo "${out}" | grep -q "Upgrading HTTP Proxy images"; then
+        success "an unchanged checkout does not recreate containers"
+        passed=$((passed + 1))
+    else
+        error "self-update upgraded with nothing to apply: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    rm -rf "${root}" "${stub}"
+    log "Self-update tests: ${passed}/${total} passed"
+    [ "${passed}" -eq "${total}" ]
+}
+
 test_suggested_commands_are_pasteable() {
     local passed=0 total=0 offenders
 
