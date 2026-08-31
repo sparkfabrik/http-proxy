@@ -1856,9 +1856,7 @@ test_self_update_applies_the_update() {
 # version used to read a file the images do not carry a value in, so every
 # container reported "unknown". It now reads the revision label the release
 # pipeline writes, and falls back to that file.
-# A force push upstream leaves a machine holding a commit the remote no longer
-# has. A plain `git pull` there either refuses, leaving self-update broken, or
-# merges and restores whatever the rewrite removed.
+# self-update against an upstream branch whose history was rewritten.
 test_self_update_after_a_rewrite() {
     local passed=0 total=0 root stub out rc
 
@@ -1866,8 +1864,7 @@ test_self_update_after_a_rewrite() {
     printf '#!/usr/bin/env bash\ncase "$*" in\n  *ps*) echo "http-proxy" ;;\nesac\nexit 0\n' >"${stub}/docker"
     chmod +x "${stub}/docker"
 
-    # A repository the test owns, with a second commit holding two files so that
-    # removing one of them still leaves a commit to amend.
+    # Two files in the second commit, so amending it away leaves something.
     root="$(mktemp -d)"
     mkdir -p "${root}/src/bin"
     cp bin/spark-http-proxy "${root}/src/bin/"
@@ -1885,15 +1882,10 @@ test_self_update_after_a_rewrite() {
     git clone -q --bare "${root}/src" "${root}/origin" 2>/dev/null
     git clone -q "${root}/origin" "${root}/work" 2>/dev/null
     git clone -q "${root}/origin" "${root}/rewrite" 2>/dev/null
-    # Two more machines, cloned before the rewrite like the first. One stands in
-    # for a machine where something else fetches the force push before
-    # self-update runs, the other for one that keeps fetching for a long time
-    # afterwards. Both have to exist before the rewrite or they simply start at
-    # the rewritten tip and are behind rather than diverged.
+    # Cloned before the rewrite, or they start at its tip and are merely behind.
     git clone -q "${root}/origin" "${root}/fetched" 2>/dev/null
     git clone -q "${root}/origin" "${root}/stale" 2>/dev/null
 
-    # The rewrite: drop one file and force push over the branch.
     (
         cd "${root}/rewrite" || exit 1
         git config user.email t@t
@@ -1908,8 +1900,6 @@ test_self_update_after_a_rewrite() {
     out="$(cd "${root}/work" && env PATH="${stub}:${PATH}" HOME="${root}/home" \
         timeout 120 bin/spark-http-proxy self-update </dev/null 2>&1)" || rc=$?
 
-    # The status too. A self-update that named the rewrite and then failed on the
-    # way through would otherwise satisfy every assertion below it.
     total=$((total + 1))
     if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "history was rewritten"; then
         success "a rewritten upstream is named rather than reported as an ordinary update"
@@ -1934,10 +1924,7 @@ test_self_update_after_a_rewrite() {
         error "the update removed a file the rewrite kept"
     fi
 
-    # The same rewrite, on a machine where something else had already fetched it.
-    # The remote-tracking ref then holds the rewritten tip before this command
-    # runs, so its value from before this fetch says nothing, and the checkout's
-    # commits have to be recognised as published from the ref's own history.
+    # A machine where something else fetched the force push first.
     (cd "${root}/fetched" && git fetch -q)
     rc=0
     out="$(cd "${root}/fetched" && env PATH="${stub}:${PATH}" HOME="${root}/home" \
@@ -1959,9 +1946,7 @@ test_self_update_after_a_rewrite() {
         error "the rewritten-away file survived on the already-fetched machine"
     fi
 
-    # The same again, on a machine where the ref has moved many times since the
-    # force push. The old tip is then far back in the ref's history, and any
-    # fixed window on that history is a bet on how many fetches have happened.
+    # A machine where the ref moved many times after the rewrite.
     (
         cd "${root}/rewrite" || exit 1
         local n
@@ -1984,7 +1969,7 @@ test_self_update_after_a_rewrite() {
         error "a long-since-rewritten upstream exited ${rc}: $(echo "${out}" | tr '\n' ' ')"
     fi
 
-    # Local commits are somebody's work, not a rewrite, and must survive.
+    # Local commits are somebody's work, not a rewrite.
     git clone -q "${root}/origin" "${root}/mine" 2>/dev/null
     (
         cd "${root}/mine" || exit 1

@@ -1579,20 +1579,11 @@ upgrade_stack() {
 }
 
 # Self-update the script and compose files from the git repository
-# Whether a commit was ever the remote branch's tip, or reachable from it. The
-# remote-tracking ref keeps its own history, so the value it held before a force
-# push is still readable, and readable whether this command's fetch moved the ref
-# or something else moved it earlier. Reading only the value from before this
-# fetch would call a checkout's commits unpublished on any machine where a
-# background fetch, an editor or the user had already picked the force push up.
+# Whether a commit was ever reachable from the remote branch.
 commit_was_published() {
   local repo_dir="$1" commit="$2" ref="$3" value
   local entry=0
 
-  # Walks the ref's whole recorded history. rev-parse fails once the reflog runs
-  # out, which is what ends the loop, so there is no window to fall outside of
-  # and no call to seq. The ref advances once per fetch that moves it, so a
-  # window would be a bet on how often that has happened since the force push.
   while value="$(git -C "${repo_dir}" rev-parse "${ref}@{${entry}}" 2>/dev/null)"; do
     if git -C "${repo_dir}" merge-base --is-ancestor "${commit}" "${value}" 2>/dev/null; then
       return 0
@@ -1630,9 +1621,7 @@ self_update() {
     exit 1
   fi
 
-  # Where the remote branch stood before fetching. It is the whole basis for
-  # telling a rewritten upstream from someone's local work further down, so it
-  # has to be read before the fetch moves the ref.
+  # Read before the fetch moves the ref.
   before="$(git -C "${repo_dir}" rev-parse '@{upstream}' 2>/dev/null || true)"
 
   log_info "Checking for updates on branch '${current_branch}' (currently at ${current_commit})..."
@@ -1650,17 +1639,13 @@ self_update() {
   fi
 
   if git -C "${repo_dir}" merge-base --is-ancestor "${head}" "${after}"; then
-    # The ordinary case: the remote has moved on and this checkout has not.
     if ! git -C "${repo_dir}" merge --ff-only "${after}" >/dev/null; then
       log_error "Could not fast-forward onto ${upstream}"
       exit 1
     fi
   elif { [[ -n "${before}" ]] && git -C "${repo_dir}" merge-base --is-ancestor "${head}" "${before}"; } ||
     commit_was_published "${repo_dir}" "${head}" "${upstream}"; then
-    # This checkout holds nothing the remote had not already published: every
-    # commit here was reachable from the remote branch before the fetch, and now
-    # it is not. That is a rewritten upstream, and merging it would restore the
-    # contents the rewrite removed, so the checkout is moved onto the remote.
+    # Nothing here is unpublished, so the remote was rewritten.
     log_warning "Upstream history was rewritten, so this checkout is being moved onto ${upstream}"
     log_info "The commit changes to one that is not a descendant of ${current_commit}, which is expected here"
     log_info "Files git does not track, such as built binaries, may be discarded"
@@ -1669,7 +1654,6 @@ self_update() {
       exit 1
     fi
   else
-    # Commits the remote has never seen. Someone's work, not a rewrite.
     log_error "This checkout has commits that are not on ${upstream}"
     log_info "Push or remove them, then run this again"
     log_info "See them with: git -C ${repo_dir} log --oneline ${upstream}..HEAD"
