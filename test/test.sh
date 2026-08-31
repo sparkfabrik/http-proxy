@@ -1162,7 +1162,7 @@ STUB
     [ "${passed}" -eq "${total}" ]
 }
 
-# tailscale-refresh-peers, exercised with a stub docker so no cycle can run:
+# tailscale-peers --refresh, exercised with a stub docker so no cycle can run:
 # what matters is that the command reports the truth when one does not.
 # What `status` reports about peer routing, across the four states a user can
 # be in. The summary file is the contract, so the fixtures are that file.
@@ -2100,7 +2100,7 @@ test_suggested_commands_are_pasteable() {
     local passed=0 total=0 offenders
 
     total=$((total + 1))
-    offenders="$(grep -nE '(echo|log_[a-z]+|printf).*(generate-mkcert|remove-cert|start-with-tailscale|tailscale-refresh-peers)[^"]*<[a-z_-]+>' bin/spark-http-proxy || true)"
+    offenders="$(grep -nE '(echo|log_[a-z]+|printf).*(generate-mkcert|remove-cert|start-with-tailscale|tailscale-peers)[^"]*<[a-z_-]+>' bin/spark-http-proxy || true)"
     if [ -z "${offenders}" ]; then
         success "suggested commands carry no shell metacharacters"
         passed=$((passed + 1))
@@ -2511,12 +2511,31 @@ STUB
     reset_state
     out="$(PROBE_STATE="${state}" run_refresh 5 true)"
 
+    # Printing belongs to the caller now, so the contract is that the cycle
+    # completed and the function succeeded.
     total=$((total + 1))
-    if echo "${out}" | grep -q "FRESH-REPORT-MARKER" && echo "${out}" | grep -q "exit=0"; then
-        success "a completed cycle prints its report and succeeds"
+    if echo "${out}" | grep -q "exit=0" && ! echo "${out}" | grep -q "STALE-REPORT-MARKER"; then
+        success "a completed cycle succeeds without printing the previous report"
         passed=$((passed + 1))
     else
         error "a completed cycle was not reported: $(echo "${out}" | tr '\n' ' ' | head -c 120)"
+    fi
+
+    total=$((total + 1))
+    if awk '/^tailscale-peers\)/,/^  ;;/' bin/spark-http-proxy | grep -q "tailscale_refresh_peers" &&
+        awk '/^tailscale-peers\)/,/^  ;;/' bin/spark-http-proxy | grep -q "show_tailscale_peers"; then
+        success "--refresh runs a cycle and then renders through the normal path"
+        passed=$((passed + 1))
+    else
+        error "the tailscale-peers dispatch does not both refresh and render"
+    fi
+
+    total=$((total + 1))
+    if awk '/^tailscale-refresh-peers\)/,/^  ;;/' bin/spark-http-proxy | grep -q "was replaced by"; then
+        success "the removed command refuses and names its replacement"
+        passed=$((passed + 1))
+    else
+        error "tailscale-refresh-peers does not point at the flag"
     fi
 
     rm -rf "${home}" "${defs}"
@@ -3034,7 +3053,7 @@ main() {
     test_status_summary && status_summary_passed=1
     [ "$status_summary_passed" -eq 1 ] && passed=$((passed + 1))
 
-    log "Testing tailscale-refresh-peers..."
+    log "Testing tailscale-peers --refresh..."
     total=$((total + 1))
     local refresh_passed=0
     test_refresh_peers && refresh_passed=1

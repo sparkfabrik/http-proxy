@@ -282,7 +282,7 @@ Sorted by what a command does to state that cannot be recreated.
 
 **Run deliberately.** `start*`, `restart`, `stop-metrics`, `stop-tailscale`,
 `upgrade`, `self-update`, `configure-dns`, `generate-mkcert`,
-`tailscale-refresh-peers`. Recoverable, but they restart containers, rewrite
+`tailscale-peers --refresh`. Recoverable, but they restart containers, rewrite
 system DNS, or install a certificate authority.
 
 **Ask first.** `clean` and `destroy` (both remove volumes, so both take

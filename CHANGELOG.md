@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `tailscale-peers --refresh` replaces `tailscale-refresh-peers`, which is removed
+- The peer table has two groups, `PROXY` and `EXCLUDED`, with the reason in a `STATUS` column
+- The peer summary is one line: machines, how many run this proxy and forward what, how many are excluded
 - `self-update` matches upstream exactly, including after a force push
 - `tailscale-peers` groups the machine table, running-this-proxy first
 - `self-update` applies the update it pulled instead of printing the command to do it

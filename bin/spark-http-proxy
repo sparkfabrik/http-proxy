@@ -339,7 +339,7 @@ _${script_name//-/_}_completion() {
     prev="\${COMP_WORDS[COMP_CWORD-1]}"
 
     # Available commands
-    commands="version help self-test start status restart start-with-metrics stop-metrics clean destroy logs dashboard grafana prometheus configure-dns completion install-completion generate-mkcert list-certs remove-cert upgrade self-update up down pull build ps top exec show-config start-with-tailscale stop-tailscale tailscale-peers tailscale-refresh-peers tailscale-status"
+    commands="version help self-test start status restart start-with-metrics stop-metrics clean destroy logs dashboard grafana prometheus configure-dns completion install-completion generate-mkcert list-certs remove-cert upgrade self-update up down pull build ps top exec show-config start-with-tailscale stop-tailscale tailscale-peers tailscale-status"
 
     # Available services for logs command
     services="traefik dinghy_layer join_networks dns tailscale_peers prometheus grafana"
@@ -354,7 +354,7 @@ _${script_name//-/_}_completion() {
             return 0
             ;;
         tailscale-peers)
-            COMPREPLY=( \$(compgen -W "--json" -- \${cur}) )
+            COMPREPLY=( \$(compgen -W "--json --refresh" -- \${cur}) )
             return 0
             ;;
         *)
@@ -521,7 +521,6 @@ show_usage() {
   echo "  restart              Restart HTTP proxy"
   echo "  stop-metrics         Stop only monitoring services"
   echo "  stop-tailscale       Stop only tailnet peer routing"
-  echo "  tailscale-refresh-peers  Run a peer discovery cycle now"
   echo "  clean                Stop all services and remove volumes"
   echo "  destroy              Completely remove all containers, volumes, networks and images"
   echo ""
@@ -533,6 +532,7 @@ show_usage() {
   echo ""
   echo "Tailnet Peer Routing:"
   echo "  tailscale-peers      Show the peers found on the last discovery cycle"
+  echo "                       --refresh runs a cycle first, --json for machine-readable"
   echo "                       (--json for the machine-readable form)"
   echo "  tailscale-status     Write the tailnet status document peer discovery reads"
   echo "                       (needed where the daemon exposes no socket, such as macOS)"
@@ -1090,9 +1090,7 @@ tailscale_refresh_peers() {
     # The service writes this file last, so the report beside it is already the new one.
     current="$(cat "${TAILSCALE_COMPLETED_FILE}" 2>/dev/null)"
     if [[ -n "${current}" && "${current}" != "${before}" ]]; then
-      # A cycle finishing between these two reads can only substitute a newer
-      # complete report, since its own barrier is written after it.
-      cat "${TAILSCALE_RENDERED_FILE}"
+      # A cycle finishing between these two reads only substitutes a newer one.
       return 0
     fi
     sleep 1
@@ -1765,14 +1763,27 @@ show-config)
   exit 0
   ;;
 tailscale-refresh-peers)
-  tailscale_refresh_peers
+  log_error "tailscale-refresh-peers was replaced by: ${0} tailscale-peers --refresh"
+  exit 1
   ;;
 tailscale-peers)
-  if [[ "${2:-}" == "--json" ]]; then
-    show_tailscale_peers "true"
-  else
-    show_tailscale_peers "false"
+  peers_json=false
+  peers_refresh=false
+  for peers_arg in "${@:2}"; do
+    case "${peers_arg}" in
+    --json) peers_json=true ;;
+    --refresh) peers_refresh=true ;;
+    *)
+      log_error "Unknown option: ${peers_arg}"
+      log_info "Usage: ${0} tailscale-peers [--refresh] [--json]"
+      exit 1
+      ;;
+    esac
+  done
+  if [[ "${peers_refresh}" == "true" ]]; then
+    tailscale_refresh_peers || exit 1
   fi
+  show_tailscale_peers "${peers_json}"
   exit 0
   ;;
 tailscale-status)
