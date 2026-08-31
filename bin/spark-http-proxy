@@ -1579,6 +1579,25 @@ upgrade_stack() {
 }
 
 # Self-update the script and compose files from the git repository
+# Whether a commit was ever the remote branch's tip, or reachable from it. The
+# remote-tracking ref keeps its own history, so the value it held before a force
+# push is still readable, and readable whether this command's fetch moved the ref
+# or something else moved it earlier. Reading only the value from before this
+# fetch would call a checkout's commits unpublished on any machine where a
+# background fetch, an editor or the user had already picked the force push up.
+commit_was_published() {
+  local repo_dir="$1" commit="$2" ref="$3" entry value
+
+  for entry in $(seq 0 20); do
+    value="$(git -C "${repo_dir}" rev-parse "${ref}@{${entry}}" 2>/dev/null)" || break
+    if git -C "${repo_dir}" merge-base --is-ancestor "${commit}" "${value}" 2>/dev/null; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 self_update() {
   local repo_dir
   repo_dir="$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel 2>/dev/null)" || {
@@ -1631,13 +1650,15 @@ self_update() {
       log_error "Could not fast-forward onto ${upstream}"
       exit 1
     fi
-  elif [[ -n "${before}" ]] && git -C "${repo_dir}" merge-base --is-ancestor "${head}" "${before}"; then
+  elif { [[ -n "${before}" ]] && git -C "${repo_dir}" merge-base --is-ancestor "${head}" "${before}"; } ||
+    commit_was_published "${repo_dir}" "${head}" "${upstream}"; then
     # This checkout holds nothing the remote had not already published: every
     # commit here was reachable from the remote branch before the fetch, and now
     # it is not. That is a rewritten upstream, and merging it would restore the
     # contents the rewrite removed, so the checkout is moved onto the remote.
     log_warning "Upstream history was rewritten, so this checkout is being moved onto ${upstream}"
     log_info "The commit changes to one that is not a descendant of ${current_commit}, which is expected here"
+    log_info "Files git does not track, such as built binaries, may be discarded"
     if ! git -C "${repo_dir}" reset --hard "${after}" >/dev/null; then
       log_error "Could not move the checkout onto ${upstream}"
       exit 1

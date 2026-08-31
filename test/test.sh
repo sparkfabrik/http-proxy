@@ -1885,6 +1885,9 @@ test_self_update_after_a_rewrite() {
     git clone -q --bare "${root}/src" "${root}/origin" 2>/dev/null
     git clone -q "${root}/origin" "${root}/work" 2>/dev/null
     git clone -q "${root}/origin" "${root}/rewrite" 2>/dev/null
+    # A second machine, cloned before the rewrite like the first, standing in for
+    # one where something else fetches the force push before self-update runs.
+    git clone -q "${root}/origin" "${root}/fetched" 2>/dev/null
 
     # The rewrite: drop one file and force push over the branch.
     (
@@ -1925,6 +1928,31 @@ test_self_update_after_a_rewrite() {
         passed=$((passed + 1))
     else
         error "the update removed a file the rewrite kept"
+    fi
+
+    # The same rewrite, on a machine where something else had already fetched it.
+    # The remote-tracking ref then holds the rewritten tip before this command
+    # runs, so its value from before this fetch says nothing, and the checkout's
+    # commits have to be recognised as published from the ref's own history.
+    (cd "${root}/fetched" && git fetch -q)
+    rc=0
+    out="$(cd "${root}/fetched" && env PATH="${stub}:${PATH}" HOME="${root}/home" \
+        timeout 120 bin/spark-http-proxy self-update </dev/null 2>&1)" || rc=$?
+
+    total=$((total + 1))
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "history was rewritten"; then
+        success "a rewrite already fetched by something else is still recognised"
+        passed=$((passed + 1))
+    else
+        error "an already-fetched rewrite exited ${rc}: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    total=$((total + 1))
+    if [ ! -f "${root}/fetched/unwanted.bin" ]; then
+        success "and what it removed does not come back there either"
+        passed=$((passed + 1))
+    else
+        error "the rewritten-away file survived on the already-fetched machine"
     fi
 
     # Local commits are somebody's work, not a rewrite, and must survive.
