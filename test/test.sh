@@ -1816,20 +1816,22 @@ test_self_update_applies_the_update() {
     out="$(cd "${root}/work" && env PATH="${stub}:${PATH}" HOME="${root}/home" \
         timeout 120 bin/spark-http-proxy self-update </dev/null 2>&1)" || rc=$?
 
+    # The status as well as the output: a self-update that printed these lines
+    # and then failed would otherwise satisfy every check here.
     total=$((total + 1))
-    if echo "${out}" | grep -q "Applying the update"; then
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "Applying the update"; then
         success "self-update says it is applying what it pulled"
         passed=$((passed + 1))
     else
-        error "self-update pulled and stopped: $(echo "${out}" | tr '\n' ' ')"
+        error "self-update exited ${rc}: $(echo "${out}" | tr '\n' ' ')"
     fi
 
     total=$((total + 1))
-    if echo "${out}" | grep -q "Upgrading HTTP Proxy images"; then
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "Upgrading HTTP Proxy images"; then
         success "the exec reaches upgrade in the updated script"
         passed=$((passed + 1))
     else
-        error "upgrade was never reached: $(echo "${out}" | tr '\n' ' ')"
+        error "upgrade was never reached, exit ${rc}: $(echo "${out}" | tr '\n' ' ')"
     fi
 
     # And an unchanged repository upgrades nothing.
@@ -1838,7 +1840,8 @@ test_self_update_applies_the_update() {
         timeout 120 bin/spark-http-proxy self-update </dev/null 2>&1)" || rc=$?
 
     total=$((total + 1))
-    if echo "${out}" | grep -q "Already up to date" && ! echo "${out}" | grep -q "Upgrading HTTP Proxy images"; then
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "Already up to date" &&
+        ! echo "${out}" | grep -q "Upgrading HTTP Proxy images"; then
         success "an unchanged checkout does not recreate containers"
         passed=$((passed + 1))
     else
@@ -1859,10 +1862,13 @@ test_version_reports_the_image_revision() {
     revision="deadbeefcafe1234567890abcdefabcdefabcdef"
     name="claude-revision-probe-$$"
 
-    docker rm -f "${name}" >/dev/null 2>&1
-    docker run -d --name "${name}" \
+    docker rm -f "${name}" >/dev/null 2>&1 || true
+    if ! docker run -d --name "${name}" \
         --label "org.opencontainers.image.revision=${revision}" \
-        alpine:3.20 sleep 60 >/dev/null 2>&1
+        alpine:3.20 sleep 60 >/dev/null 2>&1; then
+        error "could not start the labelled container this test needs"
+        return 1
+    fi
 
     out="$(source_container_revision "${name}")"
     total=$((total + 1))
@@ -1875,7 +1881,7 @@ test_version_reports_the_image_revision() {
 
     # Stopped containers used to report nothing, because the file was read with
     # docker exec. A label is readable either way.
-    docker stop "${name}" >/dev/null 2>&1
+    docker stop "${name}" >/dev/null 2>&1 || true
     out="$(source_container_revision "${name}")"
     total=$((total + 1))
     if [ "${out}" = "deadbee" ]; then
@@ -1884,11 +1890,14 @@ test_version_reports_the_image_revision() {
     else
         error "a stopped container reported '${out}'"
     fi
-    docker rm -f "${name}" >/dev/null 2>&1
+    docker rm -f "${name}" >/dev/null 2>&1 || true
 
     # Neither a label nor the file: the honest answer is unknown.
-    docker rm -f "${name}" >/dev/null 2>&1
-    docker run -d --name "${name}" alpine:3.20 sleep 60 >/dev/null 2>&1
+    docker rm -f "${name}" >/dev/null 2>&1 || true
+    if ! docker run -d --name "${name}" alpine:3.20 sleep 60 >/dev/null 2>&1; then
+        error "could not start the unlabelled container this test needs"
+        return 1
+    fi
     out="$(source_container_revision "${name}")"
     total=$((total + 1))
     if [ "${out}" = "unknown" ]; then
@@ -1897,7 +1906,7 @@ test_version_reports_the_image_revision() {
     else
         error "expected unknown, got '${out}'"
     fi
-    docker rm -f "${name}" >/dev/null 2>&1
+    docker rm -f "${name}" >/dev/null 2>&1 || true
 
     log "Version reporting tests: ${passed}/${total} passed"
     [ "${passed}" -eq "${total}" ]

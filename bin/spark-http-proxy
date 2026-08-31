@@ -1153,13 +1153,19 @@ write_tailscale_status() {
 summarise_tailscale_status() {
   local document="$1" machines online state
 
-  machines="$(grep -cE '^[[:space:]]+"HostName":' "${document}" 2>/dev/null || true)"
-  online="$(grep -cE '^[[:space:]]+"Online": true' "${document}" 2>/dev/null || true)"
-  state="$(grep -m1 -oE '"BackendState": "[^"]*"' "${document}" 2>/dev/null | cut -d'"' -f4 || true)"
+  local online_keys
+  machines="$(grep -cE '^[[:space:]]*"HostName":' "${document}" 2>/dev/null || true)"
+  online="$(grep -cE '^[[:space:]]*"Online":[[:space:]]*true' "${document}" 2>/dev/null || true)"
+  online_keys="$(grep -cE '^[[:space:]]*"Online":' "${document}" 2>/dev/null || true)"
+  state="$(grep -m1 -oE '"BackendState":[[:space:]]*"[^"]*"' "${document}" 2>/dev/null | cut -d'"' -f4 || true)"
 
-  # Self is always one machine, so zero means the shape is not what is counted
-  # here rather than an empty tailnet. Better to say nothing than a wrong number.
-  if [[ -z "${machines}" || "${machines}" -eq 0 ]]; then
+  # Every field has to have been found, not just one of them. Self is always a
+  # machine with a state and an online flag, so a miss on any of the three means
+  # the document is not shaped the way these counts read it, and a number from a
+  # half-parsed document is worse than admitting the shape was not recognised.
+  if [[ -z "${machines}" || "${machines}" -eq 0 ]] ||
+    [[ -z "${online_keys}" || "${online_keys}" -eq 0 ]] ||
+    [[ -z "${state}" ]]; then
     log_warning "The document was written but could not be summarised"
     return 0
   fi
