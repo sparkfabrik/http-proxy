@@ -2511,8 +2511,7 @@ STUB
     reset_state
     out="$(PROBE_STATE="${state}" run_refresh 5 true)"
 
-    # Printing belongs to the caller now, so the contract is that the cycle
-    # completed and the function succeeded.
+    # Printing belongs to the caller now; the contract is that the cycle ran.
     total=$((total + 1))
     if echo "${out}" | grep -q "exit=0" && ! echo "${out}" | grep -q "STALE-REPORT-MARKER"; then
         success "a completed cycle succeeds without printing the previous report"

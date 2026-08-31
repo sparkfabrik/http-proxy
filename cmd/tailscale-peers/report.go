@@ -70,8 +70,7 @@ func rejectedRules(peers []PeerReport) []string {
 	return lines
 }
 
-// Groups of the table, useful rows first. Every status that is not ok lands in
-// EXCLUDED, with its reason in the STATUS column.
+// Useful rows first; every status that is not ok lands in EXCLUDED.
 var peerGroups = []struct {
 	label    string
 	lastCol  string
