@@ -1981,7 +1981,7 @@ path_mode() {
 }
 
 test_state_dir_and_library_loading() {
-    local passed=0 total=0 dir out rc
+    local passed=0 total=0 dir out rc label expected args
 
     # ensure_state_dir lives in the entrypoint, which cannot be sourced, so the
     # function is extracted and exercised on its own.
@@ -2074,7 +2074,7 @@ sed -n '/^abbreviate_home()/,/^}/p' bin/spark-http-proxy >"${LIB_HELPERS}"
 export LIB_HELPERS
 
 test_certs_command() {
-    local passed=0 total=0 dir out rc domain_case sans_field
+    local passed=0 total=0 dir out rc domain_case
 
     # Two real certificates, one wildcard, generated here so the assertions do
     # not depend on what this machine happens to have installed.
@@ -2104,10 +2104,10 @@ test_certs_command() {
     # The table, its columns and its count.
     total=$((total + 1))
     out="$(run_certs certs_list)"
-    if grep -q "^DOMAIN.*EXPIRES" <<<"${out}" && grep -q "2 certificates, none expired" <<<"${out}"; then
+    if grep -q "^DOMAIN$" <<<"${out}" && grep -q "2 certificates" <<<"${out}"; then
         passed=$((passed + 1))
     else
-        error "certs list did not render a table with a count: ${out}"
+        error "certs list did not render the domains with a count: ${out}"
     fi
 
     # Wildcards are shown as * and sort before names, which sorting on the
@@ -2131,13 +2131,14 @@ test_certs_command() {
         error "the count disagrees with the ${on_disk} certificates on disk: ${out}"
     fi
 
-    # describe names what the certificate covers and when it expires.
+    # describe reports where the files are, which is all the CLI reads.
     total=$((total + 1))
     out="$(run_certs certs_describe '*.spark.loc')"
-    if grep -q "covers .*\*\.spark\.loc" <<<"${out}" && grep -qE "expires +[0-9]{4}-[0-9]{2}-[0-9]{2}" <<<"${out}"; then
+    if grep -qE "certificate +.*_wildcard_\.spark\.loc\.pem" <<<"${out}" &&
+        grep -qE "private key +.*_wildcard_\.spark\.loc-key\.pem" <<<"${out}"; then
         passed=$((passed + 1))
     else
-        error "certs describe did not name the SANs and the expiry: ${out}"
+        error "certs describe did not report both file paths: ${out}"
     fi
 
     total=$((total + 1))
@@ -2146,38 +2147,6 @@ test_certs_command() {
         passed=$((passed + 1))
     else
         error "certs describe accepted a domain with no certificate (rc=${rc})"
-    fi
-
-    # Without openssl the domain column still renders, and says why alone.
-    total=$((total + 1))
-    out="$(env CERT_DIR="${dir}" bash -c '
-        log_info(){ echo "$1"; }; log_warning(){ echo "$1" >&2; }; log_error(){ echo "$1" >&2; }
-        # shellcheck source=/dev/null
-        . "${LIB_HELPERS}"
-        . bin/lib/certs.sh
-        certs_have_openssl(){ return 1; }
-        certs_list' 2>&1)"
-    if grep -q "^DOMAIN$" <<<"${out}" && grep -q "Install openssl" <<<"${out}" &&
-        ! grep -q "EXPIRES" <<<"${out}"; then
-        passed=$((passed + 1))
-    else
-        error "certs list without openssl did not degrade to the domain column: ${out}"
-    fi
-
-    # An unreadable CA drops the whole column rather than printing unknown rows.
-    total=$((total + 1))
-    out="$(env CERT_DIR="${dir}" bash -c '
-        log_info(){ echo "$1"; }; log_warning(){ echo "$1" >&2; }; log_error(){ echo "$1" >&2; }
-        # shellcheck source=/dev/null
-        . "${LIB_HELPERS}"
-        . bin/lib/certs.sh
-        certs_ca_path(){ return 0; }
-        certs_list' 2>&1)"
-    if ! grep -q "TRUSTED" <<<"${out}" && grep -q "EXPIRES" <<<"${out}" &&
-        grep -q "Trust is not shown" <<<"${out}"; then
-        passed=$((passed + 1))
-    else
-        error "an unreadable CA did not remove the TRUSTED column: ${out}"
     fi
 
     # The deprecated names still work, warn on stderr, and match the new output.
@@ -2237,27 +2206,6 @@ needs certs delete example.spark.loc
 exempt list-certs
 CASES
 
-    # Trust must be the signature, not the issuer's name. A certificate can
-    # carry any issuer CN it likes, including the real CA's.
-    total=$((total + 1))
-    local ca_dir="${dir}/ca"
-    mkdir -p "${ca_dir}"
-    openssl req -x509 -newkey rsa:2048 -nodes -keyout "${ca_dir}/ca-key.pem" \
-        -out "${ca_dir}/rootCA.pem" -days 3650 -subj "/CN=test CA" >/dev/null 2>&1
-    # Self-signed, but claiming the CA's name.
-    openssl req -x509 -newkey rsa:2048 -nodes -keyout "${dir}/forged-key.pem" \
-        -out "${dir}/forged.pem" -days 3650 -subj "/CN=test CA" \
-        -addext "subjectAltName=DNS:forged.spark.loc" >/dev/null 2>&1
-    if ! bash -c '
-        # shellcheck source=/dev/null
-        . "${LIB_HELPERS}"
-        . bin/lib/certs.sh
-        certs_trusted "$1" "$2"' _ "${ca_dir}/rootCA.pem" "${dir}/forged.pem" 2>/dev/null; then
-        passed=$((passed + 1))
-    else
-        error "a self-signed certificate claiming the CA's name was reported as trusted"
-    fi
-
     # A failed generation must not be reported as success, nor applied.
     total=$((total + 1))
     out="$(env CERT_DIR="${dir}" bash -c '
@@ -2274,6 +2222,18 @@ CASES
         passed=$((passed + 1))
     else
         error "a failed mkcert was reported as success or still applied (rc=${rc}): ${out}"
+    fi
+
+    # The host CLI depends on Docker and mkcert. A certificate file existing is
+    # the whole answer, so nothing here opens one: no expiry, no issuer, no
+    # verification. The Traefik image may use openssl; this context may not.
+    total=$((total + 1))
+    local reads_certs
+    reads_certs="$(grep -nE 'openssl|-noout|x509' bin/lib/certs.sh || true)"
+    if [ -z "${reads_certs}" ]; then
+        passed=$((passed + 1))
+    else
+        error "bin/lib/certs.sh reads inside certificate files: ${reads_certs}"
     fi
 
     # The rest of this repository is Bash 3.2 compatible, which is what macOS
@@ -2377,143 +2337,6 @@ COLLIDING
         passed=$((passed + 1))
     else
         error "an ordinary domain or a real wildcard was rejected as colliding"
-    fi
-
-    # Expiry and issuer must survive an openssl without -ext, which is what
-    # macOS ships as LibreSSL.
-    total=$((total + 1))
-    out="$(env CERT_DIR="${dir}" bash -c '
-        log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
-        # shellcheck source=/dev/null
-        . "${LIB_HELPERS}"
-        . bin/lib/certs.sh
-        openssl() {
-            case "$*" in
-                *-ext*) echo "unknown option -ext" >&2; return 1 ;;
-                *) command openssl "$@" ;;
-            esac
-        }
-        certs_read "$1"' _ "${dir}/api.spark.loc.pem" 2>&1)" && rc=0 || rc=$?
-    # The SAN list is the fourth field. Checked by position, because the fixture
-    # certificates are self-signed so the issuer also contains the domain and a
-    # plain grep would pass with no SANs at all.
-    sans_field="$(cut -f4 <<<"${out}")"
-    if [ "${rc}" -eq 0 ] && grep -qE "^[0-9]{4}-[0-9]{2}-[0-9]{2}" <<<"${out}" &&
-        [ "${sans_field}" = "api.spark.loc" ]; then
-        passed=$((passed + 1))
-    else
-        error "without -ext the SANs were lost rather than read via -text (rc=${rc}, sans='${sans_field}'): ${out}"
-    fi
-
-    # Trust is a claim about the signer, and expiry is reported separately, so an
-    # expired certificate this CA signed must not be called unsigned by it.
-    total=$((total + 1))
-    openssl req -new -newkey rsa:2048 -nodes -keyout "${dir}/exp-key.pem" \
-        -out "${dir}/exp.csr" -subj "/CN=expired.spark.loc" >/dev/null 2>&1
-    openssl x509 -req -in "${dir}/exp.csr" -CA "${ca_dir}/rootCA.pem" \
-        -CAkey "${ca_dir}/ca-key.pem" -out "${dir}/expired-cert.pem" \
-        -not_before 20200101000000Z -not_after 20200102000000Z >/dev/null 2>&1
-    if [ -s "${dir}/expired-cert.pem" ]; then
-        if bash -c '
-            # shellcheck source=/dev/null
-            . "${LIB_HELPERS}"
-            . bin/lib/certs.sh
-            certs_trusted "$1" "$2"' _ "${ca_dir}/rootCA.pem" "${dir}/expired-cert.pem" 2>/dev/null; then
-            passed=$((passed + 1))
-        else
-            error "an expired certificate signed by the CA was reported as not signed by it"
-        fi
-    else
-        # -not_before needs a newer openssl; the claim cannot be exercised here.
-        passed=$((passed + 1))
-        log "  (skipped the expired-certificate case: this openssl cannot backdate)"
-    fi
-
-    # An unreadable certificate must not be summarised as not expired: nothing is
-    # known about its expiry.
-    total=$((total + 1))
-    printf 'NOT A CERTIFICATE' >"${dir}/broken.pem"
-    out="$(env CERT_DIR="${dir}" bash -c '
-        log_info(){ echo "$1"; }; log_warning(){ echo "$1" >&2; }; log_error(){ echo "$1" >&2; }
-        # shellcheck source=/dev/null
-        . "${LIB_HELPERS}"
-        . bin/lib/certs.sh
-        certs_list' 2>&1)"
-    if grep -q "unreadable" <<<"${out}" && grep -qE "[0-9]+ unreadable" <<<"${out}"; then
-        passed=$((passed + 1))
-    else
-        error "the summary made no mention of the unreadable certificate: ${out}"
-    fi
-    command rm -f "${dir}/broken.pem"
-
-    # Where openssl cannot separate expiry from the signer, trust is unknown
-    # rather than a guess presented as a fact.
-    total=$((total + 1))
-    if [ -s "${dir}/expired-cert.pem" ]; then
-        out="$(env CERT_DIR="${dir}" bash -c '
-            # An openssl without -no_check_time, which is what older LibreSSL is.
-            openssl() {
-                case "$*" in
-                    *-no_check_time*) return 1 ;;
-                    *) command openssl "$@" ;;
-                esac
-            }
-            # shellcheck source=/dev/null
-            . "${LIB_HELPERS}"
-            . bin/lib/certs.sh
-            certs_trusted "$1" "$2"; echo "rc=$?"' _ "${ca_dir}/rootCA.pem" "${dir}/expired-cert.pem" 2>&1)"
-        if grep -q "rc=2" <<<"${out}"; then
-            passed=$((passed + 1))
-        else
-            error "without -no_check_time an expired certificate was judged rather than reported unknown: ${out}"
-        fi
-    else
-        passed=$((passed + 1))
-        log "  (skipped: this openssl cannot backdate a certificate)"
-    fi
-
-    # A valid certificate this CA did not sign is "no", not "unknown". openssl
-    # exits 2 for a certificate it cannot chain, which must not be mistaken for
-    # the sentinel meaning the question is unanswerable.
-    total=$((total + 1))
-    out="$(bash -c '
-        # shellcheck source=/dev/null
-        . "${LIB_HELPERS}"
-        . bin/lib/certs.sh
-        certs_trusted "$1" "$2"; echo "rc=$?"' _ "${ca_dir}/rootCA.pem" "${dir}/forged.pem" 2>&1)"
-    if grep -q "rc=1" <<<"${out}"; then
-        passed=$((passed + 1))
-    else
-        error "an untrusted but valid certificate was not reported as untrusted: ${out}"
-    fi
-
-    # The -text fallback must read every SAN line. No openssl here wraps them,
-    # so the wrapped rendering is supplied directly rather than hoping a real
-    # certificate produces it: otherwise the assertion cannot tell a fixed
-    # single-line read from one that follows the block.
-    total=$((total + 1))
-    out="$(bash -c '
-        openssl() {
-            case "$*" in
-                *-ext*) return 1 ;;
-                *-text*)
-                    printf "        X509v3 Subject Alternative Name: \n"
-                    printf "            DNS:one.spark.loc, DNS:two.spark.loc,\n"
-                    printf "            DNS:three.spark.loc\n"
-                    printf "    Signature Algorithm: sha256\n"
-                    ;;
-                *-enddate*) printf "notAfter=Oct 10 22:08:33 2028 GMT\nissuer=CN=x\n" ;;
-                *) return 0 ;;
-            esac
-        }
-        # shellcheck source=/dev/null
-        . "${LIB_HELPERS}"
-        . bin/lib/certs.sh
-        certs_read /nonexistent 2>/dev/null | cut -f4')"
-    if [ "${out}" = "one.spark.loc,two.spark.loc,three.spark.loc" ]; then
-        passed=$((passed + 1))
-    else
-        error "the -text fallback did not read the wrapped SAN block: got '${out}'"
     fi
 
     # Completion must offer nothing where a domain goes, rather than falling
@@ -2760,9 +2583,6 @@ test_hosts_command() {
         error "hosts is not registered, so it would reach docker compose"
     fi
 
-    # Redaction. Fed one argument per line, the way describe reads them, over
-    # both shapes: a credential as its own argument, and one inside a single
-    # argument such as the script passed to sh -c.
     local redacted
     redact() {
         bash -c '
@@ -2772,56 +2592,41 @@ test_hosts_command() {
             hosts_redact_args'
     }
 
-    total=$((total + 1))
-    redacted="$(printf '%s\0' 'serve' '--auth' 'abc123' '--port' '80' | redact)"
-    if [ "${redacted}" = "serve --auth <redacted> --port 80" ]; then
-        passed=$((passed + 1))
-    else
-        log "❌ redaction of a flag's own argument: got ${redacted}"
-    fi
+    # Redaction, one row per mechanism. Fed NUL-separated arguments, the way
+    # describe reads them. Each row is a case the code handles distinctly, so a
+    # row that stops failing when its mechanism is removed is a row that has
+    # stopped testing anything.
+    while IFS='|' read -r label expected args; do
+        [[ -z "${label}" ]] && continue
+        total=$((total + 1))
+        # shellcheck disable=SC2086
+        redacted="$(eval "printf '%s\\0' ${args}" | redact)"
+        if [ "${redacted}" = "${expected}" ]; then
+            passed=$((passed + 1))
+        else
+            log "❌ redaction (${label}): got '${redacted}', wanted '${expected}'"
+        fi
+    done <<'REDACTIONS'
+own argument|serve --auth <redacted> --port 80|'serve' '--auth' 'abc123' '--port' '80'
+value with spaces|serve --auth <redacted> --host db|'serve' '--auth' 'my secret value' '--host' 'db'
+value starting with a dash|serve --token <redacted>|'serve' '--token' '-weird-looking'
+inside one argument|bash -c npx serve --host 0.0.0.0 --auth <redacted>|'bash' '-c' "npx serve --host 0.0.0.0 --auth 'abc123'"
+flag=value|serve --auth=<redacted>|'serve' '--auth=abc123'
+no credential at all|serve --host 0.0.0.0 --no-https|'serve' '--host' '0.0.0.0' '--no-https'
+other credential names|serve --credential <redacted> --bearer <redacted> --passphrase <redacted>|'serve' '--credential' 'live' '--bearer' 'live2' '--passphrase' 'live3'
+quoted flag=value|serve --password=<redacted> --host db|'serve' '--password="my secret value"' '--host' 'db'
+backslash-escaped space|sh -c serve --auth <redacted> --host db|'sh' '-c' 'serve --auth my\\ secret --host db'
+environment assignment|sh -c GITHUB_TOKEN=<redacted> npm publish|'sh' '-c' 'GITHUB_TOKEN=abc123 npm publish'
+URL userinfo|psql postgres://admin:<redacted>@db:5432/app|'psql' 'postgres://admin:s3cret@db:5432/app'
+dash-leading inside an argument|sh -c serve --token <redacted> --host db|'sh' '-c' 'serve --token -secret --host db'
+REDACTIONS
 
-    # The value's spaces used to end the redaction after its first word.
-    total=$((total + 1))
-    redacted="$(printf '%s\0' 'serve' '--auth' 'my secret value' '--host' 'db' | redact)"
-    if [ "${redacted}" = "serve --auth <redacted> --host db" ]; then
-        passed=$((passed + 1))
-    else
-        log "❌ a credential containing spaces was not fully redacted: got ${redacted}"
-    fi
 
-    # A value starting with - used to be skipped entirely.
-    total=$((total + 1))
-    redacted="$(printf '%s\0' 'serve' '--token' '-weird-looking' | redact)"
-    if [ "${redacted}" = "serve --token <redacted>" ]; then
-        passed=$((passed + 1))
-    else
-        log "❌ a credential starting with a dash was not redacted: got ${redacted}"
-    fi
 
-    # The real shape on this machine: the credential is inside one argument.
-    total=$((total + 1))
-    redacted="$(printf '%s\0' 'bash' '-c' "npx serve --host 0.0.0.0 --auth 'abc123'" | redact)"
-    if grep -q -- "--auth <redacted>" <<<"${redacted}" && ! grep -q "abc123" <<<"${redacted}"; then
-        passed=$((passed + 1))
-    else
-        log "❌ a credential inside one argument was not redacted: got ${redacted}"
-    fi
 
-    total=$((total + 1))
-    redacted="$(printf '%s\0' 'serve' '--auth=abc123' | redact)"
-    if [ "${redacted}" = "serve --auth=<redacted>" ]; then
-        passed=$((passed + 1))
-    else
-        log "❌ the --flag=value form was not redacted: got ${redacted}"
-    fi
 
-    total=$((total + 1))
-    redacted="$(printf '%s\0' 'serve' '--host' '0.0.0.0' '--no-https' | redact)"
-    if [ "${redacted}" = "serve --host 0.0.0.0 --no-https" ]; then
-        passed=$((passed + 1))
-    else
-        log "❌ a command with no credential was altered: got ${redacted}"
-    fi
+
+
 
     # The live fields, from a stubbed docker so the assertion does not need a
     # container of its own.
@@ -2897,13 +2702,6 @@ test_hosts_command() {
         log "❌ a label-routed container was not described as such: ${out}"
     fi
 
-    total=$((total + 1))
-    redacted="$(printf '%s\0' 'serve' '--credential' 'live' '--bearer' 'live2' '--passphrase' 'live3' | redact)"
-    if [ "${redacted}" = "serve --credential <redacted> --bearer <redacted> --passphrase <redacted>" ]; then
-        passed=$((passed + 1))
-    else
-        log "❌ an explicit credential flag was printed unchanged: got ${redacted}"
-    fi
 
     # A container declaring no VIRTUAL_PORT is still probed by hostname.
     total=$((total + 1))
@@ -2933,51 +2731,10 @@ test_hosts_command() {
         log "❌ a container without VIRTUAL_PORT was not probed: ${out}"
     fi
 
-    total=$((total + 1))
-    redacted="$(printf '%s\0' 'serve' '--password="my secret value"' '--host' 'db' | redact)"
-    if [ "${redacted}" = 'serve --password=<redacted> --host db' ]; then
-        passed=$((passed + 1))
-    else
-        log "❌ a quoted --flag=value credential leaked part of its value: got ${redacted}"
-    fi
 
-    total=$((total + 1))
-    redacted="$(printf '%s\0' 'sh' '-c' 'serve --auth my\\ secret --host db' | redact)"
-    if [ "${redacted}" = 'sh -c serve --auth <redacted> --host db' ]; then
-        passed=$((passed + 1))
-    else
-        log "❌ a backslash-escaped space left part of the credential: got ${redacted}"
-    fi
 
-    # An environment-style assignment carries a credential the same way a flag
-    # does, matched on the same names.
-    total=$((total + 1))
-    redacted="$(printf '%s\0' 'sh' '-c' 'GITHUB_TOKEN=abc123 npm publish' | redact)"
-    if [ "${redacted}" = 'sh -c GITHUB_TOKEN=<redacted> npm publish' ]; then
-        passed=$((passed + 1))
-    else
-        log "❌ an environment-style credential was printed: got ${redacted}"
-    fi
 
-    # A URL's userinfo is positional, so it needs no judgement about the value.
-    total=$((total + 1))
-    redacted="$(printf '%s\0' 'psql' 'postgres://admin:s3cret@db:5432/app' | redact)"
-    if [ "${redacted}" = 'psql postgres://admin:<redacted>@db:5432/app' ]; then
-        passed=$((passed + 1))
-    else
-        log "❌ a URL password was printed: got ${redacted}"
-    fi
 
-    # A value beginning with - cannot be told from the next flag, so it is
-    # redacted: losing a flag name from the display leaks nothing, printing a
-    # credential does.
-    total=$((total + 1))
-    redacted="$(printf '%s\0' 'sh' '-c' 'serve --token -secret --host db' | redact)"
-    if [ "${redacted}" = 'sh -c serve --token <redacted> --host db' ]; then
-        passed=$((passed + 1))
-    else
-        log "❌ a credential beginning with a dash was printed: got ${redacted}"
-    fi
 
     # sed works a line at a time, so a credential spanning a newline inside one
     # argument would leave its later lines visible.

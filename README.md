@@ -578,39 +578,35 @@ The `certs generate` command automatically:
 
 All certificate work lives under `certs`: `list`, `describe`, `generate` and `delete`.
 
-List the certificates currently installed, with when each expires and whether it
-is signed by this machine's CA:
+List the certificates currently installed:
 
 ```console
 $ spark-http-proxy certs list
-DOMAIN                                  EXPIRES     TRUSTED
-*.asyncops.sparkfabrik.sparkfabrik.loc  2028-11-27  yes
-*.spark.loc                             2027-10-13  yes
-api.audiolyzer.spark.loc                2028-10-10  yes
+DOMAIN
+*.asyncops.sparkfabrik.sparkfabrik.loc
+*.spark.loc
+api.audiolyzer.spark.loc
 
-31 certificates, none expired.
+31 certificates
 ```
 
-`certs list` needs nothing but the certificate directory, so it works with the
-proxy stopped. Without `openssl` it prints the domains alone and says why, and
-when the mkcert CA cannot be read the `TRUSTED` column is left out rather than
-filled with guesses.
-
-`certs describe <domain>` reports one certificate in full, including the names it
-actually covers. That is the field to check before assuming a wildcard applies: a
-wildcard covers exactly one label, so `*.spark.loc` does not cover
-`a.b.spark.loc`.
+`certs describe <domain>` says where one certificate's files are:
 
 ```console
 $ spark-http-proxy certs describe '*.spark.loc'
 *.spark.loc
   certificate    ~/.local/spark/http-proxy/certs/_wildcard_.spark.loc.pem
   private key    ~/.local/spark/http-proxy/certs/_wildcard_.spark.loc-key.pem
-  covers         *.spark.loc
-  expires        2027-10-13 (in 406 days)
-  issuer         mkcert paolo@paolo-cto-arch
-  trusted        yes, signed by this machine's CA
 ```
+
+Both report a certificate whose private key is missing, because such a pair
+cannot be served. Neither reads inside a certificate: mkcert owns the certificate
+lifecycle, and a certificate present on disk is assumed to work. If you need its
+expiry, issuer or names, `openssl x509 -in <path> -noout -text` answers that and
+the path is right there.
+
+`certs list` needs nothing but the certificate directory, so it works with the
+proxy stopped.
 
 Remove certificate pairs for one or more domains. This deletes both the `.pem` and `-key.pem` files and applies the change to the running proxy, which stops serving the removed certificates without being restarted:
 

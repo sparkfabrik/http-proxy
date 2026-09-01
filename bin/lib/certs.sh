@@ -3,8 +3,8 @@
 
 CERTS_USAGE="Usage: $(basename "${0}") certs <list|describe|delete|generate> [domain...]
 
-  list                 Installed certificates, with expiry and trust
-  describe <domain>    One certificate in full, including what it covers
+  list                 Installed certificates
+  describe <domain>    Where a certificate's files are
   generate <domain>    Generate a certificate, wildcards supported
   delete <domain>...   Remove one or more certificates"
 
@@ -84,169 +84,23 @@ certs_domain_of() {
   printf '%s' "${safe_filename//_wildcard_/\*}"
 }
 
-certs_have_openssl() {
-  command -v openssl >/dev/null 2>&1
-}
 
-# openssl prints "Oct  1 22:08:33 2028 GMT". Converted here rather than with
-# date, whose parsing flags differ between BSD and GNU.
-certs_iso_date() {
-  local raw="$1" month day year
 
-  read -r month day _ year _ <<<"${raw}"
-  case "${month}" in
-    Jan) month=01 ;; Feb) month=02 ;; Mar) month=03 ;; Apr) month=04 ;;
-    May) month=05 ;; Jun) month=06 ;; Jul) month=07 ;; Aug) month=08 ;;
-    Sep) month=09 ;; Oct) month=10 ;; Nov) month=11 ;; Dec) month=12 ;;
-    *) return 1 ;;
-  esac
 
-  [[ -n "${year}" && -n "${day}" ]] || return 1
-  printf '%s-%s-%02d' "${year}" "${month}" "${day}"
-}
 
-# Days until a date, or nothing when neither date dialect parses it. GNU takes
-# -d, BSD takes -j -f, and the capability is tried rather than guessed.
-certs_days_until() {
-  local iso="$1" then now
 
-  then="$(date -d "${iso}" +%s 2>/dev/null)" ||
-    then="$(date -j -f '%Y-%m-%d' "${iso}" +%s 2>/dev/null)" ||
-    return 0
 
-  now="$(date +%s)"
-  printf '%s' "$(((then - now) / 86400))"
-}
-
-# One openssl call per certificate, emitting tab-separated
-# expiry-date, expired-flag, issuer and comma-joined SANs.
-certs_read() {
-  local cert_file="$1" out enddate issuer sans expired=no iso
-
-  # Expiry and issuer only, with options every openssl and LibreSSL has.
-  out="$(openssl x509 -in "${cert_file}" -noout -enddate -issuer 2>/dev/null)" || return 1
-  enddate="$(sed -n 's/^notAfter=//p' <<<"${out}")"
-  issuer="$(sed -n 's/^issuer=//p' <<<"${out}")"
-
-  # -ext is newer than the LibreSSL macOS ships, so -text is the fallback rather
-  # than letting the whole record fail with it.
-  sans="$(openssl x509 -in "${cert_file}" -noout -ext subjectAltName 2>/dev/null |
-    grep -o 'DNS:[^,]*' | sed 's/^DNS://' | paste -sd, -)"
-  if [[ -z "${sans}" ]]; then
-    # Every line after the heading until one that names no DNS entry: OpenSSL 3
-    # puts them all on one line, but an older renderer may wrap them, and reading
-    # a fixed single line would then describe the certificate incompletely.
-    sans="$(openssl x509 -in "${cert_file}" -noout -text 2>/dev/null |
-      awk '/Subject Alternative Name/ {found=1; next} found && /DNS:/ {print; next} found {exit}' |
-      grep -o 'DNS:[^,]*' | sed 's/^DNS://' | paste -sd, -)"
-  fi
-
-  iso="$(certs_iso_date "${enddate}")" || iso=""
-  openssl x509 -in "${cert_file}" -noout -checkend 0 >/dev/null 2>&1 || expired=yes
-
-  printf '%s\t%s\t%s\t%s\n' "${iso}" "${expired}" "${issuer}" "${sans}"
-}
-
-# The path to the mkcert CA, or nothing when it cannot be read. Without it there
-# is no way to tell a trusted certificate from any other, so the column goes.
-certs_ca_path() {
-  local caroot ca
-
-  command -v mkcert >/dev/null 2>&1 || return 0
-  caroot="$(mkcert -CAROOT 2>/dev/null)" || return 0
-  ca="${caroot}/rootCA.pem"
-  [[ -r "${ca}" ]] || return 0
-
-  printf '%s' "${ca}"
-}
-
-# Whether the CA actually signed this certificate. Comparing issuer names would
-# accept anything carrying the right CN, including a self-signed certificate
-# that simply claims it, and would keep trusting certificates from a CA that has
-# since been regenerated under the same name.
-# 0: this CA signed it. 1: it did not. 2: cannot be told apart here.
-certs_trusted() {
-  local ca="$1" cert="$2"
-
-  # -no_check_time asks only who signed it. Probed rather than assumed, because
-  # the LibreSSL macOS ships is older: a self-signed CA verifies against itself,
-  # so a failure there means the option is unsupported.
-  # openssl's own status is not passed through: it exits 2 for a certificate it
-  # cannot chain, which would collide with the sentinel below.
-  if openssl verify -no_check_time -CAfile "${ca}" "${ca}" >/dev/null 2>&1; then
-    if openssl verify -no_check_time -CAfile "${ca}" "${cert}" >/dev/null 2>&1; then
-      return 0
-    fi
-    return 1
-  fi
-
-  if openssl verify -CAfile "${ca}" "${cert}" >/dev/null 2>&1; then
-    return 0
-  fi
-
-  # Without that option a failure could be the expiry rather than the signer, so
-  # for an expired certificate the question is unanswerable here and saying "not
-  # signed by this CA" would be a guess presented as a fact.
-  if ! openssl x509 -in "${cert}" -noout -checkend 0 >/dev/null 2>&1; then
-    return 2
-  fi
-
-  return 1
-}
-
-# The CN out of an issuer distinguished name, which is what names the CA.
-certs_issuer_name() {
-  local dn="$1" cn
-  cn="$(sed -n 's/.*CN *= *//p' <<<"${dn}")"
-  printf '%s' "${cn:-${dn}}"
-}
 
 certs_list() {
-  local -a domains=() expiries=() trusts=()
-  local cert_file domain record iso expired issuer ca_path shown
-  local expired_count=0 unreadable_count=0 total=0
-  local wide_domain=6 wide_expiry=7
-  local have_openssl=true show_trust=false
-
-  certs_have_openssl || have_openssl=false
-  ca_path="$(certs_ca_path)"
-  [[ "${have_openssl}" == "true" && -n "${ca_path}" ]] && show_trust=true
+  local -a domains=() missing=()
+  local domain cert_file total=0 wide=6 i noun
 
   while IFS=$'\t' read -r domain cert_file; do
     [[ -z "${cert_file}" ]] && continue
     total=$((total + 1))
     domains+=("${domain}")
-    [[ "${#domain}" -gt "${wide_domain}" ]] && wide_domain="${#domain}"
-
-    if [[ "${have_openssl}" != "true" ]]; then
-      continue
-    fi
-
-    if ! record="$(certs_read "${cert_file}")"; then
-      expiries+=("unreadable")
-      trusts+=("-")
-      unreadable_count=$((unreadable_count + 1))
-      continue
-    fi
-
-    IFS=$'\t' read -r iso expired issuer _ <<<"${record}"
-    if [[ "${expired}" == "yes" ]]; then
-      shown="expired"
-      expired_count=$((expired_count + 1))
-    else
-      shown="${iso:-unknown}"
-    fi
-    expiries+=("${shown}")
-    [[ "${#shown}" -gt "${wide_expiry}" ]] && wide_expiry="${#shown}"
-
-    if [[ "${show_trust}" == "true" ]]; then
-      certs_trusted "${ca_path}" "${cert_file}"
-      case "$?" in
-        0) trusts+=("yes") ;;
-        2) trusts+=("unknown") ;;
-        *) trusts+=("no") ;;
-      esac
-    fi
+    [[ "${#domain}" -gt "${wide}" ]] && wide="${#domain}"
+    [[ -f "${cert_file%.pem}-key.pem" ]] || missing+=("${domain}")
   done < <(certs_files)
 
   if [[ "${total}" -eq 0 ]]; then
@@ -255,46 +109,25 @@ certs_list() {
     return 0
   fi
 
-  local i noun="certificates"
-  [[ "${total}" -eq 1 ]] && noun="certificate"
-  if [[ "${have_openssl}" != "true" ]]; then
-    echo "DOMAIN"
-    for ((i = 0; i < total; i++)); do
-      printf '%s\n' "${domains[i]}"
-    done
-    echo ""
-    log_info "${total} ${noun}. Install openssl to see expiry and trust."
-    return 0
-  fi
-
-  if [[ "${show_trust}" == "true" ]]; then
-    printf '%-*s  %-*s  %s\n' "${wide_domain}" "DOMAIN" "${wide_expiry}" "EXPIRES" "TRUSTED"
-    for ((i = 0; i < total; i++)); do
-      printf '%-*s  %-*s  %s\n' "${wide_domain}" "${domains[i]}" "${wide_expiry}" "${expiries[i]}" "${trusts[i]}"
-    done
-  else
-    printf '%-*s  %s\n' "${wide_domain}" "DOMAIN" "EXPIRES"
-    for ((i = 0; i < total; i++)); do
-      printf '%-*s  %s\n' "${wide_domain}" "${domains[i]}" "${expiries[i]}"
-    done
-  fi
+  printf '%s\n' "DOMAIN"
+  for ((i = 0; i < total; i++)); do
+    printf '%s\n' "${domains[i]}"
+  done
 
   echo ""
-  if [[ "${unreadable_count}" -gt 0 ]]; then
-    # No claim about the ones that could not be read.
-    log_info "${total} ${noun}, ${expired_count} expired, ${unreadable_count} unreadable."
-  elif [[ "${expired_count}" -eq 0 ]]; then
-    log_info "${total} ${noun}, none expired."
-  else
-    log_info "${total} ${noun}, ${expired_count} expired."
-  fi
-  [[ "${show_trust}" != "true" ]] && log_info "Trust is not shown: the mkcert CA could not be read."
+  noun="certificates"
+  [[ "${total}" -eq 1 ]] && noun="certificate"
+  log_info "${total} ${noun}"
+
+  for domain in "${missing[@]}"; do
+    log_warning "${domain} has no private key, so it cannot be served"
+  done
 
   return 0
 }
 
 certs_describe() {
-  local wanted="$1" cert_file key_file safe_filename record iso expired issuer sans ca_path days
+  local wanted="$1" cert_file key_file safe_filename
 
   if [[ -z "${wanted}" ]]; then
     log_error "Which domain? Usage: $(basename "${0}") certs describe <domain>"
@@ -317,47 +150,6 @@ certs_describe() {
     echo "  private key    $(abbreviate_home "${key_file}")"
   else
     echo "  private key    missing, so this certificate cannot be served"
-  fi
-
-  if ! certs_have_openssl; then
-    echo ""
-    log_info "Install openssl to see what this certificate covers and when it expires."
-    return 0
-  fi
-
-  if ! record="$(certs_read "${cert_file}")"; then
-    echo ""
-    log_warning "The certificate could not be read"
-    return 1
-  fi
-
-  IFS=$'\t' read -r iso expired issuer sans <<<"${record}"
-
-  [[ -n "${sans}" ]] && echo "  covers         ${sans//,/, }"
-
-  if [[ "${expired}" == "yes" ]]; then
-    echo "  expires        ${iso:-unknown} (expired)"
-  else
-    days="$(certs_days_until "${iso}")"
-    if [[ -n "${days}" ]]; then
-      echo "  expires        ${iso} (in ${days} days)"
-    else
-      echo "  expires        ${iso}"
-    fi
-  fi
-
-  echo "  issuer         $(certs_issuer_name "${issuer}")"
-
-  ca_path="$(certs_ca_path)"
-  if [[ -z "${ca_path}" ]]; then
-    echo "  trusted        unknown, the mkcert CA could not be read"
-  else
-    certs_trusted "${ca_path}" "${cert_file}"
-    case "$?" in
-      0) echo "  trusted        yes, signed by this machine's CA" ;;
-      2) echo "  trusted        unknown, this openssl cannot tell expiry from the signer" ;;
-      *) echo "  trusted        no, not signed by this machine's CA" ;;
-    esac
   fi
 
   return 0

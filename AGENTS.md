@@ -273,6 +273,28 @@ make dev-cli-traefik    # Open a shell in the Traefik container
 The dev stack uses `compose.yml` (root) with `build:` contexts. The production stack
 uses `bin/compose.yml` with pre-built GHCR images.
 
+## Host CLI dependencies
+
+`bin/spark-http-proxy` depends on **Docker and mkcert only**. Not openssl, not jq,
+not python3. `bin/spark-http-proxy:1039` already says this about jq; the reasoning
+is the same for anything else.
+
+The CLI is a wrapper over mkcert rather than a certificate tool. mkcert owns the
+certificate lifecycle and `install_mkcert` owns getting it onto the machine, so
+the CLI creates, lists and deletes files by name and **never reads inside a
+`.pem`**. A certificate present on disk is assumed to work: no expiry, no issuer,
+no verification, no SAN parsing. `test_certs_command` asserts that
+`bin/lib/certs.sh` contains no `openssl`, so this cannot drift back in unnoticed.
+
+The Traefik container is a different context and may use openssl, which
+`build/traefik/entrypoint.sh` already does. A precedent inside that image is not a
+precedent for the host CLI.
+
+An `EXPIRES` or `TRUSTED` column looks worth having and is how openssl got in
+once already. It brought a no-openssl path, an unreadable-CA path, a LibreSSL
+`-ext` fallback, a SAN-wrapping fallback nobody could reproduce, and a tri-state
+trust value, none of which the user had asked for.
+
 ## Command safety
 
 Sorted by what a command does to state that cannot be recreated.
