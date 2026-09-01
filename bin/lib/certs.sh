@@ -441,12 +441,22 @@ certs_remove_files() {
   for file in "$@"; do
     base="$(basename "${file}")"
     if ! mv "${file}" "${holding}/${base}"; then
-      local undo
+      local undo stranded=0
       for undo in "${moved[@]}"; do
-        mv "${holding}/$(basename "${undo}")" "${undo}" 2>/dev/null || true
+        if ! mv "${holding}/$(basename "${undo}")" "${undo}"; then
+          stranded=$((stranded + 1))
+        fi
       done
-      rm -rf "${holding}"
+
       log_error "${base} could not be removed, so nothing was removed"
+      if [[ "${stranded}" -gt 0 ]]; then
+        # The directory stays: it holds the only copy of what could not go back,
+        # and removing it would turn a failed removal into a real deletion.
+        log_error "${stranded} file(s) could not be put back and are in ${holding}"
+        log_info "Move them back before the proxy reloads"
+      else
+        rm -rf "${holding}"
+      fi
       log_info "Check what is installed with: $(basename "${0}") certs list"
       return 1
     fi

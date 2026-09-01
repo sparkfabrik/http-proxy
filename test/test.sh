@@ -2553,6 +2553,37 @@ COLLIDING
         error "the recovery copy the message names does not exist (rc=${rc}, named='${named_copy}'): ${out}"
     fi
 
+    # A restore that fails must keep the files rather than deleting them: a
+    # failed removal turning into a real deletion is the worst outcome.
+    total=$((total + 1))
+    printf 'A' >"${dir}/two-a.pem"
+    printf 'B' >"${dir}/two-a-key.pem"
+    out="$(env CERT_DIR="${dir}" bash -c '
+        log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/certs.sh
+        # The first file moves aside, the second fails, and putting the first
+        # back fails too, which is the stranded case.
+        mv(){
+            case "$1" in
+                # Putting the first file back fails: the stranded case.
+                *.remove.*) return 1 ;;
+                # Moving the key aside fails, which triggers the rollback.
+                *two-a-key.pem) return 1 ;;
+                *) command mv "$@" ;;
+            esac
+        }
+        certs_remove_files "$1" "$2"' _ "${dir}/two-a.pem" "${dir}/two-a-key.pem" 2>&1)" && rc=0 || rc=$?
+    local holding_named
+    holding_named="$(grep -oE '/[^ ]*\.remove\.[A-Za-z0-9]+' <<<"${out}" | head -1)"
+    if [ "${rc}" -ne 0 ] && [ -n "${holding_named}" ] && [ -d "${holding_named}" ] &&
+        [ -f "${holding_named}/two-a.pem" ]; then
+        passed=$((passed + 1))
+    else
+        error "a file that could not be put back was deleted (rc=${rc}, holding='${holding_named}'): ${out}"
+    fi
+
     rm -rf "${dir}"
     log "Certs command tests: ${passed}/${total} passed"
     [ "${passed}" -eq "${total}" ]
@@ -3004,6 +3035,28 @@ test_hosts_command() {
         passed=$((passed + 1))
     else
         log "❌ a credential beginning with a dash was printed: got ${redacted}"
+    fi
+
+    # sed works a line at a time, so a credential spanning a newline inside one
+    # argument would leave its later lines visible.
+    total=$((total + 1))
+    redacted="$(printf '%s\0' 'sh' '-c' "serve --auth 'abc
+def' --host db" | redact)"
+    if [ "${redacted}" = 'sh -c <redacted>' ]; then
+        passed=$((passed + 1))
+    else
+        log "❌ a credential spanning a newline was not fully redacted: got ${redacted}"
+    fi
+
+    # A multiline argument with no credential must survive intact.
+    total=$((total + 1))
+    redacted="$(printf '%s\0' 'sh' '-c' 'echo one
+two' | redact)"
+    if [ "${redacted}" = 'sh -c echo one
+two' ]; then
+        passed=$((passed + 1))
+    else
+        log "❌ a harmless multiline argument was redacted: got ${redacted}"
     fi
 
     rm -rf "${dir}"

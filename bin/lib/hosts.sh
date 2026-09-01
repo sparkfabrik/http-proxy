@@ -138,6 +138,11 @@ hosts_redact_args() {
     if [[ "${prev}" =~ ^--?[A-Za-z0-9_-]*(${HOSTS_SECRET})[A-Za-z0-9_-]*$ ]]; then
       # Its own argument, so the whole thing goes whatever it contains.
       arg="<redacted>"
+    elif [[ "${arg}" == *$'\n'* ]] &&
+      [[ "${arg}" =~ (--?[A-Za-z0-9_-]*(${HOSTS_SECRET})|[A-Za-z_][A-Za-z0-9_]*(${HOSTS_SECRET})[A-Za-z0-9_]*=) ]]; then
+      # sed works a line at a time, so a credential spanning a newline inside one
+      # argument would leave its later lines visible. The whole argument goes.
+      arg="<redacted>"
     else
       arg="$(sed -E \
         -e "s|(://[^:/@[:space:]]+):[^@[:space:]]+@|\1:<redacted>@|g" \
