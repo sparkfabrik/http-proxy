@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `hosts describe` reads the container live: image, uptime, backend, reachability, mounts and command
 - `certs list|describe|generate|delete` replaces `generate-mkcert`, `list-certs` and `remove-cert`
 - `tailscale-peers --refresh` replaces `tailscale-refresh-peers`, which is removed
 - The peer table has two groups, `PROXY` and `EXCLUDED`, with the reason in a `STATUS` column

@@ -1981,7 +1981,7 @@ path_mode() {
 }
 
 test_state_dir_and_library_loading() {
-    local passed=0 total=0 dir out rc
+    local passed=0 total=0 dir out rc input expected
 
     # ensure_state_dir lives in the entrypoint, which cannot be sourced, so the
     # function is extracted and exercised on its own.
@@ -2311,10 +2311,30 @@ test_hosts_command() {
         error "a malformed record still rendered, exit ${rc}: $(echo "${out}" | tr '\n' ' ')"
     fi
 
+    # describe reads the container live now, so the container is stubbed. It must
+    # name the container and render the routing readably rather than echoing the
+    # state file's own token.
     rc=0
-    out="$(run_hosts "${dir}/hosts.tsv" hosts_describe local.spark.loc)" || rc=$?
+    out="$(env HOSTS_STATE_FILE="${dir}/hosts.tsv" TAILSCALE_SUMMARY_FILE="${dir}/summary" bash -c '
+        log_info(){ echo "$1"; }; log_warning(){ echo "$1" >&2; }; log_error(){ echo "$1" >&2; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/hosts.sh
+        docker() {
+            case "$*" in
+                *Config.Image*) printf "node:lts\nrunning\nbridge\n172.17.0.3 \nnode\nserver.js \n" ;;
+                *Config.Env*) printf "VIRTUAL_HOST=local.spark.loc\nVIRTUAL_PORT=3000\n" ;;
+                *Mounts*) printf "" ;;
+                ps*) printf "Up 2 days\n" ;;
+                *) return 1 ;;
+            esac
+        }
+        hosts_probe() { return 0; }
+        hosts_describe local.spark.loc' 2>&1)" || rc=$?
     total=$((total + 1))
-    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "app-1" && echo "${out}" | grep -q "virtual-host"; then
+    if [ "${rc}" -eq 0 ] && grep -q "container      app-1" <<<"${out}" &&
+        grep -q "routed by      VIRTUAL_HOST, port 3000" <<<"${out}" &&
+        ! grep -q "virtual-host" <<<"${out}"; then
         success "describe names the container and how it is routed"
         passed=$((passed + 1))
     else
@@ -2447,6 +2467,101 @@ test_hosts_command() {
         passed=$((passed + 1))
     else
         error "hosts is not registered, so it would reach docker compose"
+    fi
+
+    # Redaction, on the forms a real command line uses. Matched on the flag
+    # name: a credential must not reach a terminal, scrollback or a screenshot.
+    local redacted
+    while IFS='|' read -r input expected; do
+        [[ -z "${input}" ]] && continue
+        total=$((total + 1))
+        redacted="$(printf '%s' "${input}" | bash -c '
+            # shellcheck source=/dev/null
+            . "${LIB_HELPERS}"
+            . bin/lib/hosts.sh
+            hosts_redact_command')"
+        if [ "${redacted}" = "${expected}" ]; then
+            passed=$((passed + 1))
+        else
+            log "❌ redaction: ${input} became ${redacted}, expected ${expected}"
+        fi
+    done <<'REDACTIONS'
+serve --auth 'abc123' --port 80|serve --auth <redacted> --port 80
+serve --auth abc123 --port 80|serve --auth <redacted> --port 80
+serve --auth=abc123 --port 80|serve --auth=<redacted> --port 80
+serve --api-token "abc123" -v|serve --api-token <redacted> -v
+serve --password abc --host db|serve --password <redacted> --host db
+serve --host 0.0.0.0 --no-https|serve --host 0.0.0.0 --no-https
+REDACTIONS
+
+    # The live fields, from a stubbed docker so the assertion does not need a
+    # container of its own.
+    total=$((total + 1))
+    out="$(bash -c '
+        log_info(){ echo "$1"; }; log_warning(){ echo "$1" >&2; }; log_error(){ echo "$1" >&2; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/hosts.sh
+        docker() {
+            case "$*" in
+                *Config.Image*) printf "node:lts\nrunning\nbridge\n172.17.0.3 \ndocker-entrypoint.sh\nserve --auth secret \n" ;;
+                *Config.Env*) printf "VIRTUAL_HOST=app.spark.loc\nVIRTUAL_PORT=3000\n" ;;
+                *Mounts*) printf "bind||/home/dev/app|/home/dev/app|rw\nvolume|cache|/var/lib/docker/volumes/cache/_data|/cache|ro\n" ;;
+                ps*) printf "Up 3 hours\n" ;;
+                *) return 1 ;;
+            esac
+        }
+        hosts_probe() { printf 200; }
+        hosts_describe_local app.spark.loc app-1 /home/dev/app virtual-host' 2>&1)"
+    if grep -q "image          node:lts" <<<"${out}" &&
+        grep -q "status         running, up 3 hours" <<<"${out}" &&
+        grep -q "routed by      VIRTUAL_HOST, port 3000" <<<"${out}" &&
+        grep -q "backend        http://172.17.0.3:3000" <<<"${out}" &&
+        grep -q "reachable      200" <<<"${out}" &&
+        grep -q "mounts         .* -> same path (rw)" <<<"${out}" &&
+        grep -q "cache -> /cache (ro)" <<<"${out}" &&
+        grep -q "command .*--auth <redacted>" <<<"${out}"; then
+        passed=$((passed + 1))
+    else
+        log "❌ describe did not render the live fields: ${out}"
+    fi
+
+    # A container that is gone is a stale record, not an absent hostname.
+    total=$((total + 1))
+    out="$(bash -c '
+        log_info(){ echo "$1"; }; log_warning(){ echo "$1" >&2; }; log_error(){ echo "$1" >&2; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/hosts.sh
+        docker() { return 1; }
+        hosts_describe_local app.spark.loc app-1 /home/dev/app virtual-host' 2>&1)" && rc=0 || rc=$?
+    if [ "${rc}" -ne 0 ] && grep -q "stale" <<<"${out}" && grep -q "hosts list" <<<"${out}"; then
+        passed=$((passed + 1))
+    else
+        log "❌ a gone container was not reported as a stale record (rc=${rc}): ${out}"
+    fi
+
+    # A label-routed container has no VIRTUAL_HOST to name.
+    total=$((total + 1))
+    out="$(bash -c '
+        log_info(){ echo "$1"; }; log_warning(){ echo "$1" >&2; }; log_error(){ echo "$1" >&2; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/hosts.sh
+        docker() {
+            case "$*" in
+                *Config.Image*) printf "nginx\nrunning\nbridge\n172.17.0.9 \nnginx\n-g daemon off; \n" ;;
+                *Config.Env*) printf "PATH=/usr/bin\n" ;;
+                *Mounts*) printf "" ;;
+                ps*) printf "Up 1 minute\n" ;;
+                *) return 1 ;;
+            esac
+        }
+        hosts_describe_local x.spark.loc other-1 "" traefik-labels' 2>&1)"
+    if grep -q "routed by      its own traefik labels" <<<"${out}" && ! grep -q "VIRTUAL_HOST" <<<"${out}"; then
+        passed=$((passed + 1))
+    else
+        log "❌ a label-routed container was not described as such: ${out}"
     fi
 
     rm -rf "${dir}"

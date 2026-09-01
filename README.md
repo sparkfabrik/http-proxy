@@ -138,9 +138,38 @@ pg-workflows.githuman.sparkfabrik.loc  local     githuman-pg-workflows  ~/webapp
 macos.test.spark.loc                   Mac-Test  -                      -
 ```
 
-`hosts describe <hostname>` reports one host, including how it is routed. A remote
-host shows the machine and no directory: local paths are not published to the
-tailnet. `hosts --json` prints the local records as JSON. Hostnames served by other machines are not in it; `tailscale-peers --json` carries those.
+`hosts describe <hostname>` reports one host in full. For a container on this
+machine it reads the container live, so it carries what a file cannot: how long
+it has been up, the address the proxy forwards to, and whether that address
+answers.
+
+```console
+$ spark-http-proxy hosts describe sparkdock.githuman.sparkfabrik.loc
+sparkdock.githuman.sparkfabrik.loc
+  container      githuman-sparkdock
+  image          node:lts
+  status         running, up 25 hours
+  directory      ~/webapps/sparkfabrik/agents/tailcat-use-cases/sparkdock
+  routed by      VIRTUAL_HOST, port 3847
+  backend        http://172.17.0.3:3847
+  network        bridge
+  reachable      200
+  mounts         ~/webapps/.../sparkdock -> same path (rw)
+                 githuman-npm-cache -> /cache/npm (rw)
+  command        node server.js --auth <redacted>
+```
+
+The value of any flag whose name suggests a credential is replaced with
+`<redacted>`, matched on the flag name rather than on what the value looks like.
+`reachable` is bounded by a short timeout and says `no answer` rather than
+hanging on a backend that does not respond.
+
+A remote host shows the machine and no directory: local paths are not published
+to the tailnet, and a peer's containers are never probed. A hostname whose
+container has since gone is reported as a stale record naming `hosts list`,
+rather than as an absent hostname.
+
+`hosts --json` prints the local records as JSON. Hostnames served by other machines are not in it; `tailscale-peers --json` carries those.
 
 Directories come from the compose working directory, or the first bind mount for a
 container started with `docker run`.

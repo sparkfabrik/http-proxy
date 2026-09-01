@@ -116,6 +116,138 @@ hosts_list() {
   done
 }
 
+# Redacts the value of any flag whose NAME suggests a credential. Matched on the
+# name only: guessing from the shape of a value hides the wrong things.
+hosts_redact_command() {
+  local secret='[Aa][Uu][Tt][Hh]|[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Kk][Ee][Yy]'
+  local flag="(--?[A-Za-z0-9_-]*(${secret})[A-Za-z0-9_-]*)"
+  sed -E \
+    -e "s/${flag}=[^[:space:]]*/\1=<redacted>/g" \
+    -e "s/${flag}([[:space:]]+)'[^']*'/\1\3<redacted>/g" \
+    -e "s/${flag}([[:space:]]+)\"[^\"]*\"/\1\3<redacted>/g" \
+    -e "s/${flag}([[:space:]]+)[^[:space:]-][^[:space:]]*/\1\3<redacted>/g"
+}
+
+# The HTTP status the backend answers with, or nothing. Bounded, because a hung
+# backend must not hang describe.
+hosts_probe() {
+  local url="$1" code
+
+  command -v curl >/dev/null 2>&1 || return 0
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "${url}" 2>/dev/null)" || return 0
+  [[ "${code}" == "000" ]] && return 0
+  printf '%s' "${code}"
+}
+
+# Renders one local hostname from the container itself. The state file says which
+# container serves it; everything below is read live, because uptime and
+# reachability are not facts a file can hold.
+hosts_describe_local() {
+  local hostname="$1" container="$2" directory="$3" routing="$4"
+  local detail image status netmode ip path args uptime port url code mounts
+
+  detail="$(docker inspect -f '{{.Config.Image}}
+{{.State.Status}}
+{{.HostConfig.NetworkMode}}
+{{range $k,$v := .NetworkSettings.Networks}}{{$v.IPAddress}} {{end}}
+{{.Path}}
+{{range .Args}}{{.}} {{end}}' "${container}" 2>/dev/null)" || detail=""
+
+  if [[ -z "${detail}" ]]; then
+    echo "${hostname}"
+    echo "  container      ${container}, which no longer exists"
+    log_warning "This record is stale: the container is gone but the proxy has not rescanned yet"
+    log_info "See what is served now with: ${0} hosts list"
+    return 1
+  fi
+
+  {
+    read -r image
+    read -r status
+    read -r netmode
+    read -r ip
+    read -r path
+    read -r args
+  } <<<"${detail}"
+  ip="${ip% }"
+  ip="${ip%% *}"
+
+  # VIRTUAL_PORT is filtered here rather than in the template: Docker's template
+  # functions have no hasPrefix.
+  port="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "${container}" 2>/dev/null |
+    sed -n 's/^VIRTUAL_PORT=//p' | head -1)"
+
+  # docker ps renders the uptime, which avoids date arithmetic that differs
+  # between BSD and GNU.
+  uptime="$(docker ps --filter "name=^${container}$" --format '{{.Status}}' 2>/dev/null | head -1)"
+
+  echo "${hostname}"
+  echo "  container      ${container}"
+  echo "  image          ${image}"
+  if [[ -n "${uptime}" ]]; then
+    echo "  status         ${status}, ${uptime,}"
+  else
+    echo "  status         ${status}"
+  fi
+  [[ -n "${directory}" ]] && echo "  directory      $(abbreviate_home "${directory}")"
+
+  case "${routing}" in
+    virtual-host)
+      if [[ -n "${port}" ]]; then
+        echo "  routed by      VIRTUAL_HOST, port ${port}"
+      else
+        echo "  routed by      VIRTUAL_HOST"
+      fi
+      ;;
+    traefik-labels)
+      echo "  routed by      its own traefik labels"
+      ;;
+    *)
+      echo "  routed by      ${routing}"
+      ;;
+  esac
+
+  if [[ -n "${ip}" && -n "${port}" ]]; then
+    url="http://${ip}:${port}"
+    echo "  backend        ${url}"
+  fi
+  [[ -n "${netmode}" ]] && echo "  network        ${netmode}"
+
+  if [[ -n "${url:-}" ]]; then
+    code="$(hosts_probe "${url}")"
+    if [[ -n "${code}" ]]; then
+      echo "  reachable      ${code}"
+    else
+      echo "  reachable      no answer"
+    fi
+  fi
+
+  # Volumes carry a name and binds do not, so both are read and the name wins.
+  mounts="$(docker inspect -f '{{range .Mounts}}{{.Type}}|{{.Name}}|{{.Source}}|{{.Destination}}|{{if .RW}}rw{{else}}ro{{end}}{{println}}{{end}}' "${container}" 2>/dev/null)"
+  local first=true kind name source dest rw from to
+  while IFS='|' read -r kind name source dest rw; do
+    [[ -z "${kind}" ]] && continue
+    from="${name:-$(abbreviate_home "${source}")}"
+    if [[ "${source}" == "${dest}" ]]; then
+      to="same path"
+    else
+      to="${dest}"
+    fi
+    if [[ "${first}" == "true" ]]; then
+      printf '  mounts         %s -> %s (%s)\n' "${from}" "${to}" "${rw}"
+      first=false
+    else
+      printf '                 %s -> %s (%s)\n' "${from}" "${to}" "${rw}"
+    fi
+  done <<<"${mounts}"
+
+  if [[ -n "${path}" ]]; then
+    printf '  command        %s\n' "$(printf '%s %s' "${path}" "${args% }" | hosts_redact_command)"
+  fi
+
+  return 0
+}
+
 hosts_describe() {
   local wanted="$1" hostname container directory routing machine found=false local_out line rest
 
@@ -143,11 +275,7 @@ hosts_describe() {
     routing="${rest#*$'\t'}"
     [[ "${hostname}" != "${wanted}" ]] && continue
     found=true
-    echo "${hostname}"
-    echo "  served by      this machine"
-    echo "  container      ${container}"
-    echo "  directory      $(abbreviate_home "${directory}")"
-    echo "  routed by      ${routing}"
+    hosts_describe_local "${hostname}" "${container}" "${directory}" "${routing}" || return 1
   done <<<"${local_out}"
 
   while IFS=$'\t' read -r hostname machine; do
@@ -165,7 +293,6 @@ hosts_describe() {
   fi
 }
 
-# One usage string, so the help and the error cannot drift apart.
 hosts_usage() {
   echo "Usage: ${0} hosts [list|describe <hostname>|--json]"
   echo ""
