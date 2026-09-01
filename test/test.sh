@@ -1528,6 +1528,30 @@ STUB
         fi
         rm -rf "${scratch}"
 
+        # A hostname containing -key. The key filter is a suffix match on
+        # -key.pem, so the certificate is served; a substring match dropped it
+        # while certs list showed it installed.
+        scratch="$(mktemp -d)"
+        mkdir -p "${scratch}/certs" "${scratch}/dynamic"
+        touch "${scratch}/certs/my-keycloak.spark.loc.pem" "${scratch}/certs/my-keycloak.spark.loc-key.pem"
+        rc=0
+        docker run --rm \
+            -v "$(pwd)/build/traefik/entrypoint.sh:/ep.sh:ro" \
+            -v "${scratch}/certs:/traefik/certs:ro" \
+            -v "${scratch}/dynamic:/traefik/dynamic" \
+            --entrypoint sh "${traefik_image}" /ep.sh --tls-only >/dev/null 2>&1 || rc=$?
+
+        total=$((total + 1))
+        if [ "${rc}" -eq 0 ] &&
+            grep -q 'certFile: /traefik/certs/my-keycloak.spark.loc.pem$' "${scratch}/dynamic/auto-tls.yml" 2>/dev/null &&
+            [ "$(grep -c 'certFile:' "${scratch}/dynamic/auto-tls.yml")" -eq 1 ]; then
+            success "a certificate whose hostname contains -key is served, and its key is not read as one"
+            passed=$((passed + 1))
+        else
+            error "the -key hostname scan exited ${rc} and left: $(cat "${scratch}/dynamic/auto-tls.yml" 2>&1 | tr '\n' ' ')"
+        fi
+        rm -rf "${scratch}"
+
         # A scan that could not write must say so, because the CLI reads its
         # exit status to decide whether to tell the user the certificates were
         # applied. A read-only dynamic directory is the cheapest way to make the

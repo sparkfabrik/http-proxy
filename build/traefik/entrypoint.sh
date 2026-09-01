@@ -49,8 +49,10 @@ generate_tls_config() {
         return
     fi
 
-    # Look for certificate files (both .pem and .crt extensions)
-    cert_files=$(find "${CERTS_DIR}" -name "*.pem" -o -name "*.crt" | grep -v "\-key")
+    # Certificate files, both .pem and .crt. Private keys are <name>-key.pem or
+    # <name>-key.crt, excluded by suffix: a substring match on -key also dropped
+    # certificates for hostnames such as my-keycloak.spark.loc.
+    cert_files=$(find "${CERTS_DIR}" \( -name "*.pem" -o -name "*.crt" \) ! -name "*-key.pem" ! -name "*-key.crt")
 
     if [ -z "$cert_files" ]; then
         echo "No certificate files found in ${CERTS_DIR}"
