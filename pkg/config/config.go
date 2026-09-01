@@ -44,6 +44,8 @@ const (
 	DefaultTailscaleStateFile       = "/state/tailscale-peers.json"
 	DefaultTailscaleLocalAPIURL     = "http://http-proxy:8080"
 	DefaultTraefikDynamicDir        = "/traefik/dynamic"
+	DefaultHostsStateFile           = "/state/hosts.tsv"
+	DefaultHostsJSONFile            = "/state/hosts.json"
 )
 
 // TailscaleConfig holds the configuration of the tailnet peer routing service.

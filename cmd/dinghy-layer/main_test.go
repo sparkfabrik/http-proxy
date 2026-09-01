@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -680,5 +681,207 @@ func TestRecordClaimsCoversBareHosts(t *testing.T) {
 
 	if got := cl.claims[routeClaim{host: "app.loc"}].name; got != "first" {
 		t.Errorf("claim holder = %q, want it to stay with first", got)
+	}
+}
+
+func TestContainerDirectoryPrefersTheComposeWorkingDir(t *testing.T) {
+	inspect := types.ContainerJSON{
+		Config: &container.Config{Labels: map[string]string{
+			"com.docker.compose.project.working_dir": "/home/dev/project",
+		}},
+		Mounts: []types.MountPoint{{Type: "bind", Source: "/somewhere/else"}},
+	}
+
+	if got := containerDirectory(inspect); got != "/home/dev/project" {
+		t.Errorf("expected the compose working directory, got %q", got)
+	}
+}
+
+func TestContainerDirectoryFallsBackToTheFirstBindMount(t *testing.T) {
+	inspect := types.ContainerJSON{
+		Config: &container.Config{Labels: map[string]string{}},
+		Mounts: []types.MountPoint{
+			{Type: "volume", Source: "a-named-volume"},
+			{Type: "bind", Source: "/home/dev/run-without-compose"},
+			{Type: "bind", Source: "/later/one"},
+		},
+	}
+
+	if got := containerDirectory(inspect); got != "/home/dev/run-without-compose" {
+		t.Errorf("expected the first bind mount, got %q", got)
+	}
+}
+
+func TestContainerDirectoryIsEmptyWhenThereIsNothingToShow(t *testing.T) {
+	inspect := types.ContainerJSON{
+		Config: &container.Config{Labels: map[string]string{}},
+		Mounts: []types.MountPoint{{Type: "volume", Source: "a-named-volume"}},
+	}
+
+	if got := containerDirectory(inspect); got != "" {
+		t.Errorf("expected no directory, got %q", got)
+	}
+}
+
+func TestRecordHostsWritesOneRowPerHostname(t *testing.T) {
+	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: t.TempDir()})
+	info := ContainerInfo{
+		Name:        "app-1",
+		VirtualHost: "one.spark.loc,two.spark.loc:8080",
+		Directory:   "/home/dev/app",
+	}
+	cl.recordHosts("abc123", info, "virtual-host", virtualHostNames(info.VirtualHost))
+
+	rows := cl.hosts["abc123"]
+	if len(rows) != 2 {
+		t.Fatalf("expected a row per hostname, got %d: %+v", len(rows), rows)
+	}
+	if rows[0].hostname != "one.spark.loc" || rows[1].hostname != "two.spark.loc" {
+		t.Errorf("hostnames were not split as the router parses them: %+v", rows)
+	}
+	if rows[1].directory != "/home/dev/app" || rows[1].routing != "virtual-host" {
+		t.Errorf("a row lost its directory or routing: %+v", rows[1])
+	}
+}
+
+func TestRecordHostsForgetsAContainerWithNoHostnames(t *testing.T) {
+	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: t.TempDir()})
+	cl.recordHosts("abc123", ContainerInfo{Name: "app-1"}, "virtual-host", []string{"one.spark.loc"})
+	cl.recordHosts("abc123", ContainerInfo{Name: "app-1"}, "traefik-labels", nil)
+
+	if _, ok := cl.hosts["abc123"]; ok {
+		t.Errorf("a container serving no hostname is still recorded: %+v", cl.hosts)
+	}
+}
+
+func TestWriteHostsFileIsSortedAndTabSeparated(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hosts.tsv")
+	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: dir, HostsStateFile: path})
+
+	cl.recordHosts("b", ContainerInfo{Name: "zeta", Directory: "/z"}, "virtual-host", []string{"zeta.spark.loc"})
+	cl.recordHosts("a", ContainerInfo{Name: "alpha"}, "traefik-labels", []string{"alpha.spark.loc"})
+
+	if err := cl.writeHostsFile(); err != nil {
+		t.Fatalf("writing the hosts file failed: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading it back failed: %v", err)
+	}
+	want := "alpha.spark.loc\talpha\t\ttraefik-labels\nzeta.spark.loc\tzeta\t/z\tvirtual-host\n"
+	if string(data) != want {
+		t.Errorf("hosts file is not what the CLI parses:\n got %q\nwant %q", data, want)
+	}
+}
+
+func TestWriteHostsFileLeavesNoTemporaryFile(t *testing.T) {
+	dir := t.TempDir()
+	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: dir, HostsStateFile: filepath.Join(dir, "hosts.tsv")})
+	cl.recordHosts("a", ContainerInfo{Name: "alpha"}, "virtual-host", []string{"alpha.spark.loc"})
+
+	if err := cl.writeHostsFile(); err != nil {
+		t.Fatalf("writing failed: %v", err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("a temporary file was left behind: %s", e.Name())
+		}
+	}
+}
+
+func TestWriteHostsFileAlsoPublishesParseableJSON(t *testing.T) {
+	dir := t.TempDir()
+	cl := NewCompatibilityLayer(&CompatibilityConfig{
+		TraefikDynamicDir: dir,
+		HostsStateFile:    filepath.Join(dir, "hosts.tsv"),
+		HostsJSONFile:     filepath.Join(dir, "hosts.json"),
+	})
+	cl.recordHosts("a", ContainerInfo{Name: "app-1", Directory: "/home/dev/app"}, "virtual-host", []string{"one.spark.loc"})
+	cl.recordHosts("b", ContainerInfo{Name: "other-1"}, "traefik-labels", []string{"two.spark.loc"})
+
+	if err := cl.writeHostsFile(); err != nil {
+		t.Fatalf("writing failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "hosts.json"))
+	if err != nil {
+		t.Fatalf("reading the json back failed: %v", err)
+	}
+
+	var entries []hostEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		t.Fatalf("hosts --json would not parse: %v\n%s", err, data)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected two entries, got %d: %+v", len(entries), entries)
+	}
+	if entries[0].Hostname != "one.spark.loc" || entries[0].Directory != "/home/dev/app" {
+		t.Errorf("the first entry lost a field: %+v", entries[0])
+	}
+	if entries[1].Directory != "" {
+		t.Errorf("a container with no directory should omit it, got %q", entries[1].Directory)
+	}
+	if entries[1].Routing != "traefik-labels" {
+		t.Errorf("routing was not published: %+v", entries[1])
+	}
+}
+
+func TestLabelHostnamesReadsTheRouterRules(t *testing.T) {
+	hosts := labelHostnames(map[string]string{
+		"traefik.http.routers.app.rule":       "Host(`app.spark.loc`) || Host(`www.spark.loc`)",
+		"traefik.http.routers.api.rule":       "Host(\"api.spark.loc\") && PathPrefix(`/v1`)",
+		"traefik.http.routers.app.entrypoint": "websecure",
+		"com.docker.compose.project":          "not-a-rule",
+	})
+
+	want := []string{"api.spark.loc", "app.spark.loc", "www.spark.loc"}
+	if len(hosts) != len(want) {
+		t.Fatalf("expected %v, got %v", want, hosts)
+	}
+	for i := range want {
+		if hosts[i] != want[i] {
+			t.Errorf("expected %v, got %v", want, hosts)
+			break
+		}
+	}
+}
+
+func TestLabelHostnamesDeduplicates(t *testing.T) {
+	hosts := labelHostnames(map[string]string{
+		"traefik.http.routers.a.rule": "Host(`same.spark.loc`)",
+		"traefik.http.routers.b.rule": "Host(`same.spark.loc`)",
+	})
+
+	if len(hosts) != 1 {
+		t.Errorf("a hostname claimed by two routers should appear once, got %v", hosts)
+	}
+}
+
+func TestLabelHostnamesIsEmptyWithoutARule(t *testing.T) {
+	if hosts := labelHostnames(map[string]string{"traefik.enable": "true"}); len(hosts) != 0 {
+		t.Errorf("expected no hostnames, got %v", hosts)
+	}
+}
+
+func TestLabelRoutedContainerIsRecordedFromItsRules(t *testing.T) {
+	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: t.TempDir()})
+	labels := map[string]string{"traefik.http.routers.app.rule": "Host(`labelled.spark.loc`)"}
+
+	// A label-routed container usually carries no VIRTUAL_HOST at all.
+	cl.recordHosts("abc", ContainerInfo{Name: "app-1", Directory: "/home/dev/app"}, "traefik-labels", labelHostnames(labels))
+
+	rows := cl.hosts["abc"]
+	if len(rows) != 1 || rows[0].hostname != "labelled.spark.loc" {
+		t.Fatalf("a label-routed container contributed nothing usable: %+v", rows)
+	}
+	if rows[0].routing != "traefik-labels" {
+		t.Errorf("routing was not recorded: %+v", rows[0])
 	}
 }

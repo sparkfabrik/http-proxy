@@ -6,10 +6,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -51,6 +53,25 @@ type CompatibilityLayer struct {
 	// already running and a compose stack starts afterwards, so both containers
 	// arrive as separate events.
 	claims map[routeClaim]claimHolder
+
+	// hosts records what each container serves, keyed by container id.
+	hosts map[string][]hostRow
+}
+
+// hostRow is one line of the hosts state file.
+type hostRow struct {
+	hostname  string
+	container string
+	directory string
+	routing   string
+}
+
+// hostEntry is hostRow as `hosts --json` publishes it.
+type hostEntry struct {
+	Hostname  string `json:"hostname"`
+	Container string `json:"container"`
+	Directory string `json:"directory,omitempty"`
+	Routing   string `json:"routing"`
 }
 
 // routeClaim identifies a route by what a request has to match to reach it.
@@ -76,6 +97,10 @@ type CompatibilityConfig struct {
 	DryRun            bool
 	LogLevel          string
 	TraefikDynamicDir string
+	// HostsStateFile is what `spark-http-proxy hosts` reads. Empty disables it.
+	HostsStateFile string
+	// HostsJSONFile is the same rows as JSON, for `hosts --json`.
+	HostsJSONFile string
 }
 
 // Validate checks if the configuration is valid
@@ -92,6 +117,7 @@ func NewCompatibilityLayer(cfg *CompatibilityConfig) *CompatibilityLayer {
 	return &CompatibilityLayer{
 		config: cfg,
 		claims: make(map[routeClaim]claimHolder),
+		hosts:  make(map[string][]hostRow),
 	}
 }
 
@@ -116,6 +142,8 @@ type ContainerInfo struct {
 	VirtualPort string
 	VirtualPath string
 	IsRunning   bool
+	// Directory is where the project runs from, for getting back to its source.
+	Directory string
 }
 
 // extractContainerInfo extracts relevant information from a container inspection
@@ -127,7 +155,153 @@ func (cl *CompatibilityLayer) extractContainerInfo(inspect types.ContainerJSON) 
 		VirtualPort: utils.GetDockerEnvVar(inspect.Config.Env, "VIRTUAL_PORT"),
 		VirtualPath: utils.GetDockerEnvVar(inspect.Config.Env, "VIRTUAL_PATH"),
 		IsRunning:   inspect.State.Running,
+		Directory:   containerDirectory(inspect),
 	}
+}
+
+// hostRulePattern matches the hostnames in a native Traefik router rule, which
+// quotes them with backticks or double quotes.
+var hostRulePattern = regexp.MustCompile("Host\\((?:`|\")([^`\"]+)(?:`|\")\\)")
+
+// labelHostnames are the hostnames a container's own Traefik rules claim, which
+// is where routing comes from when native labels are present.
+func labelHostnames(labels map[string]string) []string {
+	seen := make(map[string]bool)
+	hosts := make([]string, 0, 1)
+
+	for key, rule := range labels {
+		if !strings.HasPrefix(key, "traefik.http.routers.") || !strings.HasSuffix(key, ".rule") {
+			continue
+		}
+		for _, match := range hostRulePattern.FindAllStringSubmatch(rule, -1) {
+			if !seen[match[1]] {
+				seen[match[1]] = true
+				hosts = append(hosts, match[1])
+			}
+		}
+	}
+
+	slices.Sort(hosts)
+	return hosts
+}
+
+// virtualHostNames are the hostnames VIRTUAL_HOST declares.
+func virtualHostNames(virtualHost string) []string {
+	hosts := make([]string, 0, 1)
+	for _, host := range parseVirtualHosts(virtualHost) {
+		hosts = append(hosts, host.hostname)
+	}
+	return hosts
+}
+
+// recordHosts replaces what a container contributes, one row per hostname.
+func (cl *CompatibilityLayer) recordHosts(containerID string, info ContainerInfo, routing string, hostnames []string) {
+	rows := make([]hostRow, 0, len(hostnames))
+	for _, hostname := range hostnames {
+		if hostname == "" {
+			continue
+		}
+		rows = append(rows, hostRow{
+			hostname:  hostname,
+			container: info.Name,
+			directory: info.Directory,
+			routing:   routing,
+		})
+	}
+	if len(rows) == 0 {
+		delete(cl.hosts, containerID)
+		return
+	}
+	cl.hosts[containerID] = rows
+}
+
+// writeHostsFile rewrites the state file from memory, in a stable order.
+func (cl *CompatibilityLayer) writeHostsFile() error {
+	rows := make([]hostRow, 0, len(cl.hosts))
+	for _, containerRows := range cl.hosts {
+		rows = append(rows, containerRows...)
+	}
+	slices.SortFunc(rows, func(a, b hostRow) int {
+		if c := strings.Compare(a.hostname, b.hostname); c != 0 {
+			return c
+		}
+		return strings.Compare(a.container, b.container)
+	})
+
+	if cl.config.HostsStateFile != "" {
+		var b strings.Builder
+		for _, row := range rows {
+			fmt.Fprintf(&b, "%s\t%s\t%s\t%s\n", row.hostname, row.container, row.directory, row.routing)
+		}
+		if err := writeFileAtomically(cl.config.HostsStateFile, []byte(b.String())); err != nil {
+			return err
+		}
+	}
+
+	if cl.config.HostsJSONFile == "" {
+		return nil
+	}
+
+	// Published as JSON too, because `hosts --json` must be parseable and the
+	// CLI has no JSON writer.
+	entries := make([]hostEntry, 0, len(rows))
+	for _, row := range rows {
+		entries = append(entries, hostEntry{
+			Hostname:  row.hostname,
+			Container: row.container,
+			Directory: row.directory,
+			Routing:   row.routing,
+		})
+	}
+	data, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal the hosts entries: %w", err)
+	}
+	return writeFileAtomically(cl.config.HostsJSONFile, append(data, '\n'))
+}
+
+// writeFileAtomically writes through a temporary file and a rename.
+func writeFileAtomically(path string, data []byte) error {
+	// Created rather than named: the state directory is writable from the host,
+	// and a predictable name could already be a symlink to somewhere else.
+	file, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("failed to create a temporary file beside %s: %w", path, err)
+	}
+	temp := file.Name()
+
+	if err := file.Chmod(ConfigFilePermissions); err != nil {
+		file.Close()
+		os.Remove(temp)
+		return fmt.Errorf("failed to set the permissions of %s: %w", temp, err)
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		os.Remove(temp)
+		return fmt.Errorf("failed to write %s: %w", temp, err)
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(temp)
+		return fmt.Errorf("failed to close %s: %w", temp, err)
+	}
+	if err := os.Rename(temp, path); err != nil {
+		os.Remove(temp)
+		return fmt.Errorf("failed to rename %s: %w", temp, err)
+	}
+	return nil
+}
+
+// containerDirectory: the compose working dir, else the first bind mount.
+func containerDirectory(inspect types.ContainerJSON) string {
+	if dir := inspect.Config.Labels["com.docker.compose.project.working_dir"]; dir != "" {
+		return dir
+	}
+	for _, m := range inspect.Mounts {
+		if m.Type == "bind" && m.Source != "" {
+			return m.Source
+		}
+	}
+	return ""
 }
 
 // HandleInitialScan performs initial processing of existing containers
@@ -180,7 +354,16 @@ func (cl *CompatibilityLayer) HandleInitialScan(ctx context.Context) error {
 		cl.logger.Error("Failed to reconcile Traefik configs", "error", err)
 	}
 
+	cl.persistHosts()
+
 	return nil
+}
+
+// persistHosts reports a write failure without failing the event.
+func (cl *CompatibilityLayer) persistHosts() {
+	if err := cl.writeHostsFile(); err != nil {
+		cl.logger.Error("Failed to write the hosts state file", "error", err)
+	}
 }
 
 // HandleEvent processes a Docker event
@@ -188,8 +371,11 @@ func (cl *CompatibilityLayer) HandleEvent(ctx context.Context, event events.Mess
 	switch event.Action {
 	case "start":
 		_, err := cl.processContainer(ctx, event.Actor.ID)
+		cl.persistHosts()
 		return err
 	case "die":
+		delete(cl.hosts, event.Actor.ID)
+		cl.persistHosts()
 		return cl.removeTraefikConfig(event.Actor.ID)
 	default:
 		// Unhandled events are not an error, just log and continue
@@ -206,6 +392,8 @@ func main() {
 		DryRun:            config.GetEnvOrDefault("DRY_RUN", "false") == "true",
 		LogLevel:          config.GetEnvOrDefault("LOG_LEVEL", "info"),
 		TraefikDynamicDir: config.GetEnvOrDefault("TRAEFIK_DYNAMIC_DIR", DefaultTraefikDynamicDir),
+		HostsStateFile:    config.GetEnvOrDefault("HOSTS_STATE_FILE", config.DefaultHostsStateFile),
+		HostsJSONFile:     config.GetEnvOrDefault("HOSTS_JSON_FILE", config.DefaultHostsJSONFile),
 	}
 
 	// Validate configuration
@@ -282,6 +470,8 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 	// it. That is easy to hit when reaching for a middleware alongside a
 	// mounted path, and silent at debug level, so say it plainly instead.
 	if utils.HasTraefikLabel(inspect.Config.Labels) {
+		// Recorded though Traefik routes it, so hosts shows the whole picture.
+		cl.recordHosts(containerID, containerInfo, "traefik-labels", labelHostnames(inspect.Config.Labels))
 		if containerInfo.VirtualHost != "" {
 			cl.logger.Warn("Ignoring VIRTUAL_HOST and VIRTUAL_PATH on a container carrying a traefik. label",
 				"container_id", utils.FormatDockerID(containerID),
@@ -315,6 +505,8 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 	if err := cl.writeTraefikConfig(containerID, traefikConfig); err != nil {
 		return "", err
 	}
+
+	cl.recordHosts(containerID, containerInfo, "virtual-host", virtualHostNames(containerInfo.VirtualHost))
 
 	return cl.configFileName(containerID), nil
 }

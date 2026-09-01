@@ -1786,6 +1786,8 @@ test_self_update_applies_the_update() {
     root="$(mktemp -d)"
     mkdir -p "${root}/src/bin"
     cp bin/spark-http-proxy "${root}/src/bin/"
+    # A complete checkout carries the libraries too, and the CLI refuses without them.
+    cp -R bin/lib "${root}/src/bin/"
     # Beside the script, which is one of the two places the CLI looks and the
     # one that does not depend on HOME.
     cp compose.yml "${root}/src/bin/"
@@ -1867,6 +1869,8 @@ test_self_update_after_a_rewrite() {
     root="$(mktemp -d)"
     mkdir -p "${root}/src/bin"
     cp bin/spark-http-proxy "${root}/src/bin/"
+    # A complete checkout carries the libraries too, and the CLI refuses without them.
+    cp -R bin/lib "${root}/src/bin/"
     cp compose.yml "${root}/src/bin/"
     (
         cd "${root}/src" || exit 1
@@ -1961,6 +1965,276 @@ test_self_update_after_a_rewrite() {
 
     rm -rf "${root}" "${stub}"
     log "Self-update rewrite tests: ${passed}/${total} passed"
+    [ "${passed}" -eq "${total}" ]
+}
+
+# hosts reads two state files and renders them; the library is sourced directly
+# so the cases run without a stack.
+# Mode of a path, as an octal string, on both GNU and BSD stat.
+path_mode() {
+    stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
+}
+
+test_state_dir_and_library_loading() {
+    local passed=0 total=0 dir out rc
+
+    # ensure_state_dir lives in the entrypoint, which cannot be sourced, so the
+    # function is extracted and exercised on its own.
+    dir="$(mktemp -d)"
+    {
+        echo 'set -e'
+        echo 'log_info(){ echo "$1"; }'
+        echo 'log_error(){ echo "$1" >&2; }'
+        sed -n '/^ensure_state_dir() {/,/^}/p' bin/spark-http-proxy
+        echo 'ensure_state_dir'
+        echo 'echo REACHED'
+    } >"${dir}/ensure.sh"
+
+    total=$((total + 1))
+    out="$(STATE_DIR="${dir}/fresh" bash "${dir}/ensure.sh" 2>&1)" && rc=0 || rc=$?
+    if [ "${rc}" -eq 0 ] && [ "$(path_mode "${dir}/fresh")" = "700" ]; then
+        passed=$((passed + 1))
+    else
+        log "❌ A state directory it creates is not 700 (rc=${rc}, mode=$(path_mode "${dir}/fresh"))"
+    fi
+
+    total=$((total + 1))
+    out="$(STATE_DIR="${dir}/fresh" bash "${dir}/ensure.sh" 2>&1)" && rc=0 || rc=$?
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q REACHED; then
+        passed=$((passed + 1))
+    else
+        log "❌ A state directory it already owns was not accepted (rc=${rc})"
+    fi
+
+    # A directory it cannot write to: the chmod could only fail, so the command
+    # must refuse and name the recovery rather than abort on chmod. Root can
+    # write to anything, so the case does not exist there.
+    if [ "$(id -u)" -ne 0 ]; then
+        mkdir -p "${dir}/locked"
+        chmod 500 "${dir}/locked"
+
+        total=$((total + 1))
+        out="$(STATE_DIR="${dir}/locked" bash "${dir}/ensure.sh" 2>&1)" && rc=0 || rc=$?
+        if [ "${rc}" -ne 0 ] && ! echo "${out}" | grep -q REACHED &&
+            echo "${out}" | grep -q "chown"; then
+            passed=$((passed + 1))
+        else
+            log "❌ An unwritable state directory was not refused with a recovery command (rc=${rc}): ${out}"
+        fi
+
+        chmod 700 "${dir}/locked"
+    fi
+
+    # A checkout without bin/lib must fail rather than fall through to compose.
+    total=$((total + 1))
+    cp -R bin "${dir}/bin"
+    rm -rf "${dir}/bin/lib"
+    out="$(cd "${dir}" && ./bin/spark-http-proxy hosts list 2>&1)" && rc=0 || rc=$?
+    if [ "${rc}" -ne 0 ] && ! echo "${out}" | grep -q "docker compose" &&
+        echo "${out}" | grep -q "lib"; then
+        passed=$((passed + 1))
+    else
+        log "❌ A checkout without bin/lib did not fail at the loader (rc=${rc}): ${out}"
+    fi
+
+    rm -rf "${dir}"
+    log "State directory and library loading: ${passed}/${total} assertions passed"
+    [ "${passed}" -eq "${total}" ]
+}
+
+test_hosts_command() {
+    local passed=0 total=0 dir out rc
+
+    dir="$(mktemp -d)"
+    printf 'local.spark.loc\tapp-1\t%s/projects/app\tvirtual-host\n' "${HOME}" >"${dir}/hosts.tsv"
+    printf 'labelled.spark.loc\tother-1\t\ttraefik-labels\n' >>"${dir}/hosts.tsv"
+    printf 'ok\n9 4\nMac-Test\tmacos.spark.loc,second.spark.loc\n' >"${dir}/summary"
+
+    run_hosts() {
+        env HOSTS_STATE_FILE="$1" TAILSCALE_SUMMARY_FILE="${dir}/summary" \
+            bash -c '
+                log_info(){ echo "$1"; }
+                log_warning(){ echo "$1" >&2; }
+                log_error(){ echo "$1" >&2; }
+                . bin/lib/hosts.sh
+                "$@"' _ "${@:2}" 2>&1
+    }
+
+    out="$(run_hosts "${dir}/hosts.tsv" hosts_list)"
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "local.spark.loc" && echo "${out}" | grep -q "macos.spark.loc"; then
+        success "hosts lists a local container and a peer hostname together"
+        passed=$((passed + 1))
+    else
+        error "hosts did not list both: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    total=$((total + 1))
+    if echo "${out}" | grep -qE "local.spark.loc.*~/projects/app"; then
+        success "a local directory is shown abbreviated to ~"
+        passed=$((passed + 1))
+    else
+        error "the home directory was not abbreviated: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    total=$((total + 1))
+    if echo "${out}" | grep -qE "macos.spark.loc +Mac-Test +- +-"; then
+        success "a peer row names the machine and publishes no directory"
+        passed=$((passed + 1))
+    else
+        error "the peer row is not as expected: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "second.spark.loc"; then
+        success "every hostname a peer forwards gets its own row"
+        passed=$((passed + 1))
+    else
+        error "a peer's second hostname is missing: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # A record shaped differently must stop the command rather than render part of it.
+    printf 'broken\trow\n' >"${dir}/bad.tsv"
+    rc=0
+    out="$(run_hosts "${dir}/bad.tsv" hosts_list)" || rc=$?
+
+    total=$((total + 1))
+    if [ "${rc}" -ne 0 ] && ! echo "${out}" | grep -q "HOSTNAME"; then
+        success "an unrecognised hosts record refuses instead of rendering"
+        passed=$((passed + 1))
+    else
+        error "a malformed record still rendered, exit ${rc}: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    rc=0
+    out="$(run_hosts "${dir}/hosts.tsv" hosts_describe local.spark.loc)" || rc=$?
+    total=$((total + 1))
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "app-1" && echo "${out}" | grep -q "virtual-host"; then
+        success "describe names the container and how it is routed"
+        passed=$((passed + 1))
+    else
+        error "describe did not report the local host: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    rc=0
+    out="$(run_hosts "${dir}/hosts.tsv" hosts_describe macos.spark.loc)" || rc=$?
+    total=$((total + 1))
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "Mac-Test" && echo "${out}" | grep -q "not published"; then
+        success "describe says a peer's directory is not published"
+        passed=$((passed + 1))
+    else
+        error "describe did not report the peer host: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    rc=0
+    out="$(run_hosts "${dir}/hosts.tsv" hosts_describe nothing.spark.loc)" || rc=$?
+    total=$((total + 1))
+    if [ "${rc}" -ne 0 ]; then
+        success "describe fails on a hostname nothing serves"
+        passed=$((passed + 1))
+    else
+        error "describe reported success for an unserved hostname"
+    fi
+
+    # --json must be JSON, not the TSV the CLI reads.
+    printf '[\n  {\n    "hostname": "local.spark.loc"\n  }\n]\n' >"${dir}/hosts.json"
+    rc=0
+    out="$(env HOSTS_JSON_FILE="${dir}/hosts.json" HOSTS_STATE_FILE="${dir}/hosts.tsv" \
+        TAILSCALE_SUMMARY_FILE="${dir}/summary" bash -c '
+            log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
+            . bin/lib/hosts.sh
+            hosts_command --json' 2>&1)" || rc=$?
+
+    total=$((total + 1))
+    if [ "${rc}" -eq 0 ] && [[ "${out}" == \[* ]] && echo "${out}" | grep -q '"hostname"'; then
+        success "--json emits JSON rather than the tab-separated file"
+        passed=$((passed + 1))
+    else
+        error "--json did not emit JSON, exit ${rc}: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # An older services image writes no state file at all, and saying nothing is
+    # served would be a confident wrong answer while containers are running.
+    run_absent() {
+        env HOSTS_STATE_FILE="${dir}/absent.tsv" HOSTS_JSON_FILE="${dir}/absent.json" \
+            TAILSCALE_SUMMARY_FILE=/dev/null RUNNING="$1" bash -c '
+                log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
+                is_running(){ [ "${RUNNING}" = "yes" ]; }
+                . bin/lib/hosts.sh
+                hosts_list' 2>&1
+    }
+
+    rc=0
+    out="$(run_absent yes)" || rc=$?
+    total=$((total + 1))
+    if [ "${rc}" -ne 0 ] && echo "${out}" | grep -q "older than this command" && echo "${out}" | grep -q "upgrade"; then
+        success "a missing state file with the proxy running names the image skew"
+        passed=$((passed + 1))
+    else
+        error "version skew was not reported, exit ${rc}: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    total=$((total + 1))
+    if ! echo "${out}" | grep -q "Nothing is being served"; then
+        success "and does not claim that nothing is being served"
+        passed=$((passed + 1))
+    else
+        error "a missing state file was reported as nothing being served"
+    fi
+
+    rc=0
+    out="$(run_absent no)" || rc=$?
+    total=$((total + 1))
+    if [ "${rc}" -ne 0 ] && echo "${out}" | grep -q "not running"; then
+        success "a missing state file with the proxy stopped says so instead"
+        passed=$((passed + 1))
+    else
+        error "a stopped proxy was not reported, exit ${rc}: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # An empty file is the genuine case, and that message is right.
+    : >"${dir}/empty.tsv"
+    rc=0
+    out="$(env HOSTS_STATE_FILE="${dir}/empty.tsv" TAILSCALE_SUMMARY_FILE=/dev/null bash -c '
+        log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
+        is_running(){ return 0; }
+        . bin/lib/hosts.sh
+        hosts_list' 2>&1)" || rc=$?
+    total=$((total + 1))
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "Nothing is being served"; then
+        success "an empty state file reports nothing served, which is true"
+        passed=$((passed + 1))
+    else
+        error "an empty state file was not handled, exit ${rc}: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # A help request answered with an error is wrong whatever the rest of the CLI does.
+    rc=0
+    out="$(env HOSTS_STATE_FILE="${dir}/hosts.tsv" TAILSCALE_SUMMARY_FILE="${dir}/summary" bash -c '
+        log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
+        . bin/lib/hosts.sh
+        hosts_command --help' 2>&1)" || rc=$?
+
+    total=$((total + 1))
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "list" && echo "${out}" | grep -q "describe" && echo "${out}" | grep -q -- "--json"; then
+        success "--help succeeds and names each subcommand"
+        passed=$((passed + 1))
+    else
+        error "--help exited ${rc}: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # The dispatch must be registered, or the fallthrough hands `hosts` to compose.
+    total=$((total + 1))
+    if awk '/^hosts\)/,/^  ;;/' bin/spark-http-proxy | grep -q "hosts_command"; then
+        success "hosts is registered in the dispatch rather than falling through to compose"
+        passed=$((passed + 1))
+    else
+        error "hosts is not registered, so it would reach docker compose"
+    fi
+
+    rm -rf "${dir}"
+    log "Hosts tests: ${passed}/${total} passed"
     [ "${passed}" -eq "${total}" ]
 }
 
@@ -3027,6 +3301,18 @@ main() {
     local rewrite_passed=0
     test_self_update_after_a_rewrite && rewrite_passed=1
     [ "$rewrite_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing the state directory and library loading..."
+    total=$((total + 1))
+    local state_dir_passed=0
+    test_state_dir_and_library_loading && state_dir_passed=1
+    [ "$state_dir_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing the hosts command..."
+    total=$((total + 1))
+    local hosts_passed=0
+    test_hosts_command && hosts_passed=1
+    [ "$hosts_passed" -eq 1 ] && passed=$((passed + 1))
 
     log "Testing what version reports about the containers..."
     total=$((total + 1))

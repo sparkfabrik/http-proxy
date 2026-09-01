@@ -12,6 +12,11 @@ done
 SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${SOURCE}")"
 
+for lib in "${SCRIPT_DIR}"/lib/*.sh; do
+  # shellcheck source=/dev/null
+  . "${lib}"
+done
+
 # Paths
 CONFIG_DIR="${HOME}/.local/spark/http-proxy"
 CERT_DIR="${CONFIG_DIR}/certs"
@@ -142,6 +147,11 @@ TAILSCALE_STATE_FILE="${STATE_DIR}/tailscale-peers.json"
 TAILSCALE_RENDERED_FILE="${STATE_DIR}/tailscale-peers.txt"
 TAILSCALE_COMPLETED_FILE="${STATE_DIR}/tailscale-peers-completed-at"
 TAILSCALE_SUMMARY_FILE="${STATE_DIR}/tailscale-peers-summary"
+# Read by bin/lib/hosts.sh, which shellcheck follows only with -x.
+# shellcheck disable=SC2034
+HOSTS_STATE_FILE="${STATE_DIR}/hosts.tsv"
+# shellcheck disable=SC2034
+HOSTS_JSON_FILE="${STATE_DIR}/hosts.json"
 TAILSCALE_SOCKET_OVERRIDE="$(dirname "${COMPOSE_FILE}")/compose.tailscale-socket.yml"
 TAILSCALE_STATUS_LOG="${STATE_DIR}/tailscale-status.log"
 STATUS_AGENT_LABEL="com.sparkfabrik.http-proxy.tailscale-status"
@@ -339,7 +349,7 @@ _${script_name//-/_}_completion() {
     prev="\${COMP_WORDS[COMP_CWORD-1]}"
 
     # Available commands
-    commands="version help self-test start status restart start-with-metrics stop-metrics clean destroy logs dashboard grafana prometheus configure-dns completion install-completion generate-mkcert list-certs remove-cert upgrade self-update up down pull build ps top exec show-config start-with-tailscale stop-tailscale tailscale-peers tailscale-status"
+    commands="version help self-test start status hosts restart start-with-metrics stop-metrics clean destroy logs dashboard grafana prometheus configure-dns completion install-completion generate-mkcert list-certs remove-cert upgrade self-update up down pull build ps top exec show-config start-with-tailscale stop-tailscale tailscale-peers tailscale-status"
 
     # Available services for logs command
     services="traefik dinghy_layer join_networks dns tailscale_peers prometheus grafana"
@@ -351,6 +361,10 @@ _${script_name//-/_}_completion() {
             ;;
         generate-mkcert|remove-cert)
             # No completion for domain names
+            return 0
+            ;;
+        hosts)
+            COMPREPLY=( \$(compgen -W "list describe --json" -- \${cur}) )
             return 0
             ;;
         tailscale-peers)
@@ -531,6 +545,7 @@ show_usage() {
   echo "  logs [service]       Show logs (optionally for specific service)"
   echo ""
   echo "Tailnet Peer Routing:"
+  echo "  hosts                Show what this proxy serves, and from which directory"
   echo "  tailscale-peers      Show the peers found on the last discovery cycle"
   echo "                       (--refresh runs a cycle first, --json for the machine-readable form)"
   echo "  tailscale-status     Write the tailnet status document peer discovery reads"
@@ -898,7 +913,19 @@ open_prometheus() {
 
 # Creates the state directory, owner only.
 ensure_state_dir() {
-  mkdir -p "${STATE_DIR}"
+  if [[ ! -d "${STATE_DIR}" ]]; then
+    mkdir -p "${STATE_DIR}"
+    chmod 700 "${STATE_DIR}"
+    return 0
+  fi
+
+  if [[ ! -O "${STATE_DIR}" || ! -w "${STATE_DIR}" ]]; then
+    log_error "${STATE_DIR} is not owned by $(id -un), so this command cannot use it"
+    log_info "Docker creates it as root when the containers start before the CLI does"
+    log_info "Take it back with: sudo chown -R \"\$(id -un)\" ${STATE_DIR}"
+    exit 1
+  fi
+
   chmod 700 "${STATE_DIR}"
 }
 
@@ -1764,6 +1791,10 @@ show-config)
 tailscale-refresh-peers)
   log_error "tailscale-refresh-peers was replaced by: ${0} tailscale-peers --refresh"
   exit 1
+  ;;
+hosts)
+  hosts_command "${@:2}"
+  exit $?
   ;;
 tailscale-peers)
   peers_json=false
