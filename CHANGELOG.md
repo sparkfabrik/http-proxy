@@ -51,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Commands no longer abort on a state directory Docker created as root; they say how to take it back
 - The certificate scan reports a write it could not make ([#151](https://github.com/sparkfabrik/http-proxy/issues/151))
 - The README starts the proxy with the CLI rather than compose, which left directories owned by root ([#150](https://github.com/sparkfabrik/http-proxy/issues/150))
 - Removing the last certificate no longer leaves the TLS configuration pointing at deleted files ([#145](https://github.com/sparkfabrik/http-proxy/issues/145))

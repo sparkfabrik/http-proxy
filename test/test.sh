@@ -1970,6 +1970,78 @@ test_self_update_after_a_rewrite() {
 
 # hosts reads two state files and renders them; the library is sourced directly
 # so the cases run without a stack.
+# Mode of a path, as an octal string, on both GNU and BSD stat.
+path_mode() {
+    stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
+}
+
+test_state_dir_and_library_loading() {
+    local passed=0 total=0 dir out rc
+
+    # ensure_state_dir lives in the entrypoint, which cannot be sourced, so the
+    # function is extracted and exercised on its own.
+    dir="$(mktemp -d)"
+    {
+        echo 'set -e'
+        echo 'log_info(){ echo "$1"; }'
+        echo 'log_error(){ echo "$1" >&2; }'
+        sed -n '/^ensure_state_dir() {/,/^}/p' bin/spark-http-proxy
+        echo 'ensure_state_dir'
+        echo 'echo REACHED'
+    } >"${dir}/ensure.sh"
+
+    total=$((total + 1))
+    out="$(STATE_DIR="${dir}/fresh" bash "${dir}/ensure.sh" 2>&1)" && rc=0 || rc=$?
+    if [ "${rc}" -eq 0 ] && [ "$(path_mode "${dir}/fresh")" = "700" ]; then
+        passed=$((passed + 1))
+    else
+        log "❌ A state directory it creates is not 700 (rc=${rc}, mode=$(path_mode "${dir}/fresh"))"
+    fi
+
+    total=$((total + 1))
+    out="$(STATE_DIR="${dir}/fresh" bash "${dir}/ensure.sh" 2>&1)" && rc=0 || rc=$?
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q REACHED; then
+        passed=$((passed + 1))
+    else
+        log "❌ A state directory it already owns was not accepted (rc=${rc})"
+    fi
+
+    # A directory it cannot write to: the chmod could only fail, so the command
+    # must refuse and name the recovery rather than abort on chmod. Root can
+    # write to anything, so the case does not exist there.
+    if [ "$(id -u)" -ne 0 ]; then
+        mkdir -p "${dir}/locked"
+        chmod 500 "${dir}/locked"
+
+        total=$((total + 1))
+        out="$(STATE_DIR="${dir}/locked" bash "${dir}/ensure.sh" 2>&1)" && rc=0 || rc=$?
+        if [ "${rc}" -ne 0 ] && ! echo "${out}" | grep -q REACHED &&
+            echo "${out}" | grep -q "chown"; then
+            passed=$((passed + 1))
+        else
+            log "❌ An unwritable state directory was not refused with a recovery command (rc=${rc}): ${out}"
+        fi
+
+        chmod 700 "${dir}/locked"
+    fi
+
+    # A checkout without bin/lib must fail rather than fall through to compose.
+    total=$((total + 1))
+    cp -R bin "${dir}/bin"
+    rm -rf "${dir}/bin/lib"
+    out="$(cd "${dir}" && ./bin/spark-http-proxy hosts list 2>&1)" && rc=0 || rc=$?
+    if [ "${rc}" -ne 0 ] && ! echo "${out}" | grep -q "docker compose" &&
+        echo "${out}" | grep -q "lib"; then
+        passed=$((passed + 1))
+    else
+        log "❌ A checkout without bin/lib did not fail at the loader (rc=${rc}): ${out}"
+    fi
+
+    rm -rf "${dir}"
+    log "State directory and library loading: ${passed}/${total} assertions passed"
+    [ "${passed}" -eq "${total}" ]
+}
+
 test_hosts_command() {
     local passed=0 total=0 dir out rc
 
@@ -3229,6 +3301,12 @@ main() {
     local rewrite_passed=0
     test_self_update_after_a_rewrite && rewrite_passed=1
     [ "$rewrite_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing the state directory and library loading..."
+    total=$((total + 1))
+    local state_dir_passed=0
+    test_state_dir_and_library_loading && state_dir_passed=1
+    [ "$state_dir_passed" -eq 1 ] && passed=$((passed + 1))
 
     log "Testing the hosts command..."
     total=$((total + 1))

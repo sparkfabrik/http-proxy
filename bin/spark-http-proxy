@@ -12,15 +12,10 @@ done
 SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${SOURCE}")"
 
-# Libraries live beside the script; install.sh only ever symlinks, so a checkout
-# is always complete. A missing one is a broken checkout, not a missing command.
-if [[ ! -r "${SCRIPT_DIR}/lib/hosts.sh" ]]; then
-  echo "❌ Missing ${SCRIPT_DIR}/lib/hosts.sh, so this checkout is incomplete" >&2
-  echo "ℹ  Repair it with: ${SCRIPT_DIR}/spark-http-proxy self-update" >&2
-  exit 1
-fi
-# shellcheck source=bin/lib/hosts.sh
-. "${SCRIPT_DIR}/lib/hosts.sh"
+for lib in "${SCRIPT_DIR}"/lib/*.sh; do
+  # shellcheck source=/dev/null
+  . "${lib}"
+done
 
 # Paths
 CONFIG_DIR="${HOME}/.local/spark/http-proxy"
@@ -918,7 +913,19 @@ open_prometheus() {
 
 # Creates the state directory, owner only.
 ensure_state_dir() {
-  mkdir -p "${STATE_DIR}"
+  if [[ ! -d "${STATE_DIR}" ]]; then
+    mkdir -p "${STATE_DIR}"
+    chmod 700 "${STATE_DIR}"
+    return 0
+  fi
+
+  if [[ ! -O "${STATE_DIR}" || ! -w "${STATE_DIR}" ]]; then
+    log_error "${STATE_DIR} is not owned by $(id -un), so this command cannot use it"
+    log_info "Docker creates it as root when the containers start before the CLI does"
+    log_info "Take it back with: sudo chown -R \"\$(id -un)\" ${STATE_DIR}"
+    exit 1
+  fi
+
   chmod 700 "${STATE_DIR}"
 }
 
