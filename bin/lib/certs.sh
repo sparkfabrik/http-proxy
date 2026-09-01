@@ -111,9 +111,9 @@ certs_read() {
   printf '%s\t%s\t%s\t%s\n' "${iso}" "${expired}" "${issuer}" "${sans}"
 }
 
-# The CN of the mkcert CA, or nothing when it cannot be read. Without it there
+# The path to the mkcert CA, or nothing when it cannot be read. Without it there
 # is no way to tell a trusted certificate from any other, so the column goes.
-certs_ca_name() {
+certs_ca_path() {
   local caroot ca
 
   command -v mkcert >/dev/null 2>&1 || return 0
@@ -121,8 +121,16 @@ certs_ca_name() {
   ca="${caroot}/rootCA.pem"
   [[ -r "${ca}" ]] || return 0
 
-  certs_have_openssl || return 0
-  openssl x509 -in "${ca}" -noout -subject 2>/dev/null | sed -n 's/.*CN *= *//p'
+  printf '%s' "${ca}"
+}
+
+# Whether the CA actually signed this certificate. Comparing issuer names would
+# accept anything carrying the right CN, including a self-signed certificate
+# that simply claims it, and would keep trusting certificates from a CA that has
+# since been regenerated under the same name.
+certs_trusted() {
+  local ca="$1" cert="$2"
+  openssl verify -CAfile "${ca}" "${cert}" >/dev/null 2>&1
 }
 
 # The CN out of an issuer distinguished name, which is what names the CA.
@@ -134,14 +142,14 @@ certs_issuer_name() {
 
 certs_list() {
   local -a domains=() expiries=() trusts=()
-  local cert_file domain record iso expired issuer ca_name
+  local cert_file domain record iso expired issuer ca_path shown
   local expired_count=0 total=0
   local wide_domain=6 wide_expiry=7
   local have_openssl=true show_trust=false
 
   certs_have_openssl || have_openssl=false
-  ca_name="$(certs_ca_name)"
-  [[ "${have_openssl}" == "true" && -n "${ca_name}" ]] && show_trust=true
+  ca_path="$(certs_ca_path)"
+  [[ "${have_openssl}" == "true" && -n "${ca_path}" ]] && show_trust=true
 
   while IFS=$'\t' read -r domain cert_file; do
     [[ -z "${cert_file}" ]] && continue
@@ -161,15 +169,16 @@ certs_list() {
 
     IFS=$'\t' read -r iso expired issuer _ <<<"${record}"
     if [[ "${expired}" == "yes" ]]; then
-      expiries+=("expired")
+      shown="expired"
       expired_count=$((expired_count + 1))
     else
-      expiries+=("${iso:-unknown}")
+      shown="${iso:-unknown}"
     fi
-    [[ "${#expiries[-1]}" -gt "${wide_expiry}" ]] && wide_expiry="${#expiries[-1]}"
+    expiries+=("${shown}")
+    [[ "${#shown}" -gt "${wide_expiry}" ]] && wide_expiry="${#shown}"
 
     if [[ "${show_trust}" == "true" ]]; then
-      if [[ "${issuer}" == *"CN = ${ca_name}"* || "${issuer}" == *"CN=${ca_name}"* ]]; then
+      if certs_trusted "${ca_path}" "${cert_file}"; then
         trusts+=("yes")
       else
         trusts+=("no")
@@ -218,7 +227,7 @@ certs_list() {
 }
 
 certs_describe() {
-  local wanted="$1" cert_file key_file safe_filename record iso expired issuer sans ca_name days
+  local wanted="$1" cert_file key_file safe_filename record iso expired issuer sans ca_path days
 
   if [[ -z "${wanted}" ]]; then
     log_error "Which domain? Usage: $(basename "${0}") certs describe <domain>"
@@ -272,10 +281,10 @@ certs_describe() {
 
   echo "  issuer         $(certs_issuer_name "${issuer}")"
 
-  ca_name="$(certs_ca_name)"
-  if [[ -z "${ca_name}" ]]; then
+  ca_path="$(certs_ca_path)"
+  if [[ -z "${ca_path}" ]]; then
     echo "  trusted        unknown, the mkcert CA could not be read"
-  elif [[ "${issuer}" == *"CN = ${ca_name}"* || "${issuer}" == *"CN=${ca_name}"* ]]; then
+  elif certs_trusted "${ca_path}" "${cert_file}"; then
     echo "  trusted        yes, signed by this machine's CA"
   else
     echo "  trusted        no, not signed by this machine's CA"
@@ -305,9 +314,13 @@ certs_generate() {
   log_info "Generating certificates for: ${domain}"
   log_info "Certificate files will be named: ${safe_filename}.pem and ${safe_filename}-key.pem"
 
-  mkcert -cert-file "${CERT_DIR}/${safe_filename}.pem" \
+  if ! mkcert -cert-file "${CERT_DIR}/${safe_filename}.pem" \
     -key-file "${CERT_DIR}/${safe_filename}-key.pem" \
-    "${domain}"
+    "${domain}"; then
+    log_error "mkcert could not generate a certificate for ${domain}"
+    log_info "Nothing was applied to the proxy. Any partial files are in ${CERT_DIR}"
+    return 1
+  fi
 
   log_success "Certificates generated successfully:"
   log_info "  Certificate: ${CERT_DIR}/${safe_filename}.pem"

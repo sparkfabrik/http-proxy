@@ -116,25 +116,57 @@ hosts_list() {
   done
 }
 
-# Redacts the value of any flag whose NAME suggests a credential. Matched on the
-# name only: guessing from the shape of a value hides the wrong things.
-hosts_redact_command() {
-  local secret='[Aa][Uu][Tt][Hh]|[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Kk][Ee][Yy]'
-  local flag="(--?[A-Za-z0-9_-]*(${secret})[A-Za-z0-9_-]*)"
-  sed -E \
-    -e "s/${flag}=[^[:space:]]*/\1=<redacted>/g" \
-    -e "s/${flag}([[:space:]]+)'[^']*'/\1\3<redacted>/g" \
-    -e "s/${flag}([[:space:]]+)\"[^\"]*\"/\1\3<redacted>/g" \
-    -e "s/${flag}([[:space:]]+)[^[:space:]-][^[:space:]]*/\1\3<redacted>/g"
+# Redacts credential values in a command line. Two mechanisms, because a
+# credential appears two ways: as its own argument after a flag, and inside one
+# argument such as the script passed to sh -c. Arguments arrive one per line so
+# the first case can replace the whole value however many spaces it contains, and
+# the second is applied within each argument. Matched on the flag NAME: guessing
+# from the shape of a value hides the wrong things.
+HOSTS_SECRET='[Aa][Uu][Tt][Hh]|[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Kk][Ee][Yy]'
+
+hosts_redact_args() {
+  local arg original prev="" out=""
+  local flag="(--?[A-Za-z0-9_-]*(${HOSTS_SECRET})[A-Za-z0-9_-]*)"
+
+  while IFS= read -r arg; do
+    [[ -z "${arg}" ]] && continue
+    original="${arg}"
+    if [[ "${prev}" =~ ^--?[A-Za-z0-9_-]*(${HOSTS_SECRET})[A-Za-z0-9_-]*$ ]]; then
+      # Its own argument, so the whole thing goes whatever it contains.
+      arg="<redacted>"
+    else
+      arg="$(sed -E \
+        -e "s/${flag}=[^[:space:]]*/\1=<redacted>/g" \
+        -e "s/${flag}([[:space:]]+)'[^']*'/\1\3<redacted>/g" \
+        -e "s/${flag}([[:space:]]+)\"[^\"]*\"/\1\3<redacted>/g" \
+        -e "s/${flag}([[:space:]]+)[^[:space:]-][^[:space:]]*/\1\3<redacted>/g" \
+        <<<"${arg}")"
+    fi
+    if [[ -z "${out}" ]]; then
+      out="${arg}"
+    else
+      out="${out} ${arg}"
+    fi
+    prev="${original}"
+  done
+
+  printf '%s' "${out}"
 }
 
-# The HTTP status the backend answers with, or nothing. Bounded, because a hung
-# backend must not hang describe.
+# Whether the hostname answers through the proxy. Probed on the proxy's own
+# published port with a Host header, not on the container's bridge address: that
+# address lives inside the Docker VM on macOS and is unreachable from the host,
+# so probing it would report every healthy backend as silent. Bounded, because a
+# hung backend must not hang describe.
 hosts_probe() {
-  local url="$1" code
+  local hostname="$1" port code
 
   command -v curl >/dev/null 2>&1 || return 0
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "${url}" 2>/dev/null)" || return 0
+  port="$(get_service_port traefik 80 2>/dev/null)"
+  [[ -n "${port}" ]] || return 0
+
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \
+    -H "Host: ${hostname}" "http://127.0.0.1:${port}" 2>/dev/null)" || return 0
   [[ "${code}" == "000" ]] && return 0
   printf '%s' "${code}"
 }
@@ -144,14 +176,13 @@ hosts_probe() {
 # reachability are not facts a file can hold.
 hosts_describe_local() {
   local hostname="$1" container="$2" directory="$3" routing="$4"
-  local detail image status netmode ip path args uptime port url code mounts
+  local detail image status netmode ip path uptime port url code mounts command_line
 
   detail="$(docker inspect -f '{{.Config.Image}}
 {{.State.Status}}
 {{.HostConfig.NetworkMode}}
 {{range $k,$v := .NetworkSettings.Networks}}{{$v.IPAddress}} {{end}}
-{{.Path}}
-{{range .Args}}{{.}} {{end}}' "${container}" 2>/dev/null)" || detail=""
+{{.Path}}' "${container}" 2>/dev/null)" || detail=""
 
   if [[ -z "${detail}" ]]; then
     echo "${hostname}"
@@ -167,7 +198,6 @@ hosts_describe_local() {
     read -r netmode
     read -r ip
     read -r path
-    read -r args
   } <<<"${detail}"
   ip="${ip% }"
   ip="${ip%% *}"
@@ -185,7 +215,7 @@ hosts_describe_local() {
   echo "  container      ${container}"
   echo "  image          ${image}"
   if [[ -n "${uptime}" ]]; then
-    echo "  status         ${status}, ${uptime,}"
+    echo "  status         ${status}, up ${uptime#Up }"
   else
     echo "  status         ${status}"
   fi
@@ -214,7 +244,7 @@ hosts_describe_local() {
   [[ -n "${netmode}" ]] && echo "  network        ${netmode}"
 
   if [[ -n "${url:-}" ]]; then
-    code="$(hosts_probe "${url}")"
+    code="$(hosts_probe "${hostname}")"
     if [[ -n "${code}" ]]; then
       echo "  reachable      ${code}"
     else
@@ -242,7 +272,9 @@ hosts_describe_local() {
   done <<<"${mounts}"
 
   if [[ -n "${path}" ]]; then
-    printf '  command        %s\n' "$(printf '%s %s' "${path}" "${args% }" | hosts_redact_command)"
+    command_line="$(docker inspect -f '{{.Path}}{{println}}{{range .Args}}{{println .}}{{end}}' "${container}" 2>/dev/null |
+      hosts_redact_args)"
+    printf '  command        %s\n' "${command_line}"
   fi
 
   return 0

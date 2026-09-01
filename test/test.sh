@@ -1981,7 +1981,7 @@ path_mode() {
 }
 
 test_state_dir_and_library_loading() {
-    local passed=0 total=0 dir out rc input expected
+    local passed=0 total=0 dir out rc
 
     # ensure_state_dir lives in the entrypoint, which cannot be sourced, so the
     # function is extracted and exercised on its own.
@@ -2171,7 +2171,7 @@ test_certs_command() {
         # shellcheck source=/dev/null
         . "${LIB_HELPERS}"
         . bin/lib/certs.sh
-        certs_ca_name(){ return 0; }
+        certs_ca_path(){ return 0; }
         certs_list' 2>&1)"
     if ! grep -q "TRUSTED" <<<"${out}" && grep -q "EXPIRES" <<<"${out}" &&
         grep -q "Trust is not shown" <<<"${out}"; then
@@ -2236,6 +2236,58 @@ needs certs generate example.spark.loc
 needs certs delete example.spark.loc
 exempt list-certs
 CASES
+
+    # Trust must be the signature, not the issuer's name. A certificate can
+    # carry any issuer CN it likes, including the real CA's.
+    total=$((total + 1))
+    local ca_dir="${dir}/ca"
+    mkdir -p "${ca_dir}"
+    openssl req -x509 -newkey rsa:2048 -nodes -keyout "${ca_dir}/ca-key.pem" \
+        -out "${ca_dir}/rootCA.pem" -days 3650 -subj "/CN=test CA" >/dev/null 2>&1
+    # Self-signed, but claiming the CA's name.
+    openssl req -x509 -newkey rsa:2048 -nodes -keyout "${dir}/forged-key.pem" \
+        -out "${dir}/forged.pem" -days 3650 -subj "/CN=test CA" \
+        -addext "subjectAltName=DNS:forged.spark.loc" >/dev/null 2>&1
+    if ! bash -c '
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/certs.sh
+        certs_trusted "$1" "$2"' _ "${ca_dir}/rootCA.pem" "${dir}/forged.pem" 2>/dev/null; then
+        passed=$((passed + 1))
+    else
+        error "a self-signed certificate claiming the CA's name was reported as trusted"
+    fi
+
+    # A failed generation must not be reported as success, nor applied.
+    total=$((total + 1))
+    out="$(env CERT_DIR="${dir}" bash -c '
+        log_info(){ echo "$1"; }; log_warning(){ echo "$1" >&2; }
+        log_error(){ echo "$1" >&2; }; log_success(){ echo "SUCCESS $1"; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/certs.sh
+        install_mkcert(){ return 0; }
+        mkcert(){ echo "mkcert: boom" >&2; return 1; }
+        apply_certificates(){ echo "APPLIED"; }
+        certs_generate fails.spark.loc' 2>&1)" && rc=0 || rc=$?
+    if [ "${rc}" -ne 0 ] && ! grep -q "SUCCESS" <<<"${out}" && ! grep -q "APPLIED" <<<"${out}"; then
+        passed=$((passed + 1))
+    else
+        error "a failed mkcert was reported as success or still applied (rc=${rc}): ${out}"
+    fi
+
+    # The rest of this repository is Bash 3.2 compatible, which is what macOS
+    # ships as /bin/bash. Two Bash 4 only constructs were introduced here and
+    # caught in review; this keeps them out.
+    total=$((total + 1))
+    local bash4
+    bash4="$(grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*[,^]|\$\{[A-Za-z_][A-Za-z0-9_]*\[-[0-9]+\]|declare -A|mapfile|readarray|\[\[ -v ' \
+        bin/spark-http-proxy bin/lib/*.sh || true)"
+    if [ -z "${bash4}" ]; then
+        passed=$((passed + 1))
+    else
+        error "Bash 4 only constructs, which macOS's /bin/bash 3.2 cannot run: ${bash4}"
+    fi
 
     rm -rf "${dir}"
     log "Certs command tests: ${passed}/${total} passed"
@@ -2322,7 +2374,8 @@ test_hosts_command() {
         . bin/lib/hosts.sh
         docker() {
             case "$*" in
-                *Config.Image*) printf "node:lts\nrunning\nbridge\n172.17.0.3 \nnode\nserver.js \n" ;;
+                *Path*Args*) printf "node\nserver.js\n" ;;
+                *Config.Image*) printf "node:lts\nrunning\nbridge\n172.17.0.3 \nnode\n" ;;
                 *Config.Env*) printf "VIRTUAL_HOST=local.spark.loc\nVIRTUAL_PORT=3000\n" ;;
                 *Mounts*) printf "" ;;
                 ps*) printf "Up 2 days\n" ;;
@@ -2469,30 +2522,68 @@ test_hosts_command() {
         error "hosts is not registered, so it would reach docker compose"
     fi
 
-    # Redaction, on the forms a real command line uses. Matched on the flag
-    # name: a credential must not reach a terminal, scrollback or a screenshot.
+    # Redaction. Fed one argument per line, the way describe reads them, over
+    # both shapes: a credential as its own argument, and one inside a single
+    # argument such as the script passed to sh -c.
     local redacted
-    while IFS='|' read -r input expected; do
-        [[ -z "${input}" ]] && continue
-        total=$((total + 1))
-        redacted="$(printf '%s' "${input}" | bash -c '
+    redact() {
+        bash -c '
             # shellcheck source=/dev/null
             . "${LIB_HELPERS}"
             . bin/lib/hosts.sh
-            hosts_redact_command')"
-        if [ "${redacted}" = "${expected}" ]; then
-            passed=$((passed + 1))
-        else
-            log "❌ redaction: ${input} became ${redacted}, expected ${expected}"
-        fi
-    done <<'REDACTIONS'
-serve --auth 'abc123' --port 80|serve --auth <redacted> --port 80
-serve --auth abc123 --port 80|serve --auth <redacted> --port 80
-serve --auth=abc123 --port 80|serve --auth=<redacted> --port 80
-serve --api-token "abc123" -v|serve --api-token <redacted> -v
-serve --password abc --host db|serve --password <redacted> --host db
-serve --host 0.0.0.0 --no-https|serve --host 0.0.0.0 --no-https
-REDACTIONS
+            hosts_redact_args'
+    }
+
+    total=$((total + 1))
+    redacted="$(printf 'serve\n--auth\nabc123\n--port\n80\n' | redact)"
+    if [ "${redacted}" = "serve --auth <redacted> --port 80" ]; then
+        passed=$((passed + 1))
+    else
+        log "❌ redaction of a flag's own argument: got ${redacted}"
+    fi
+
+    # The value's spaces used to end the redaction after its first word.
+    total=$((total + 1))
+    redacted="$(printf 'serve\n--auth\nmy secret value\n--host\ndb\n' | redact)"
+    if [ "${redacted}" = "serve --auth <redacted> --host db" ]; then
+        passed=$((passed + 1))
+    else
+        log "❌ a credential containing spaces was not fully redacted: got ${redacted}"
+    fi
+
+    # A value starting with - used to be skipped entirely.
+    total=$((total + 1))
+    redacted="$(printf 'serve\n--token\n-weird-looking\n' | redact)"
+    if [ "${redacted}" = "serve --token <redacted>" ]; then
+        passed=$((passed + 1))
+    else
+        log "❌ a credential starting with a dash was not redacted: got ${redacted}"
+    fi
+
+    # The real shape on this machine: the credential is inside one argument.
+    total=$((total + 1))
+    redacted="$(printf 'bash\n-c\nnpx serve --host 0.0.0.0 --auth %s\n' "'abc123'" | redact)"
+    if grep -q -- "--auth <redacted>" <<<"${redacted}" && ! grep -q "abc123" <<<"${redacted}"; then
+        passed=$((passed + 1))
+    else
+        log "❌ a credential inside one argument was not redacted: got ${redacted}"
+    fi
+
+    total=$((total + 1))
+    redacted="$(printf 'serve\n--auth=abc123\n' | redact)"
+    if [ "${redacted}" = "serve --auth=<redacted>" ]; then
+        passed=$((passed + 1))
+    else
+        log "❌ the --flag=value form was not redacted: got ${redacted}"
+    fi
+
+    total=$((total + 1))
+    redacted="$(printf 'serve\n--host\n0.0.0.0\n--no-https\n' | redact)"
+    if [ "${redacted}" = "serve --host 0.0.0.0 --no-https" ]; then
+        passed=$((passed + 1))
+    else
+        log "❌ a command with no credential was altered: got ${redacted}"
+    fi
 
     # The live fields, from a stubbed docker so the assertion does not need a
     # container of its own.
@@ -2504,7 +2595,8 @@ REDACTIONS
         . bin/lib/hosts.sh
         docker() {
             case "$*" in
-                *Config.Image*) printf "node:lts\nrunning\nbridge\n172.17.0.3 \ndocker-entrypoint.sh\nserve --auth secret \n" ;;
+                *Path*Args*) printf "docker-entrypoint.sh\nserve\n--auth\nsecret\n" ;;
+                *Config.Image*) printf "node:lts\nrunning\nbridge\n172.17.0.3 \ndocker-entrypoint.sh\n" ;;
                 *Config.Env*) printf "VIRTUAL_HOST=app.spark.loc\nVIRTUAL_PORT=3000\n" ;;
                 *Mounts*) printf "bind||/home/dev/app|/home/dev/app|rw\nvolume|cache|/var/lib/docker/volumes/cache/_data|/cache|ro\n" ;;
                 ps*) printf "Up 3 hours\n" ;;
@@ -2550,7 +2642,8 @@ REDACTIONS
         . bin/lib/hosts.sh
         docker() {
             case "$*" in
-                *Config.Image*) printf "nginx\nrunning\nbridge\n172.17.0.9 \nnginx\n-g daemon off; \n" ;;
+                *Path*Args*) printf "nginx\n-g\ndaemon off;\n" ;;
+                *Config.Image*) printf "nginx\nrunning\nbridge\n172.17.0.9 \nnginx\n" ;;
                 *Config.Env*) printf "PATH=/usr/bin\n" ;;
                 *Mounts*) printf "" ;;
                 ps*) printf "Up 1 minute\n" ;;
