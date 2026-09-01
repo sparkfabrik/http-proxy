@@ -2139,8 +2139,42 @@ test_hosts_command() {
     printf 'labelled.spark.loc\tother-1\t\ttraefik-labels\n' >>"${dir}/hosts.tsv"
     printf 'ok\n9 4\nMac-Test\tmacos.spark.loc,second.spark.loc\n' >"${dir}/summary"
 
+    # describe reads the container and the proxy live, so both are stubbed:
+    # docker answers inspect, ps and port for app-1 and other-1 and knows no
+    # other container; curl answers the Traefik API and the reachability probe.
+    mkdir -p "${dir}/stub"
+    cat >"${dir}/stub/docker" <<'DOCKER'
+#!/usr/bin/env bash
+case "$1 $2" in
+    "port http-proxy")
+        case "$3" in 80/tcp) echo "0.0.0.0:80" ;; 8080/tcp) echo "0.0.0.0:30000" ;; esac ;;
+    "ps -a")
+        echo "Up 3 hours" ;;
+    "inspect --format")
+        name="${*: -1}"
+        case "${name}" in app-1|other-1) ;; *) echo "Error: No such object: ${name}" >&2; exit 1 ;; esac
+        if [[ "$3" == *Mounts* ]]; then
+            printf 'bind\x1f\x1f%s/projects/app\x1f%s/projects/app\x1ftrue\n' "${HOME}" "${HOME}"
+            printf 'volume\x1fapp-cache\x1f/var/lib/docker/volumes/app-cache/_data\x1f/cache\x1ffalse\n'
+        else
+            printf 'node:lts\nrunning\nbridge \nnode server.js --auth s3cret --token=t0k3n API_KEY=k3y API_TOKEN='"'"'live secret'"'"' https://user:pw@db.spark.loc/x\n'
+        fi ;;
+    *) echo "unexpected docker call: $*" >&2; exit 1 ;;
+esac
+DOCKER
+    cat >"${dir}/stub/curl" <<'CURL'
+#!/usr/bin/env bash
+url="${*: -1}"
+case "${url}" in
+    */api/http/routers*) echo '[{"rule":"Host(`local.spark.loc`)","service":"app-1","provider":"file"},{"rule":"Host(\"labelled.spark.loc\")","service":"other-1@docker","provider":"docker"}]' ;;
+    */api/http/services/*) echo '{"loadBalancer":{"servers":[{"url":"http://172.17.0.5:8080"}]}}' ;;
+    *) printf '200' ;;
+esac
+CURL
+    chmod +x "${dir}/stub/docker" "${dir}/stub/curl"
+
     run_hosts() {
-        env HOSTS_STATE_FILE="$1" TAILSCALE_SUMMARY_FILE="${dir}/summary" \
+        env PATH="${dir}/stub:${PATH}" HOSTS_STATE_FILE="$1" TAILSCALE_SUMMARY_FILE="${dir}/summary" \
             bash -c '
                 log_info(){ echo "$1"; }
                 log_warning(){ echo "$1" >&2; }
@@ -2199,11 +2233,63 @@ test_hosts_command() {
     rc=0
     out="$(run_hosts "${dir}/hosts.tsv" hosts_describe local.spark.loc)" || rc=$?
     total=$((total + 1))
-    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "app-1" && echo "${out}" | grep -q "virtual-host"; then
-        success "describe names the container and how it is routed"
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "container      app-1" &&
+        echo "${out}" | grep -q "image          node:lts" &&
+        echo "${out}" | grep -q "status         running, up 3 hours" &&
+        echo "${out}" | grep -q "routed by      VIRTUAL_HOST, port 8080" &&
+        echo "${out}" | grep -q "backend        http://172.17.0.5:8080" &&
+        echo "${out}" | grep -q "network        bridge" &&
+        echo "${out}" | grep -q "reachable      200"; then
+        success "describe reads image, status, routing port, backend and reachability live"
         passed=$((passed + 1))
     else
-        error "describe did not report the local host: $(echo "${out}" | tr '\n' ' ')"
+        error "describe did not report the container live: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "mounts         ~/projects/app -> same path (rw)" &&
+        echo "${out}" | grep -q "app-cache -> /cache (ro)"; then
+        success "describe renders a same-path bind and a named volume"
+        passed=$((passed + 1))
+    else
+        error "describe rendered the mounts wrong: $(echo "${out}" | grep -A2 mounts | tr '\n' ' ')"
+    fi
+
+    # Redaction by flag name, assignment name and URL userinfo, never by the
+    # shape of a value. Every planted secret must be gone; the flags must stay.
+    total=$((total + 1))
+    if ! echo "${out}" | grep -qE "s3cret|t0k3n|k3y|live|secret'|user:pw" &&
+        echo "${out}" | grep -q -- "--auth <redacted> --token=<redacted> API_KEY=<redacted> API_TOKEN='<redacted>' https://<redacted>@db.spark.loc/x"; then
+        success "describe redacts secrets in the command by flag, assignment and URL"
+        passed=$((passed + 1))
+    else
+        error "a secret survived in the command line: $(echo "${out}" | grep command)"
+    fi
+
+    # A container routed by native labels has no VIRTUAL_HOST to report. Its
+    # rule quotes the host with double quotes and its service is already
+    # provider-qualified, both of which Traefik's API can return.
+    rc=0
+    out="$(run_hosts "${dir}/hosts.tsv" hosts_describe labelled.spark.loc)" || rc=$?
+    total=$((total + 1))
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "routed by      traefik.\* labels, port 8080"; then
+        success "describe names native labels as the routing"
+        passed=$((passed + 1))
+    else
+        error "describe did not report the label-routed host: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # A record whose container Docker no longer has: say so, print what the
+    # record holds, and fail, rather than inventing a running container.
+    printf 'gone.spark.loc\tgone-1\t%s/projects/gone\tvirtual-host\n' "${HOME}" >>"${dir}/hosts.tsv"
+    rc=0
+    out="$(run_hosts "${dir}/hosts.tsv" hosts_describe gone.spark.loc)" || rc=$?
+    total=$((total + 1))
+    if [ "${rc}" -ne 0 ] && echo "${out}" | grep -q "gone-1, not found" && echo "${out}" | grep -q "~/projects/gone"; then
+        success "describe reports a container that is gone and fails"
+        passed=$((passed + 1))
+    else
+        error "describe on a gone container: exit ${rc}, $(echo "${out}" | tr '\n' ' ')"
     fi
 
     rc=0
