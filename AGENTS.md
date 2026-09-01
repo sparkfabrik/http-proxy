@@ -335,8 +335,11 @@ The CLI is one Bash script plus libraries in `bin/lib/`, sourced at startup. Fol
   2. `case` dispatch block (before the `*` catch-all)
   3. `show_usage` help text
   4. `generate_completion` commands string
-- Commands that do not need Docker (e.g. pure git or config ops) must be added to the
-  prerequisite skip list near line 326
+- Commands that do not need Docker (e.g. pure git or config ops) must be added to
+  `needs_prerequisites`
+- The test suite sources the script up to the first top-level `case "$1" in`, the
+  dispatch, so a top-level `case` placed before it hides every later function from
+  the tests; keep such logic inside a function
 
 Lint with `-x` and every file, or shellcheck does not follow the libraries and their
 code goes unchecked:
