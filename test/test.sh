@@ -2604,6 +2604,64 @@ COLLIDING
         error "a failed cleanup was reported as a clean deletion (rc=${rc}): ${out}"
     fi
 
+    # An unreadable certificate must not be summarised as not expired: nothing is
+    # known about its expiry.
+    total=$((total + 1))
+    printf 'NOT A CERTIFICATE' >"${dir}/broken.pem"
+    out="$(env CERT_DIR="${dir}" bash -c '
+        log_info(){ echo "$1"; }; log_warning(){ echo "$1" >&2; }; log_error(){ echo "$1" >&2; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/certs.sh
+        certs_list' 2>&1)"
+    if grep -q "unreadable" <<<"${out}" && grep -qE "[0-9]+ unreadable" <<<"${out}"; then
+        passed=$((passed + 1))
+    else
+        error "the summary made no mention of the unreadable certificate: ${out}"
+    fi
+    command rm -f "${dir}/broken.pem"
+
+    # Where openssl cannot separate expiry from the signer, trust is unknown
+    # rather than a guess presented as a fact.
+    total=$((total + 1))
+    if [ -s "${dir}/expired-cert.pem" ]; then
+        out="$(env CERT_DIR="${dir}" bash -c '
+            # An openssl without -no_check_time, which is what older LibreSSL is.
+            openssl() {
+                case "$*" in
+                    *-no_check_time*) return 1 ;;
+                    *) command openssl "$@" ;;
+                esac
+            }
+            # shellcheck source=/dev/null
+            . "${LIB_HELPERS}"
+            . bin/lib/certs.sh
+            certs_trusted "$1" "$2"; echo "rc=$?"' _ "${ca_dir}/rootCA.pem" "${dir}/expired-cert.pem" 2>&1)"
+        if grep -q "rc=2" <<<"${out}"; then
+            passed=$((passed + 1))
+        else
+            error "without -no_check_time an expired certificate was judged rather than reported unknown: ${out}"
+        fi
+    else
+        passed=$((passed + 1))
+        log "  (skipped: this openssl cannot backdate a certificate)"
+    fi
+
+    # A valid certificate this CA did not sign is "no", not "unknown". openssl
+    # exits 2 for a certificate it cannot chain, which must not be mistaken for
+    # the sentinel meaning the question is unanswerable.
+    total=$((total + 1))
+    out="$(bash -c '
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/certs.sh
+        certs_trusted "$1" "$2"; echo "rc=$?"' _ "${ca_dir}/rootCA.pem" "${dir}/forged.pem" 2>&1)"
+    if grep -q "rc=1" <<<"${out}"; then
+        passed=$((passed + 1))
+    else
+        error "an untrusted but valid certificate was not reported as untrusted: ${out}"
+    fi
+
     rm -rf "${dir}"
     log "Certs command tests: ${passed}/${total} passed"
     [ "${passed}" -eq "${total}" ]

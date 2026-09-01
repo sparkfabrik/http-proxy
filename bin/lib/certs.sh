@@ -160,20 +160,34 @@ certs_ca_path() {
 # accept anything carrying the right CN, including a self-signed certificate
 # that simply claims it, and would keep trusting certificates from a CA that has
 # since been regenerated under the same name.
+# 0: this CA signed it. 1: it did not. 2: cannot be told apart here.
 certs_trusted() {
   local ca="$1" cert="$2"
 
-  # -no_check_time asks only who signed it. Without it an expired certificate
-  # this CA really did sign is reported as not signed by it, contradicting the
-  # expiry field beside it. The option is probed rather than assumed, because the
-  # LibreSSL macOS ships is older: a self-signed CA verifies against itself, so a
-  # failure there means the option is unsupported.
+  # -no_check_time asks only who signed it. Probed rather than assumed, because
+  # the LibreSSL macOS ships is older: a self-signed CA verifies against itself,
+  # so a failure there means the option is unsupported.
+  # openssl's own status is not passed through: it exits 2 for a certificate it
+  # cannot chain, which would collide with the sentinel below.
   if openssl verify -no_check_time -CAfile "${ca}" "${ca}" >/dev/null 2>&1; then
-    openssl verify -no_check_time -CAfile "${ca}" "${cert}" >/dev/null 2>&1
-    return $?
+    if openssl verify -no_check_time -CAfile "${ca}" "${cert}" >/dev/null 2>&1; then
+      return 0
+    fi
+    return 1
   fi
 
-  openssl verify -CAfile "${ca}" "${cert}" >/dev/null 2>&1
+  if openssl verify -CAfile "${ca}" "${cert}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # Without that option a failure could be the expiry rather than the signer, so
+  # for an expired certificate the question is unanswerable here and saying "not
+  # signed by this CA" would be a guess presented as a fact.
+  if ! openssl x509 -in "${cert}" -noout -checkend 0 >/dev/null 2>&1; then
+    return 2
+  fi
+
+  return 1
 }
 
 # The CN out of an issuer distinguished name, which is what names the CA.
@@ -186,7 +200,7 @@ certs_issuer_name() {
 certs_list() {
   local -a domains=() expiries=() trusts=()
   local cert_file domain record iso expired issuer ca_path shown
-  local expired_count=0 total=0
+  local expired_count=0 unreadable_count=0 total=0
   local wide_domain=6 wide_expiry=7
   local have_openssl=true show_trust=false
 
@@ -207,6 +221,7 @@ certs_list() {
     if ! record="$(certs_read "${cert_file}")"; then
       expiries+=("unreadable")
       trusts+=("-")
+      unreadable_count=$((unreadable_count + 1))
       continue
     fi
 
@@ -221,11 +236,12 @@ certs_list() {
     [[ "${#shown}" -gt "${wide_expiry}" ]] && wide_expiry="${#shown}"
 
     if [[ "${show_trust}" == "true" ]]; then
-      if certs_trusted "${ca_path}" "${cert_file}"; then
-        trusts+=("yes")
-      else
-        trusts+=("no")
-      fi
+      certs_trusted "${ca_path}" "${cert_file}"
+      case "$?" in
+        0) trusts+=("yes") ;;
+        2) trusts+=("unknown") ;;
+        *) trusts+=("no") ;;
+      esac
     fi
   done < <(certs_files)
 
@@ -260,7 +276,10 @@ certs_list() {
   fi
 
   echo ""
-  if [[ "${expired_count}" -eq 0 ]]; then
+  if [[ "${unreadable_count}" -gt 0 ]]; then
+    # No claim about the ones that could not be read.
+    log_info "${total} ${noun}, ${expired_count} expired, ${unreadable_count} unreadable."
+  elif [[ "${expired_count}" -eq 0 ]]; then
     log_info "${total} ${noun}, none expired."
   else
     log_info "${total} ${noun}, ${expired_count} expired."
@@ -328,10 +347,13 @@ certs_describe() {
   ca_path="$(certs_ca_path)"
   if [[ -z "${ca_path}" ]]; then
     echo "  trusted        unknown, the mkcert CA could not be read"
-  elif certs_trusted "${ca_path}" "${cert_file}"; then
-    echo "  trusted        yes, signed by this machine's CA"
   else
-    echo "  trusted        no, not signed by this machine's CA"
+    certs_trusted "${ca_path}" "${cert_file}"
+    case "$?" in
+      0) echo "  trusted        yes, signed by this machine's CA" ;;
+      2) echo "  trusted        unknown, this openssl cannot tell expiry from the signer" ;;
+      *) echo "  trusted        no, not signed by this machine's CA" ;;
+    esac
   fi
 
   return 0
