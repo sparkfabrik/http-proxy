@@ -93,7 +93,7 @@ certs_domain_of() {
 
 certs_list() {
   local -a domains=() missing=()
-  local domain cert_file total=0 wide=6 i noun
+  local domain cert_file total=0 noun
 
   while IFS=$'\t' read -r domain cert_file; do
     [[ -z "${cert_file}" ]] && continue
@@ -109,10 +109,7 @@ certs_list() {
     return 0
   fi
 
-  printf '%s\n' "DOMAIN"
-  for ((i = 0; i < total; i++)); do
-    printf '%s\n' "${domains[i]}"
-  done
+  printf '%s\n' "DOMAIN" "${domains[@]}"
 
   echo ""
   noun="certificates"
