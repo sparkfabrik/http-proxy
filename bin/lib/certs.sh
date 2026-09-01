@@ -109,6 +109,16 @@ cert_safe_filename() {
   echo "${safe_filename}"
 }
 
+# An unescaped ~ on the replacement side expands back to the home directory.
+cert_abbreviate_home() {
+  local path="$1"
+  if [[ "${path}" == "${HOME}" || "${path}" == "${HOME}/"* ]]; then
+    printf '~%s' "${path#"${HOME}"}"
+    return 0
+  fi
+  printf '%s' "${path}"
+}
+
 # The domain a certificate file was generated for, read back from its name.
 cert_domain_from_file() {
   local safe_filename
@@ -188,7 +198,7 @@ certs_list() {
     return 0
   fi
 
-  echo "Certificates in $(abbreviate_home "${CERT_DIR}")"
+  echo "Certificates in $(cert_abbreviate_home "${CERT_DIR}")"
   echo ""
   printf '%-*s  %-*s  %s\n' "${w_domain}" "DOMAIN" "${w_cert}" "CERTIFICATE" "KEY"
   for row in "${rows[@]}"; do
@@ -218,7 +228,7 @@ require_openssl() {
 
   if ! err="$(openssl x509 -in "${cert_file}" -noout -text -startdate -enddate -issuer 2>&1 >/dev/null)" ||
     ! openssl x509 -in "${cert_file}" -noout -text 2>/dev/null | grep -q 'Subject Alternative Name'; then
-    log_error "$(command -v openssl) ($(openssl version 2>/dev/null)) could not read $(abbreviate_home "${cert_file}")${err:+: ${err%%$'\n'*}}"
+    log_error "$(command -v openssl) ($(openssl version 2>/dev/null)) could not read $(cert_abbreviate_home "${cert_file}")${err:+: ${err%%$'\n'*}}"
     log_info "describe needs an openssl that prints x509 extensions; sparkdock provides one as openssl@3"
     return 1
   fi
@@ -266,11 +276,11 @@ cert_describe_file() {
   fi
 
   cert_domain_from_file "${cert_file}"
-  echo "  certificate    $(abbreviate_home "${cert_file}")"
+  echo "  certificate    $(cert_abbreviate_home "${cert_file}")"
   if [[ -f "${key_file}" ]]; then
-    echo "  private key    $(abbreviate_home "${key_file}")"
+    echo "  private key    $(cert_abbreviate_home "${key_file}")"
   else
-    echo "  private key    missing, expected $(abbreviate_home "${key_file}")"
+    echo "  private key    missing, expected $(cert_abbreviate_home "${key_file}")"
   fi
   echo "  covers         ${names//,/, }"
   printf '  %-15s%s to %s\n' "${state}" "$(cert_iso_date "${not_before}")" "$(cert_iso_date "${not_after}")"
@@ -416,7 +426,7 @@ certs_usage() {
   echo "  generate <domain>    Generate a certificate with mkcert (quote wildcards: '*.spark.loc')"
   echo "  delete <domain>...   Remove certificates, asking once before deleting"
   echo ""
-  echo "Certificate directory: $(abbreviate_home "${CERT_DIR}")"
+  echo "Certificate directory: $(cert_abbreviate_home "${CERT_DIR}")"
 }
 
 certs_command() {

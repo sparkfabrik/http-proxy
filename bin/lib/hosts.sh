@@ -53,6 +53,17 @@ hosts_remote_rows() {
   done < <(tail -n +3 "${file}" 2>/dev/null)
 }
 
+# An unescaped ~ on the replacement side expands back to the home directory.
+hosts_abbreviate() {
+  local path="$1"
+  [[ -z "${path}" ]] && return 0
+  if [[ "${path}" == "${HOME}" || "${path}" == "${HOME}/"* ]]; then
+    printf '~%s' "${path#"${HOME}"}"
+    return 0
+  fi
+  printf '%s' "${path}"
+}
+
 # An absent state file means the services image predates this command, which is
 # routine: the CLI updates over git and the images from the registry.
 hosts_report_missing_state() {
@@ -85,7 +96,7 @@ hosts_list() {
     rest="${line#*$'\t'}"
     container="${rest%%$'\t'*}"
     rest="${rest#*$'\t'}"
-    directory="$(abbreviate_home "${rest%%$'\t'*}")"
+    directory="$(hosts_abbreviate "${rest%%$'\t'*}")"
     routing="${rest#*$'\t'}"
     rows+=("${hostname}"$'\t'"local"$'\t'"${container}"$'\t'"${directory:--}"$'\t'"${routing}")
   done <<<"${local_out}"
@@ -146,7 +157,7 @@ hosts_describe() {
     echo "${hostname}"
     echo "  served by      this machine"
     echo "  container      ${container}"
-    echo "  directory      $(abbreviate_home "${directory}")"
+    echo "  directory      $(hosts_abbreviate "${directory}")"
     echo "  routed by      ${routing}"
   done <<<"${local_out}"
 

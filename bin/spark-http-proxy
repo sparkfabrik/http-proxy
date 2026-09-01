@@ -45,17 +45,6 @@ log_success() { echo "✅ $1"; }
 log_error() { echo "❌ $1" >&2; }
 log_warning() { echo "⚠️  $1" >&2; }
 
-# An unescaped ~ on the replacement side expands back to the home directory.
-abbreviate_home() {
-  local path="$1"
-  [[ -z "${path}" ]] && return 0
-  if [[ "${path}" == "${HOME}" || "${path}" == "${HOME}/"* ]]; then
-    printf '~%s' "${path#"${HOME}"}"
-    return 0
-  fi
-  printf '%s' "${path}"
-}
-
 # Configuration
 export COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-http-proxy}
 export COMPOSE_FILE=${COMPOSE_FILE:-$(discover_compose_file)}
@@ -503,17 +492,21 @@ open_url() {
   fi
 }
 
-# Ensure prerequisites are met, except for the commands that need no Docker.
-needs_prerequisites=true
-case "$1" in
-help | version | completion | install-completion | self-update | list-certs | tailscale-status) needs_prerequisites=false ;;
-certs)
-  case "${2:-list}" in
-  list | describe | help | -h | --help) needs_prerequisites=false ;;
+# Whether a command needs Docker. The test suite sources this file up to the
+# dispatch, so this stays a function and not a top-level case.
+needs_prerequisites() {
+  case "${1}" in
+  help | version | completion | install-completion | self-update | list-certs | tailscale-status) return 1 ;;
+  certs)
+    case "${2:-list}" in
+    list | describe | help | -h | --help) return 1 ;;
+    esac
+    ;;
   esac
-  ;;
-esac
-if [[ "${needs_prerequisites}" == "true" ]] && ! check_prerequisites; then
+  return 0
+}
+
+if needs_prerequisites "$@" && ! check_prerequisites; then
   exit 1
 fi
 

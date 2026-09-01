@@ -1354,9 +1354,9 @@ MKCERT
 
     # The restart belongs to the shared helper, which reaches it only when the
     # guard is absent. A restart in either command's own body is unconditional.
-    for body in generate_mkcert remove_cert; do
+    for body in certs_generate certs_delete; do
         total=$((total + 1))
-        if awk "/^${body}\(\) \{/,/^\}/" bin/spark-http-proxy | grep -q "dc_cmd restart"; then
+        if awk "/^${body}\(\) \{/,/^\}/" bin/lib/certs.sh | grep -q "dc_cmd restart"; then
             error "${body} restarts the proxy directly rather than through the helper"
         else
             success "${body} does not restart the proxy directly"
@@ -1369,7 +1369,7 @@ MKCERT
     # sends the scan to an entrypoint that runs its whole body and withdraws peer
     # routes, which is why the pattern requires the guard and not the flag.
     local probe fake
-    probe="$(grep -oE "grep -qE '[^']+'" bin/spark-http-proxy | head -1 | sed "s/grep -qE '//; s/'$//")"
+    probe="$(grep -oE "grep -qE '[^']+'" bin/lib/certs.sh | head -1 | sed "s/grep -qE '//; s/'$//")"
 
     total=$((total + 1))
     if [ -n "${probe}" ] && grep -qE "${probe}" build/traefik/entrypoint.sh; then
