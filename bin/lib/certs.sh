@@ -133,8 +133,12 @@ certs_read() {
   sans="$(openssl x509 -in "${cert_file}" -noout -ext subjectAltName 2>/dev/null |
     grep -o 'DNS:[^,]*' | sed 's/^DNS://' | paste -sd, -)"
   if [[ -z "${sans}" ]]; then
+    # Every line after the heading until one that names no DNS entry: OpenSSL 3
+    # puts them all on one line, but an older renderer may wrap them, and reading
+    # a fixed single line would then describe the certificate incompletely.
     sans="$(openssl x509 -in "${cert_file}" -noout -text 2>/dev/null |
-      grep -A1 'Subject Alternative Name' | grep -o 'DNS:[^,]*' | sed 's/^DNS://' | paste -sd, -)"
+      awk '/Subject Alternative Name/ {found=1; next} found && /DNS:/ {print; next} found {exit}' |
+      grep -o 'DNS:[^,]*' | sed 's/^DNS://' | paste -sd, -)"
   fi
 
   iso="$(certs_iso_date "${enddate}")" || iso=""

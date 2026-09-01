@@ -367,6 +367,11 @@ _${script_name//-/_}_completion() {
             COMPREPLY=( \$(compgen -W "list describe generate delete" -- \${cur}) )
             return 0
             ;;
+        describe|generate|delete)
+            # A domain or hostname goes here, so offer nothing rather than
+            # falling through and suggesting unrelated commands.
+            return 0
+            ;;
         hosts)
             COMPREPLY=( \$(compgen -W "list describe --json" -- \${cur}) )
             return 0

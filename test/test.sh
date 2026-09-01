@@ -2662,6 +2662,45 @@ COLLIDING
         error "an untrusted but valid certificate was not reported as untrusted: ${out}"
     fi
 
+    # The -text fallback must read every SAN line. No openssl here wraps them,
+    # so the wrapped rendering is supplied directly rather than hoping a real
+    # certificate produces it: otherwise the assertion cannot tell a fixed
+    # single-line read from one that follows the block.
+    total=$((total + 1))
+    out="$(bash -c '
+        openssl() {
+            case "$*" in
+                *-ext*) return 1 ;;
+                *-text*)
+                    printf "        X509v3 Subject Alternative Name: \n"
+                    printf "            DNS:one.spark.loc, DNS:two.spark.loc,\n"
+                    printf "            DNS:three.spark.loc\n"
+                    printf "    Signature Algorithm: sha256\n"
+                    ;;
+                *-enddate*) printf "notAfter=Oct 10 22:08:33 2028 GMT\nissuer=CN=x\n" ;;
+                *) return 0 ;;
+            esac
+        }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/certs.sh
+        certs_read /nonexistent 2>/dev/null | cut -f4')"
+    if [ "${out}" = "one.spark.loc,two.spark.loc,three.spark.loc" ]; then
+        passed=$((passed + 1))
+    else
+        error "the -text fallback did not read the wrapped SAN block: got '${out}'"
+    fi
+
+    # Completion must offer nothing where a domain goes, rather than falling
+    # through to the top-level command list.
+    total=$((total + 1))
+    if bin/spark-http-proxy completion 2>/dev/null |
+        grep -qE 'describe\|generate\|delete\)'; then
+        passed=$((passed + 1))
+    else
+        error "completion still falls through after a subcommand that takes a domain"
+    fi
+
     rm -rf "${dir}"
     log "Certs command tests: ${passed}/${total} passed"
     [ "${passed}" -eq "${total}" ]
