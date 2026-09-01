@@ -127,6 +127,10 @@ HOSTS_SECRET='[Aa][Uu][Tt][Hh]|[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr]
 hosts_redact_args() {
   local arg original prev="" out=""
   local flag="(--?[A-Za-z0-9_-]*(${HOSTS_SECRET})[A-Za-z0-9_-]*)"
+  # An environment-style assignment carries a credential just as a flag does, and
+  # a URL's userinfo carries one by position, which needs no judgement about the
+  # value. Neither is complete cover and nothing here claims to be.
+  local assignment="([A-Za-z_][A-Za-z0-9_]*(${HOSTS_SECRET})[A-Za-z0-9_]*)"
 
   while IFS= read -r arg; do
     [[ -z "${arg}" ]] && continue
@@ -136,6 +140,10 @@ hosts_redact_args() {
       arg="<redacted>"
     else
       arg="$(sed -E \
+        -e "s|(://[^:/@[:space:]]+):[^@[:space:]]+@|\1:<redacted>@|g" \
+        -e "s/${assignment}='[^']*'/\1=<redacted>/g" \
+        -e "s/${assignment}=\"[^\"]*\"/\1=<redacted>/g" \
+        -e "s/${assignment}=[^[:space:]]*/\1=<redacted>/g" \
         -e "s/${flag}='[^']*'/\1=<redacted>/g" \
         -e "s/${flag}=\"[^\"]*\"/\1=<redacted>/g" \
         -e "s/${flag}=[^[:space:]]*/\1=<redacted>/g" \

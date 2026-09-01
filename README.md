@@ -159,8 +159,13 @@ sparkdock.githuman.sparkfabrik.loc
   command        node server.js --auth <redacted>
 ```
 
-The value of any flag whose name suggests a credential is replaced with
-`<redacted>`, matched on the flag name rather than on what the value looks like.
+Credentials are replaced with `<redacted>`. Three shapes are covered: the value
+of a flag whose name suggests a credential, an environment-style assignment such
+as `GITHUB_TOKEN=`, and the password in a URL's userinfo. Matching is on the flag
+or variable name, or on position in the URL, never on what a value looks like.
+This is not complete cover, and where a credential reaches the output some other
+way it is printed. `docker inspect` shows the same command line with nothing
+redacted at all.
 `reachable` is bounded by a short timeout and says `no answer` rather than
 hanging on a backend that does not respond.
 

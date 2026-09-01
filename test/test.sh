@@ -2885,6 +2885,25 @@ test_hosts_command() {
         log "❌ a backslash-escaped space left part of the credential: got ${redacted}"
     fi
 
+    # An environment-style assignment carries a credential the same way a flag
+    # does, matched on the same names.
+    total=$((total + 1))
+    redacted="$(printf 'sh\n-c\nGITHUB_TOKEN=abc123 npm publish\n' | redact)"
+    if [ "${redacted}" = 'sh -c GITHUB_TOKEN=<redacted> npm publish' ]; then
+        passed=$((passed + 1))
+    else
+        log "❌ an environment-style credential was printed: got ${redacted}"
+    fi
+
+    # A URL's userinfo is positional, so it needs no judgement about the value.
+    total=$((total + 1))
+    redacted="$(printf 'psql\npostgres://admin:s3cret@db:5432/app\n' | redact)"
+    if [ "${redacted}" = 'psql postgres://admin:<redacted>@db:5432/app' ]; then
+        passed=$((passed + 1))
+    else
+        log "❌ a URL password was printed: got ${redacted}"
+    fi
+
     rm -rf "${dir}"
     log "Hosts tests: ${passed}/${total} passed"
     [ "${passed}" -eq "${total}" ]
