@@ -1,14 +1,7 @@
 #!/usr/bin/env bash
-# Renders `spark-http-proxy hosts`: what this proxy serves, and from where.
-#
-# Reads two state files written by the services, because the CLI has no JSON
-# parser and must not gain one. Local rows come from dinghy-layer's hosts.tsv,
-# remote rows from the peer discovery summary.
+# Renders `spark-http-proxy hosts` from the two state files the services write.
 
-# hosts_local_rows emits "hostname<TAB>container<TAB>directory<TAB>routing" per
-# local hostname. A row whose shape is not the one the service writes is refused
-# rather than rendered, since a wrong answer here sends someone to the wrong
-# directory.
+# Emits hostname, container, directory and routing per local hostname.
 hosts_local_rows() {
   local file="${HOSTS_STATE_FILE}" line tabs hostname container directory routing rest
 
@@ -17,9 +10,7 @@ hosts_local_rows() {
   while IFS= read -r line; do
     [[ -z "${line}" ]] && continue
 
-    # Split by hand rather than with `read -r a b c d`: tab is IFS whitespace,
-    # so read collapses two in a row and an empty directory would shift the
-    # routing field into it.
+    # Split by hand: read collapses two tabs, losing an empty directory.
     tabs="${line//[^$'\t']/}"
     if [[ "${#tabs}" -ne 3 ]]; then
       log_error "The hosts record has a shape this version does not recognise"
@@ -44,8 +35,7 @@ hosts_local_rows() {
   done <"${file}"
 }
 
-# hosts_remote_rows emits "hostname<TAB>machine" per hostname a peer forwards,
-# from the same summary `status` reads.
+# Emits hostname and machine per hostname a peer forwards.
 hosts_remote_rows() {
   local file="${TAILSCALE_SUMMARY_FILE}" machine hosts trailing hostname
 
@@ -59,9 +49,7 @@ hosts_remote_rows() {
   done < <(tail -n +3 "${file}" 2>/dev/null)
 }
 
-# hosts_abbreviate replaces the home directory with ~, which is how anyone reads
-# a path they are about to cd into. The tilde is escaped because an unescaped one
-# on the replacement side is tilde-expanded back into the home directory.
+# An unescaped ~ on the replacement side expands back to the home directory.
 hosts_abbreviate() {
   local path="$1"
   [[ -z "${path}" ]] && return 0
@@ -72,8 +60,7 @@ hosts_list() {
   local rows=() hostname container directory routing machine local_out line rest
   local w_host=8 w_machine=7 w_container=9
 
-  # Command substitution, not a process substitution: a refused record has to
-  # stop the command, and a `return 1` inside `< <(...)` never reaches here.
+  # Command substitution: a `return 1` inside `< <(...)` never reaches here.
   if ! local_out="$(hosts_local_rows)"; then
     return 1
   fi

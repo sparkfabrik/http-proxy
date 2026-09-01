@@ -53,8 +53,7 @@ type CompatibilityLayer struct {
 	// arrive as separate events.
 	claims map[routeClaim]claimHolder
 
-	// hosts records what each container serves, keyed by container id, so the
-	// state file can be rewritten whole from memory after a single event.
+	// hosts records what each container serves, keyed by container id.
 	hosts map[string][]hostRow
 }
 
@@ -149,9 +148,7 @@ func (cl *CompatibilityLayer) extractContainerInfo(inspect types.ContainerJSON) 
 	}
 }
 
-// recordHosts replaces what a container contributes to the hosts state file.
-// One row per hostname, because a container can carry several VIRTUAL_HOST
-// values and each is a separate answer to "what serves this name".
+// recordHosts replaces what a container contributes, one row per hostname.
 func (cl *CompatibilityLayer) recordHosts(containerID string, info ContainerInfo, routing string) {
 	rows := make([]hostRow, 0, 1)
 	for _, host := range parseVirtualHosts(info.VirtualHost) {
@@ -169,8 +166,7 @@ func (cl *CompatibilityLayer) recordHosts(containerID string, info ContainerInfo
 	cl.hosts[containerID] = rows
 }
 
-// writeHostsFile rewrites the state file from memory, sorted so the CLI renders
-// a stable order and a diff of the file means something changed.
+// writeHostsFile rewrites the state file from memory, in a stable order.
 func (cl *CompatibilityLayer) writeHostsFile() error {
 	if cl.config.HostsStateFile == "" {
 		return nil
@@ -203,8 +199,7 @@ func (cl *CompatibilityLayer) writeHostsFile() error {
 	return nil
 }
 
-// containerDirectory is where the project runs from: the compose working
-// directory, or the first bind mount for a container started without compose.
+// containerDirectory: the compose working dir, else the first bind mount.
 func containerDirectory(inspect types.ContainerJSON) string {
 	if dir := inspect.Config.Labels["com.docker.compose.project.working_dir"]; dir != "" {
 		return dir
@@ -272,8 +267,7 @@ func (cl *CompatibilityLayer) HandleInitialScan(ctx context.Context) error {
 	return nil
 }
 
-// persistHosts writes the state file and reports a failure without failing the
-// event, since the routing itself succeeded.
+// persistHosts reports a write failure without failing the event.
 func (cl *CompatibilityLayer) persistHosts() {
 	if err := cl.writeHostsFile(); err != nil {
 		cl.logger.Error("Failed to write the hosts state file", "error", err)
@@ -383,8 +377,7 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 	// it. That is easy to hit when reaching for a middleware alongside a
 	// mounted path, and silent at debug level, so say it plainly instead.
 	if utils.HasTraefikLabel(inspect.Config.Labels) {
-		// Recorded even though Traefik routes it, so hosts shows the whole
-		// local picture rather than only what this layer routes.
+		// Recorded though Traefik routes it, so hosts shows the whole picture.
 		cl.recordHosts(containerID, containerInfo, "traefik-labels")
 		if containerInfo.VirtualHost != "" {
 			cl.logger.Warn("Ignoring VIRTUAL_HOST and VIRTUAL_PATH on a container carrying a traefik. label",
