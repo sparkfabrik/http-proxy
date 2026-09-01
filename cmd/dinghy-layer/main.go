@@ -159,9 +159,22 @@ func (cl *CompatibilityLayer) extractContainerInfo(inspect types.ContainerJSON) 
 	}
 }
 
-// hostRulePattern matches the hostnames in a native Traefik router rule, which
-// quotes them with backticks or double quotes.
-var hostRulePattern = regexp.MustCompile("Host\\((?:`|\")([^`\"]+)(?:`|\")\\)")
+// hostMatcherPattern matches a whole Host(...) matcher, which may carry several
+// hostnames. quotedHostPattern then takes each one: Traefik quotes them with
+// backticks or double quotes.
+var (
+	hostMatcherPattern = regexp.MustCompile(`Host\(([^)]*)\)`)
+	quotedHostPattern  = regexp.MustCompile("[`\"]([^`\"]+)[`\"]")
+)
+
+// traefikExposed reports whether Traefik serves this container. The Docker
+// provider runs with exposedByDefault false, so a container is routed only when
+// it opts in. Traefik parses the label as a Go boolean, so True, TRUE, t and 1
+// all enable it, and anything unparseable does not.
+func traefikExposed(labels map[string]string) bool {
+	enabled, err := strconv.ParseBool(labels["traefik.enable"])
+	return err == nil && enabled
+}
 
 // labelHostnames are the hostnames a container's own Traefik rules claim, which
 // is where routing comes from when native labels are present.
@@ -173,10 +186,12 @@ func labelHostnames(labels map[string]string) []string {
 		if !strings.HasPrefix(key, "traefik.http.routers.") || !strings.HasSuffix(key, ".rule") {
 			continue
 		}
-		for _, match := range hostRulePattern.FindAllStringSubmatch(rule, -1) {
-			if !seen[match[1]] {
-				seen[match[1]] = true
-				hosts = append(hosts, match[1])
+		for _, matcher := range hostMatcherPattern.FindAllStringSubmatch(rule, -1) {
+			for _, match := range quotedHostPattern.FindAllStringSubmatch(matcher[1], -1) {
+				if !seen[match[1]] {
+					seen[match[1]] = true
+					hosts = append(hosts, match[1])
+				}
 			}
 		}
 	}
@@ -194,17 +209,35 @@ func virtualHostNames(virtualHost string) []string {
 	return hosts
 }
 
+// sanitizeField strips the control characters a container could put in a label,
+// a name or a bind-mount path. They would otherwise break the tab-separated
+// record or reach the reader's terminal as escape sequences.
+func sanitizeField(value string) string {
+	return strings.Map(func(r rune) rune {
+		if r == 0x7f || (r >= 0x80 && r <= 0x9f) || (r < 0x20 && r != '\t') {
+			return -1
+		}
+		if r == '\t' {
+			return ' '
+		}
+		return r
+	}, value)
+}
+
 // recordHosts replaces what a container contributes, one row per hostname.
 func (cl *CompatibilityLayer) recordHosts(containerID string, info ContainerInfo, routing string, hostnames []string) {
 	rows := make([]hostRow, 0, len(hostnames))
 	for _, hostname := range hostnames {
-		if hostname == "" {
+		// Sanitised first: a name of only control characters is not empty until
+		// it has been stripped, and an empty hostname is not a row.
+		hostname = sanitizeField(hostname)
+		if strings.TrimSpace(hostname) == "" {
 			continue
 		}
 		rows = append(rows, hostRow{
 			hostname:  hostname,
-			container: info.Name,
-			directory: info.Directory,
+			container: sanitizeField(info.Name),
+			directory: sanitizeField(info.Directory),
 			routing:   routing,
 		})
 	}
@@ -344,6 +377,12 @@ func (cl *CompatibilityLayer) HandleInitialScan(ctx context.Context) error {
 	// inspect failure would leave that container out of keep, and pruning then
 	// would delete the config of a container that is still running. Reconcile
 	// only when the scan saw every container cleanly.
+	// Written even after inspect failures: the rows are then incomplete, but the
+	// alternative is leaving the last process's file naming containers that are
+	// gone. Reconciliation still waits for a clean scan, since pruning a live
+	// container's config is the worse mistake.
+	cl.persistHosts()
+
 	if scanErrors > 0 {
 		cl.logger.Warn("Skipping orphaned-config reconciliation after scan errors",
 			"errors", scanErrors)
@@ -353,8 +392,6 @@ func (cl *CompatibilityLayer) HandleInitialScan(ctx context.Context) error {
 	if err := cl.reconcileConfigs(keep); err != nil {
 		cl.logger.Error("Failed to reconcile Traefik configs", "error", err)
 	}
-
-	cl.persistHosts()
 
 	return nil
 }
@@ -471,7 +508,13 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 	// mounted path, and silent at debug level, so say it plainly instead.
 	if utils.HasTraefikLabel(inspect.Config.Labels) {
 		// Recorded though Traefik routes it, so hosts shows the whole picture.
-		cl.recordHosts(containerID, containerInfo, "traefik-labels", labelHostnames(inspect.Config.Labels))
+		// Always recorded, with nothing when the container is not exposed, so
+		// turning traefik.enable off clears the rows it had.
+		var served []string
+		if traefikExposed(inspect.Config.Labels) {
+			served = labelHostnames(inspect.Config.Labels)
+		}
+		cl.recordHosts(containerID, containerInfo, "traefik-labels", served)
 		if containerInfo.VirtualHost != "" {
 			cl.logger.Warn("Ignoring VIRTUAL_HOST and VIRTUAL_PATH on a container carrying a traefik. label",
 				"container_id", utils.FormatDockerID(containerID),

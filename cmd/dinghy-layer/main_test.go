@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -861,6 +862,121 @@ func TestLabelHostnamesDeduplicates(t *testing.T) {
 
 	if len(hosts) != 1 {
 		t.Errorf("a hostname claimed by two routers should appear once, got %v", hosts)
+	}
+}
+
+func TestLabelHostnamesTakesEveryHostnameInAMatcher(t *testing.T) {
+	cases := []struct {
+		name string
+		rule string
+		want []string
+	}{
+		{"one hostname", "Host(`a.spark.loc`)", []string{"a.spark.loc"}},
+		{"two, spaced", "Host(`a.spark.loc`, `b.spark.loc`)", []string{"a.spark.loc", "b.spark.loc"}},
+		{"two, unspaced", "Host(`a.spark.loc`,`b.spark.loc`)", []string{"a.spark.loc", "b.spark.loc"}},
+		{"double quoted", `Host("a.spark.loc", "b.spark.loc")`, []string{"a.spark.loc", "b.spark.loc"}},
+		{"with another matcher", "Host(`a.spark.loc`) && PathPrefix(`/api`)", []string{"a.spark.loc"}},
+		{"two matchers", "Host(`a.spark.loc`) || Host(`b.spark.loc`)", []string{"a.spark.loc", "b.spark.loc"}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := labelHostnames(map[string]string{"traefik.http.routers.app.rule": c.rule})
+			if !slices.Equal(got, c.want) {
+				t.Errorf("rule %s: got %v, want %v", c.rule, got, c.want)
+			}
+		})
+	}
+}
+
+// Asserts recordHosts's half of the contract only. That the caller always calls
+// it, so disabling a container clears its rows, is not covered: the call site is
+// in processContainer, which needs a Docker client this package cannot fake.
+func TestRecordingNothingClearsAContainersRows(t *testing.T) {
+	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: t.TempDir()})
+	info := ContainerInfo{Name: "app-1"}
+
+	cl.recordHosts("abc", info, "traefik-labels", []string{"a.spark.loc"})
+	if len(cl.hosts["abc"]) != 1 {
+		t.Fatalf("expected the row to be recorded first, got %v", cl.hosts["abc"])
+	}
+
+	// What the caller passes when the container is no longer exposed.
+	cl.recordHosts("abc", info, "traefik-labels", nil)
+	if rows, ok := cl.hosts["abc"]; ok {
+		t.Errorf("rows survived the container being disabled: %v", rows)
+	}
+}
+
+func TestAHostnameThatSanitizesToNothingIsNotARow(t *testing.T) {
+	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: t.TempDir()})
+
+	cl.recordHosts("abc", ContainerInfo{Name: "app-1"}, "traefik-labels",
+		[]string{"\x01\x02", "\t", "real.spark.loc"})
+
+	rows := cl.hosts["abc"]
+	if len(rows) != 1 || rows[0].hostname != "real.spark.loc" {
+		t.Errorf("expected only the real hostname, got %v", rows)
+	}
+}
+
+func TestSanitizeFieldStripsC1Controls(t *testing.T) {
+	// U+009B is a control-sequence introducer, so a terminal acts on it.
+	if got := sanitizeField("a\u009b31mb"); got != "a31mb" {
+		t.Errorf("C1 control survived: %q", got)
+	}
+}
+
+func TestRecordedFieldsCarryNoControlCharacters(t *testing.T) {
+	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: t.TempDir()})
+	info := ContainerInfo{
+		Name:      "app\t1",
+		Directory: "/home/dev/a\x1b[31mred\nb",
+	}
+
+	cl.recordHosts("abc", info, "virtual-host", []string{"a.loc\tb.loc"})
+
+	rows := cl.hosts["abc"]
+	if len(rows) != 1 {
+		t.Fatalf("expected one row, got %d", len(rows))
+	}
+	for name, got := range map[string]string{
+		"hostname":  rows[0].hostname,
+		"container": rows[0].container,
+		"directory": rows[0].directory,
+	} {
+		if strings.ContainsAny(got, "\t\n\r\x1b") {
+			t.Errorf("%s still carries a control character: %q", name, got)
+		}
+	}
+	if rows[0].container != "app 1" {
+		t.Errorf("a tab should become a space, got %q", rows[0].container)
+	}
+}
+
+func TestOnlyAnExposedContainerCountsAsServed(t *testing.T) {
+	// Traefik runs exposedByDefault false, so a container that did not opt in is
+	// not served and must not be reported as serving its rules.
+	for _, c := range []struct {
+		name   string
+		labels map[string]string
+		want   bool
+	}{
+		{"opted in", map[string]string{"traefik.enable": "true"}, true},
+		{"capitalised", map[string]string{"traefik.enable": "True"}, true},
+		{"upper case", map[string]string{"traefik.enable": "TRUE"}, true},
+		{"one", map[string]string{"traefik.enable": "1"}, true},
+		{"t", map[string]string{"traefik.enable": "t"}, true},
+		{"opted out", map[string]string{"traefik.enable": "false"}, false},
+		{"zero", map[string]string{"traefik.enable": "0"}, false},
+		{"not a boolean", map[string]string{"traefik.enable": "yes"}, false},
+		{"no enable label", map[string]string{"traefik.http.routers.app.rule": "Host(`a.loc`)"}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := traefikExposed(c.labels); got != c.want {
+				t.Errorf("traefikExposed(%v) = %v, want %v", c.labels, got, c.want)
+			}
+		})
 	}
 }
 
