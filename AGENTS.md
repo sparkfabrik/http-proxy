@@ -277,16 +277,16 @@ uses `bin/compose.yml` with pre-built GHCR images.
 
 Sorted by what a command does to state that cannot be recreated.
 
-**Read freely.** `status`, `show-config`, `tailscale-peers`, `list-certs`,
+**Read freely.** `status`, `show-config`, `tailscale-peers`, `certs list`, `certs describe`,
 `logs`, `self-test`.
 
 **Run deliberately.** `start*`, `restart`, `stop-metrics`, `stop-tailscale`,
-`upgrade`, `self-update`, `configure-dns`, `generate-mkcert`,
+`upgrade`, `self-update`, `configure-dns`, `certs generate`,
 `tailscale-peers --refresh`. Recoverable, but they restart containers, rewrite
 system DNS, or install a certificate authority.
 
 **Ask first.** `clean` and `destroy` (both remove volumes, so both take
-monitoring data; `destroy` also removes images), `remove-cert`,
+monitoring data; `destroy` also removes images), `certs delete`,
 `docker compose down -v`, `git push --force`, and any write to
 `~/.local/spark/http-proxy/state` — that directory is a trust input rather than
 a cache, since its contents decide whose traffic is forwarded where.

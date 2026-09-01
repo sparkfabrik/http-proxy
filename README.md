@@ -42,7 +42,7 @@ Simply add `VIRTUAL_HOST=myapp.local` to any container or use native Traefik lab
   - [Automatic HTTP and HTTPS Routes](#automatic-http-and-https-routes)
   - [Self-Signed Certificates](#self-signed-certificates)
   - [Trusted Local Certificates with mkcert](#trusted-local-certificates-with-mkcert)
-    - [Listing and Removing Certificates](#listing-and-removing-certificates)
+    - [Listing, Describing and Removing Certificates](#listing-describing-and-removing-certificates)
     - [Manual Certificate Generation (Alternative)](#manual-certificate-generation-alternative)
     - [Start the proxy](#start-the-proxy)
     - [How Certificate Matching Works](#how-certificate-matching-works)
@@ -101,10 +101,10 @@ spark-http-proxy start
 
 # Generate trusted SSL certificates
 # Option 1: Wildcard certificate (covers nginx.spark.loc, api.spark.loc, etc.)
-spark-http-proxy generate-mkcert "*.spark.loc"
+spark-http-proxy certs generate "*.spark.loc"
 
 # Option 2: Specific certificate (covers only nginx.spark.loc)
-spark-http-proxy generate-mkcert "nginx.spark.loc"
+spark-http-proxy certs generate "nginx.spark.loc"
 
 # Run an nginx container
 docker run -d -e VIRTUAL_HOST=nginx.spark.loc nginx
@@ -119,8 +119,8 @@ curl https://nginx.spark.loc
 
 When generating certificates, you can choose between specific domains or wildcards:
 
-- **Specific certificate**: `spark-http-proxy generate-mkcert "nginx.spark.loc"` - covers only `nginx.spark.loc`
-- **Wildcard certificate**: `spark-http-proxy generate-mkcert "*.spark.loc"` - covers `nginx.spark.loc`, `api.spark.loc`, etc.
+- **Specific certificate**: `spark-http-proxy certs generate "nginx.spark.loc"` - covers only `nginx.spark.loc`
+- **Wildcard certificate**: `spark-http-proxy certs generate "*.spark.loc"` - covers `nginx.spark.loc`, `api.spark.loc`, etc.
 
 **⚠️ Important**: Wildcard certificates have nesting limitations. A certificate for `*.spark.loc` will NOT work for nested domains like `test.foo.spark.loc`. To match nested domains, you need to generate a more specific wildcard like `*.foo.spark.loc`.
 
@@ -519,20 +519,20 @@ This is implemented using Traefik's `disable-hsts` middleware applied to the HTT
 
 ### Trusted Local Certificates with mkcert
 
-For browser-trusted certificates without warnings, use the `spark-http-proxy generate-mkcert` command. This command automatically handles the entire certificate generation process:
+For browser-trusted certificates without warnings, use the `spark-http-proxy certs generate` command. This command automatically handles the entire certificate generation process:
 
 ```bash
 # Generate wildcard certificate for .loc domains
-spark-http-proxy generate-mkcert "*.loc"
+spark-http-proxy certs generate "*.loc"
 
 # Generate certificates for specific domains
-spark-http-proxy generate-mkcert "myapp.local"
+spark-http-proxy certs generate "myapp.local"
 
 # For complex multi-level domains, generate additional certificates:
-spark-http-proxy generate-mkcert "*.project.loc"
+spark-http-proxy certs generate "*.project.loc"
 ```
 
-The `generate-mkcert` command automatically:
+The `certs generate` command automatically:
 
 - **Installs mkcert** if not already available (using Homebrew on macOS)
 - **Creates the certificate directory** (`~/.local/spark/http-proxy/certs`)
@@ -540,23 +540,57 @@ The `generate-mkcert` command automatically:
 - **Applies the certificate** to the running proxy, without restarting it and
   without dropping connections to anything else it is serving
 
-#### Listing and Removing Certificates
+#### Listing, Describing and Removing Certificates
 
-List the certificates currently installed in the certificate directory:
+List the certificates currently installed, one row each, with the file that holds the certificate and the one that holds its key:
 
 ```bash
-spark-http-proxy list-certs
+spark-http-proxy certs list
 ```
+
+```
+Certificates in ~/.local/spark/http-proxy/certs
+
+DOMAIN                    CERTIFICATE                   KEY
+api.spark.loc             api.spark.loc.pem             api.spark.loc-key.pem
+*.spark.loc               _wildcard_.spark.loc.pem      _wildcard_.spark.loc-key.pem
+
+2 certificates. Remove one with: spark-http-proxy certs delete '*.spark.loc'
+```
+
+A wildcard is stored as `_wildcard_`, and a key that is not beside its certificate shows as `missing`. `certs list` needs neither Docker nor the proxy.
+
+Describe one certificate to see what it covers, its validity, who issued it, and whether the running proxy is serving it. Name a hostname instead of a certificate and the command finds the certificate that covers it, or says why none does:
+
+```bash
+spark-http-proxy certs describe "*.spark.loc"
+spark-http-proxy certs describe "app.spark.loc"      # covered by *.spark.loc
+spark-http-proxy certs describe "a.b.spark.loc"      # not covered: a wildcard matches one label
+```
+
+```
+*.spark.loc
+  certificate    ~/.local/spark/http-proxy/certs/_wildcard_.spark.loc.pem
+  private key    ~/.local/spark/http-proxy/certs/_wildcard_.spark.loc-key.pem
+  covers         *.spark.loc
+  valid          2025-07-13 to 2027-10-13
+  issued by      mkcert paolo@workstation
+  served         yes, by the running proxy
+```
+
+`certs describe` reads the certificate with `openssl`, which sparkdock installs as `openssl@3`. Without a usable `openssl` it stops with a message saying so; the other `certs` commands do not depend on it.
 
 Remove certificate pairs for one or more domains. This deletes both the `.pem` and `-key.pem` files and applies the change to the running proxy, which stops serving the removed certificates without being restarted:
 
 ```bash
-spark-http-proxy remove-cert "nginx.spark.loc"
-spark-http-proxy remove-cert "*.spark.loc"
-spark-http-proxy remove-cert "nginx.spark.loc" "api.spark.loc" "*.old.loc"
+spark-http-proxy certs delete "nginx.spark.loc"
+spark-http-proxy certs delete "*.spark.loc"
+spark-http-proxy certs delete "nginx.spark.loc" "api.spark.loc" "*.old.loc"
 ```
 
-Pass the same domains you used with `generate-mkcert`, including wildcards. The command lists every match, reports any domain it cannot find, and asks for a single confirmation before deleting.
+Pass the same domains you used with `certs generate`, including wildcards. The command lists every match, reports any domain it cannot find, and asks for a single confirmation before deleting.
+
+The former names `generate-mkcert`, `list-certs` and `remove-cert` still work, print a deprecation warning naming their replacement, and are no longer listed in the help or the shell completion.
 
 #### Manual Certificate Generation (Alternative)
 
@@ -575,7 +609,7 @@ mkcert -cert-file ~/.local/spark/http-proxy/certs/wildcard.loc.pem \
        "*.loc"
 ```
 
-**Note**: A certificate written by hand is not picked up on its own. It is applied the next time the proxy starts, or immediately with `spark-http-proxy restart`. Certificates made with `spark-http-proxy generate-mkcert` need neither.
+**Note**: A certificate written by hand is not picked up on its own. It is applied the next time the proxy starts, or immediately with `spark-http-proxy restart`. Certificates made with `spark-http-proxy certs generate` need neither.
 
 #### Start the proxy
 
@@ -587,7 +621,7 @@ spark-http-proxy start
 
 Start it this way rather than with `docker compose` directly. The command creates the directories the proxy bind-mounts before the containers do. Docker creates a missing bind-mount source itself, owned by root, and a certificate directory owned by root cannot be written to afterwards.
 
-If a machine already reached that state, `generate-mkcert` fails with a permission error and peer routing stops with a `chmod` error. Take the directories back:
+If a machine already reached that state, `certs generate` fails with a permission error and peer routing stops with a `chmod` error. Take the directories back:
 
 ```bash
 sudo chown -R "$(id -un)" ~/.local/spark/http-proxy/certs ~/.local/spark/http-proxy/state
@@ -832,7 +866,7 @@ forwarding any hostname it does not serve locally to `http://<peer>:80` with the
   does not itself serve. A wildcard covers one label level, so `*.spark.loc`
   covers `app.spark.loc` but not `app.client.spark.loc`, and a forwarded
   hostname outside the wildcard you hold produces a browser warning until you
-  run `spark-http-proxy generate-mkcert` for it. Improving this is tracked in
+  run `spark-http-proxy certs generate` for it. Improving this is tracked in
   [#118](https://github.com/sparkfabrik/http-proxy/issues/118).
 - **Only your own machines are used.** A machine is used when the Tailscale
   status document says it belongs to the same account as this one. That check
@@ -1029,7 +1063,7 @@ $ curl https://macos.test.spark.loc/
 The fix is the usual command, run on the machine doing the reaching:
 
 ```bash
-spark-http-proxy generate-mkcert 'macos.test.spark.loc'
+spark-http-proxy certs generate 'macos.test.spark.loc'
 ```
 
 **A wildcard covers exactly one label, which is the part that surprises people.**
