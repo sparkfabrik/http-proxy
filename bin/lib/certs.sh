@@ -213,18 +213,21 @@ certs_list() {
   echo "${summary}. Remove one with: $(basename "${0}") certs delete '${domain}'"
 }
 
-# One check before describe prints anything: can this openssl read this
-# certificate, extensions included? The invocations used below exist in both
-# OpenSSL and LibreSSL, so this fails on a missing openssl or an unreadable
-# file, and describe stops rather than printing a record with holes in it.
+# One check before describe prints anything: is openssl there, and, when a
+# certificate is named, can it read that file, extensions included? The
+# invocations used below exist in both OpenSSL and LibreSSL, so this fails on a
+# missing openssl or an unreadable file, and describe stops rather than
+# printing a record with holes in it.
 require_openssl() {
-  local cert_file="$1" err
+  local cert_file="${1:-}" err
 
   if ! command -v openssl >/dev/null 2>&1; then
     log_error "openssl is not installed, and describe reads the certificate with it"
     log_info "sparkdock installs it as openssl@3; on Arch: pacman -S openssl. list, generate and delete work without it"
     return 1
   fi
+
+  [[ -z "${cert_file}" ]] && return 0
 
   if ! err="$(openssl x509 -in "${cert_file}" -noout -text -startdate -enddate -issuer 2>&1 >/dev/null)" ||
     ! openssl x509 -in "${cert_file}" -noout -text 2>/dev/null | grep -q 'Subject Alternative Name'; then
@@ -319,11 +322,7 @@ certs_describe() {
 
   # No certificate by that name. One may still cover it, and the answer comes
   # from the names inside the certificates, not from their filenames.
-  local first
-  first="$(cert_files | head -n 1)"
-  if [[ -n "${first}" ]]; then
-    require_openssl "${first}" || return 1
-  fi
+  require_openssl || return 1
   while IFS= read -r cert_file; do
     [[ -z "${cert_file}" ]] && continue
     names="$(cert_dns_names "${cert_file}")"
