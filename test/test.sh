@@ -2025,6 +2025,23 @@ test_state_dir_and_library_loading() {
         chmod 700 "${dir}/locked"
     fi
 
+    # ~ abbreviation applies to HOME and paths under it, not to a sibling whose
+    # name merely starts with the same characters.
+    total=$((total + 1))
+    out="$(HOME=/home/dev bash -c '
+        log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
+        . bin/lib/hosts.sh
+        hosts_abbreviate /home/dev; echo
+        hosts_abbreviate /home/dev/app; echo
+        hosts_abbreviate /home/dev-old/app; echo')"
+    if [ "${out}" = "~
+~/app
+/home/dev-old/app" ]; then
+        passed=$((passed + 1))
+    else
+        log "❌ hosts_abbreviate mishandled HOME or a sibling path: ${out}"
+    fi
+
     # A checkout without bin/lib must fail rather than fall through to compose.
     total=$((total + 1))
     cp -R bin "${dir}/bin"

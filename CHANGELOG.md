@@ -51,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `hosts` reports only what Traefik serves, including containers whose rule names several hostnames
 - Commands no longer abort on a state directory Docker created as root; they say how to take it back
 - The certificate scan reports a write it could not make ([#151](https://github.com/sparkfabrik/http-proxy/issues/151))
 - The README starts the proxy with the CLI rather than compose, which left directories owned by root ([#150](https://github.com/sparkfabrik/http-proxy/issues/150))
