@@ -56,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A certificate whose hostname contains `-key`, such as `my-keycloak.spark.loc`, is served: the key filter in the Traefik entrypoint matches the `-key.pem` suffix instead of the substring ([#163](https://github.com/sparkfabrik/http-proxy/issues/163))
 - `hosts` reports only what Traefik serves, including containers whose rule names several hostnames
 - Commands no longer abort on a state directory Docker created as root; they say how to take it back
 - The certificate scan reports a write it could not make ([#151](https://github.com/sparkfabrik/http-proxy/issues/151))

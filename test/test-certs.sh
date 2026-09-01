@@ -55,7 +55,7 @@ DYNAMIC_DIR="${TEMP_DYNAMIC_DIR}"
 TLS_CONFIG_FILE="${DYNAMIC_DIR}/auto-tls.yml"
 
 # Look for certificate files (both .pem and .crt extensions)
-cert_files=$(find "${CERTS_DIR}" -name "*.pem" -o -name "*.crt" | grep -v "\-key" | head -10)
+cert_files=$(find "${CERTS_DIR}" \( -name "*.pem" -o -name "*.crt" \) ! -name "*-key.pem" ! -name "*-key.crt" | head -10)
 
 if [ -z "$cert_files" ]; then
     echo "❌ ERROR: No certificate files found!"
