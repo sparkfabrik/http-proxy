@@ -155,6 +155,8 @@ TAILSCALE_SUMMARY_FILE="${STATE_DIR}/tailscale-peers-summary"
 # Read by bin/lib/hosts.sh, which shellcheck follows only with -x.
 # shellcheck disable=SC2034
 HOSTS_STATE_FILE="${STATE_DIR}/hosts.tsv"
+# shellcheck disable=SC2034
+HOSTS_JSON_FILE="${STATE_DIR}/hosts.json"
 TAILSCALE_SOCKET_OVERRIDE="$(dirname "${COMPOSE_FILE}")/compose.tailscale-socket.yml"
 TAILSCALE_STATUS_LOG="${STATE_DIR}/tailscale-status.log"
 STATUS_AGENT_LABEL="com.sparkfabrik.http-proxy.tailscale-status"

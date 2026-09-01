@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -791,5 +792,42 @@ func TestWriteHostsFileLeavesNoTemporaryFile(t *testing.T) {
 		if strings.HasSuffix(e.Name(), ".tmp") {
 			t.Errorf("a temporary file was left behind: %s", e.Name())
 		}
+	}
+}
+
+func TestWriteHostsFileAlsoPublishesParseableJSON(t *testing.T) {
+	dir := t.TempDir()
+	cl := NewCompatibilityLayer(&CompatibilityConfig{
+		TraefikDynamicDir: dir,
+		HostsStateFile:    filepath.Join(dir, "hosts.tsv"),
+		HostsJSONFile:     filepath.Join(dir, "hosts.json"),
+	})
+	cl.recordHosts("a", ContainerInfo{Name: "app-1", VirtualHost: "one.spark.loc", Directory: "/home/dev/app"}, "virtual-host")
+	cl.recordHosts("b", ContainerInfo{Name: "other-1", VirtualHost: "two.spark.loc"}, "traefik-labels")
+
+	if err := cl.writeHostsFile(); err != nil {
+		t.Fatalf("writing failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "hosts.json"))
+	if err != nil {
+		t.Fatalf("reading the json back failed: %v", err)
+	}
+
+	var entries []hostEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		t.Fatalf("hosts --json would not parse: %v\n%s", err, data)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected two entries, got %d: %+v", len(entries), entries)
+	}
+	if entries[0].Hostname != "one.spark.loc" || entries[0].Directory != "/home/dev/app" {
+		t.Errorf("the first entry lost a field: %+v", entries[0])
+	}
+	if entries[1].Directory != "" {
+		t.Errorf("a container with no directory should omit it, got %q", entries[1].Directory)
+	}
+	if entries[1].Routing != "traefik-labels" {
+		t.Errorf("routing was not published: %+v", entries[1])
 	}
 }

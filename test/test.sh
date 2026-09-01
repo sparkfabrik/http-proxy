@@ -2061,6 +2061,78 @@ test_hosts_command() {
         error "describe reported success for an unserved hostname"
     fi
 
+    # --json must be JSON, not the TSV the CLI reads.
+    printf '[\n  {\n    "hostname": "local.spark.loc"\n  }\n]\n' >"${dir}/hosts.json"
+    rc=0
+    out="$(env HOSTS_JSON_FILE="${dir}/hosts.json" HOSTS_STATE_FILE="${dir}/hosts.tsv" \
+        TAILSCALE_SUMMARY_FILE="${dir}/summary" bash -c '
+            log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
+            . bin/lib/hosts.sh
+            hosts_command --json' 2>&1)" || rc=$?
+
+    total=$((total + 1))
+    if [ "${rc}" -eq 0 ] && [[ "${out}" == \[* ]] && echo "${out}" | grep -q '"hostname"'; then
+        success "--json emits JSON rather than the tab-separated file"
+        passed=$((passed + 1))
+    else
+        error "--json did not emit JSON, exit ${rc}: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # An older services image writes no state file at all, and saying nothing is
+    # served would be a confident wrong answer while containers are running.
+    run_absent() {
+        env HOSTS_STATE_FILE="${dir}/absent.tsv" HOSTS_JSON_FILE="${dir}/absent.json" \
+            TAILSCALE_SUMMARY_FILE=/dev/null RUNNING="$1" bash -c '
+                log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
+                is_running(){ [ "${RUNNING}" = "yes" ]; }
+                . bin/lib/hosts.sh
+                hosts_list' 2>&1
+    }
+
+    rc=0
+    out="$(run_absent yes)" || rc=$?
+    total=$((total + 1))
+    if [ "${rc}" -ne 0 ] && echo "${out}" | grep -q "older than this command" && echo "${out}" | grep -q "upgrade"; then
+        success "a missing state file with the proxy running names the image skew"
+        passed=$((passed + 1))
+    else
+        error "version skew was not reported, exit ${rc}: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    total=$((total + 1))
+    if ! echo "${out}" | grep -q "Nothing is being served"; then
+        success "and does not claim that nothing is being served"
+        passed=$((passed + 1))
+    else
+        error "a missing state file was reported as nothing being served"
+    fi
+
+    rc=0
+    out="$(run_absent no)" || rc=$?
+    total=$((total + 1))
+    if [ "${rc}" -ne 0 ] && echo "${out}" | grep -q "not running"; then
+        success "a missing state file with the proxy stopped says so instead"
+        passed=$((passed + 1))
+    else
+        error "a stopped proxy was not reported, exit ${rc}: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # An empty file is the genuine case, and that message is right.
+    : >"${dir}/empty.tsv"
+    rc=0
+    out="$(env HOSTS_STATE_FILE="${dir}/empty.tsv" TAILSCALE_SUMMARY_FILE=/dev/null bash -c '
+        log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
+        is_running(){ return 0; }
+        . bin/lib/hosts.sh
+        hosts_list' 2>&1)" || rc=$?
+    total=$((total + 1))
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "Nothing is being served"; then
+        success "an empty state file reports nothing served, which is true"
+        passed=$((passed + 1))
+    else
+        error "an empty state file was not handled, exit ${rc}: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
     # The dispatch must be registered, or the fallthrough hands `hosts` to compose.
     total=$((total + 1))
     if awk '/^hosts\)/,/^  ;;/' bin/spark-http-proxy | grep -q "hosts_command"; then

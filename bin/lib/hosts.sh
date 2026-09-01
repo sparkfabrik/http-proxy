@@ -42,7 +42,11 @@ hosts_remote_rows() {
   [[ -r "${file}" ]] || return 0
 
   while IFS=$'\t' read -r machine hosts trailing; do
-    [[ -z "${machine}" || -z "${hosts}" || -n "${trailing}" ]] && continue
+    if [[ -z "${machine}" || -z "${hosts}" || -n "${trailing}" ]]; then
+      # An omission, not a wrong answer, so it is reported and skipped.
+      log_warning "Skipping a peer record this version does not recognise" >&2
+      continue
+    fi
     while IFS= read -r hostname; do
       [[ -n "${hostname}" ]] && printf '%s\t%s\n' "${hostname}" "${machine}"
     done < <(tr ',' '\n' <<<"${hosts}")
@@ -56,11 +60,28 @@ hosts_abbreviate() {
   printf '%s' "${path/#${HOME}/\~}"
 }
 
+# An absent state file means the services image predates this command, which is
+# routine: the CLI updates over git and the images from the registry.
+hosts_report_missing_state() {
+  if declare -F is_running >/dev/null 2>&1 && is_running http-proxy; then
+    log_error "The proxy is running but its services image is older than this command"
+    log_info "Update the images with: ${0} upgrade"
+    return 0
+  fi
+  log_error "No record of what is being served, because the proxy is not running"
+  log_info "Start it with: ${0} start"
+}
+
 hosts_list() {
   local rows=() hostname container directory routing machine local_out line rest
   local w_host=8 w_machine=7 w_container=9
 
   # Command substitution: a `return 1` inside `< <(...)` never reaches here.
+  if [[ ! -r "${HOSTS_STATE_FILE}" ]]; then
+    hosts_report_missing_state
+    return 1
+  fi
+
   if ! local_out="$(hosts_local_rows)"; then
     return 1
   fi
@@ -110,6 +131,11 @@ hosts_describe() {
     return 1
   fi
 
+  if [[ ! -r "${HOSTS_STATE_FILE}" ]]; then
+    hosts_report_missing_state
+    return 1
+  fi
+
   if ! local_out="$(hosts_local_rows)"; then
     return 1
   fi
@@ -153,8 +179,11 @@ hosts_command() {
   list) hosts_list ;;
   describe) hosts_describe "${2:-}" ;;
   --json)
-    # The state file itself, as tailscale-peers --json does.
-    [[ -r "${HOSTS_STATE_FILE}" ]] && cat "${HOSTS_STATE_FILE}"
+    if [[ ! -r "${HOSTS_JSON_FILE}" ]]; then
+      hosts_report_missing_state
+      return 1
+    fi
+    cat "${HOSTS_JSON_FILE}"
     ;;
   *)
     log_error "Unknown option: ${subcommand}"

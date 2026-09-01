@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -65,6 +66,14 @@ type hostRow struct {
 	routing   string
 }
 
+// hostEntry is hostRow as `hosts --json` publishes it.
+type hostEntry struct {
+	Hostname  string `json:"hostname"`
+	Container string `json:"container"`
+	Directory string `json:"directory,omitempty"`
+	Routing   string `json:"routing"`
+}
+
 // routeClaim identifies a route by what a request has to match to reach it.
 // The empty path is the host's own route, so two containers claiming a bare
 // host collide on the same key as two claiming the same path.
@@ -90,6 +99,8 @@ type CompatibilityConfig struct {
 	TraefikDynamicDir string
 	// HostsStateFile is what `spark-http-proxy hosts` reads. Empty disables it.
 	HostsStateFile string
+	// HostsJSONFile is the same rows as JSON, for `hosts --json`.
+	HostsJSONFile string
 }
 
 // Validate checks if the configuration is valid
@@ -168,10 +179,6 @@ func (cl *CompatibilityLayer) recordHosts(containerID string, info ContainerInfo
 
 // writeHostsFile rewrites the state file from memory, in a stable order.
 func (cl *CompatibilityLayer) writeHostsFile() error {
-	if cl.config.HostsStateFile == "" {
-		return nil
-	}
-
 	rows := make([]hostRow, 0, len(cl.hosts))
 	for _, containerRows := range cl.hosts {
 		rows = append(rows, containerRows...)
@@ -183,16 +190,45 @@ func (cl *CompatibilityLayer) writeHostsFile() error {
 		return strings.Compare(a.container, b.container)
 	})
 
-	var b strings.Builder
-	for _, row := range rows {
-		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\n", row.hostname, row.container, row.directory, row.routing)
+	if cl.config.HostsStateFile != "" {
+		var b strings.Builder
+		for _, row := range rows {
+			fmt.Fprintf(&b, "%s\t%s\t%s\t%s\n", row.hostname, row.container, row.directory, row.routing)
+		}
+		if err := writeFileAtomically(cl.config.HostsStateFile, []byte(b.String())); err != nil {
+			return err
+		}
 	}
 
-	temp := cl.config.HostsStateFile + ".tmp"
-	if err := os.WriteFile(temp, []byte(b.String()), ConfigFilePermissions); err != nil {
+	if cl.config.HostsJSONFile == "" {
+		return nil
+	}
+
+	// Published as JSON too, because `hosts --json` must be parseable and the
+	// CLI has no JSON writer.
+	entries := make([]hostEntry, 0, len(rows))
+	for _, row := range rows {
+		entries = append(entries, hostEntry{
+			Hostname:  row.hostname,
+			Container: row.container,
+			Directory: row.directory,
+			Routing:   row.routing,
+		})
+	}
+	data, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal the hosts entries: %w", err)
+	}
+	return writeFileAtomically(cl.config.HostsJSONFile, append(data, '\n'))
+}
+
+// writeFileAtomically writes through a temporary file and a rename.
+func writeFileAtomically(path string, data []byte) error {
+	temp := path + ".tmp"
+	if err := os.WriteFile(temp, data, ConfigFilePermissions); err != nil {
 		return fmt.Errorf("failed to write %s: %w", temp, err)
 	}
-	if err := os.Rename(temp, cl.config.HostsStateFile); err != nil {
+	if err := os.Rename(temp, path); err != nil {
 		os.Remove(temp)
 		return fmt.Errorf("failed to rename %s: %w", temp, err)
 	}
@@ -301,6 +337,7 @@ func main() {
 		LogLevel:          config.GetEnvOrDefault("LOG_LEVEL", "info"),
 		TraefikDynamicDir: config.GetEnvOrDefault("TRAEFIK_DYNAMIC_DIR", DefaultTraefikDynamicDir),
 		HostsStateFile:    config.GetEnvOrDefault("HOSTS_STATE_FILE", config.DefaultHostsStateFile),
+		HostsJSONFile:     config.GetEnvOrDefault("HOSTS_JSON_FILE", config.DefaultHostsJSONFile),
 	}
 
 	// Validate configuration

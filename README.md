@@ -140,10 +140,13 @@ macos.test.spark.loc                   Mac-Test  -                      -
 
 `hosts describe <hostname>` reports one host, including how it is routed. A remote
 host shows the machine and no directory: local paths are not published to the
-tailnet. `hosts --json` prints the state file the command reads.
+tailnet. `hosts --json` prints the same rows as JSON.
 
 Directories come from the compose working directory, or the first bind mount for a
 container started with `docker run`.
+
+If the services image predates this command it writes no record, and `hosts` says so
+and names `upgrade` rather than reporting that nothing is served.
 
 ### Optional Commands
 
