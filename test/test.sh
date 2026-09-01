@@ -2584,6 +2584,26 @@ COLLIDING
         error "a file that could not be put back was deleted (rc=${rc}, holding='${holding_named}'): ${out}"
     fi
 
+    # The holding directory holds private keys, so a cleanup that fails must be
+    # reported rather than counted as a deletion.
+    total=$((total + 1))
+    printf 'C' >"${dir}/leftover.pem"
+    printf 'K' >"${dir}/leftover-key.pem"
+    out="$(env CERT_DIR="${dir}" bash -c '
+        log_info(){ echo "$1"; }; log_warning(){ echo "$1" >&2; }; log_error(){ echo "$1" >&2; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/certs.sh
+        # Every move succeeds; only the final cleanup fails.
+        rm(){ case "$*" in *.remove.*) return 1 ;; *) command rm "$@" ;; esac; }
+        certs_remove_files "$1" "$2"' _ "${dir}/leftover.pem" "${dir}/leftover-key.pem" 2>&1)" && rc=0 || rc=$?
+    if [ "${rc}" -ne 0 ] && grep -q "private keys" <<<"${out}" &&
+        grep -qE '\.remove\.' <<<"${out}"; then
+        passed=$((passed + 1))
+    else
+        error "a failed cleanup was reported as a clean deletion (rc=${rc}): ${out}"
+    fi
+
     rm -rf "${dir}"
     log "Certs command tests: ${passed}/${total} passed"
     [ "${passed}" -eq "${total}" ]

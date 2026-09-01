@@ -466,7 +466,13 @@ certs_remove_files() {
     moved+=("${file}")
   done
 
-  rm -rf "${holding}"
+  # The holding directory contains private keys. A cleanup that fails silently
+  # would leave them on disk while the command reports them deleted.
+  if ! rm -rf "${holding}"; then
+    log_warning "The files were removed from ${CERT_DIR} but copies remain in ${holding}"
+    log_info "Delete that directory: it contains private keys"
+    return 1
+  fi
   return 0
 }
 
