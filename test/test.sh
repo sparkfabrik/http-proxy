@@ -2462,6 +2462,38 @@ COLLIDING
         error "a failed key install left a mismatched pair (rc=${rc}, cert=$(cat "${dir}/rollback.spark.loc.pem")): ${out}"
     fi
 
+    # Without a usable rollback copy nothing may be overwritten: the failure
+    # mode otherwise is no certificate at all where a working one existed.
+    total=$((total + 1))
+    printf 'KEEP-CERT' >"${dir}/nobackup.spark.loc.pem"
+    printf 'KEEP-KEY' >"${dir}/nobackup.spark.loc-key.pem"
+    out="$(env CERT_DIR="${dir}" bash -c '
+        log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }; log_success(){ echo "SUCCESS"; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/certs.sh
+        install_mkcert(){ return 0; }
+        mkcert(){
+            local cert="" key=""
+            while [ "$#" -gt 0 ]; do
+                case "$1" in
+                    -cert-file) cert="$2"; shift ;;
+                    -key-file) key="$2"; shift ;;
+                esac
+                shift
+            done
+            printf "NEW" >"${cert}"; printf "NEW" >"${key}"
+        }
+        cp() { return 1; }
+        apply_certificates(){ echo "APPLIED"; }
+        certs_generate nobackup.spark.loc' 2>&1)" && rc=0 || rc=$?
+    if [ "${rc}" -ne 0 ] && ! grep -q "APPLIED" <<<"${out}" &&
+        [ "$(cat "${dir}/nobackup.spark.loc.pem")" = "KEEP-CERT" ]; then
+        passed=$((passed + 1))
+    else
+        error "an unbackupable certificate was overwritten anyway (rc=${rc}): ${out}"
+    fi
+
     rm -rf "${dir}"
     log "Certs command tests: ${passed}/${total} passed"
     [ "${passed}" -eq "${total}" ]
@@ -2902,6 +2934,17 @@ test_hosts_command() {
         passed=$((passed + 1))
     else
         log "❌ a URL password was printed: got ${redacted}"
+    fi
+
+    # A value beginning with - cannot be told from the next flag, so it is
+    # redacted: losing a flag name from the display leaks nothing, printing a
+    # credential does.
+    total=$((total + 1))
+    redacted="$(printf 'sh\n-c\nserve --token -secret --host db\n' | redact)"
+    if [ "${redacted}" = 'sh -c serve --token <redacted> --host db' ]; then
+        passed=$((passed + 1))
+    else
+        log "❌ a credential beginning with a dash was printed: got ${redacted}"
     fi
 
     rm -rf "${dir}"

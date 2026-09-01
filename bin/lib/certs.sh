@@ -376,10 +376,18 @@ certs_generate() {
 
   # Both files or neither: a certificate installed beside the previous key is a
   # mismatched pair the proxy would serve.
+  # Nothing is overwritten until it can be put back. Proceeding without a
+  # rollback copy risks the worse outcome: a removed new certificate and no old
+  # one either, where before there was a working pair.
   local previous=""
   if [[ -f "${CERT_DIR}/${safe_filename}.pem" ]]; then
     previous="${staging}/previous-cert.pem"
-    cp "${CERT_DIR}/${safe_filename}.pem" "${previous}" 2>/dev/null || previous=""
+    if ! cp "${CERT_DIR}/${safe_filename}.pem" "${previous}"; then
+      rm -rf "${staging}"
+      log_error "The certificate already installed could not be copied aside, so it was left alone"
+      log_info "Nothing was changed. The proxy still serves what it did before."
+      return 1
+    fi
   fi
 
   if ! mv "${staging}/cert.pem" "${CERT_DIR}/${safe_filename}.pem"; then
@@ -390,8 +398,14 @@ certs_generate() {
 
   if ! mv "${staging}/key.pem" "${CERT_DIR}/${safe_filename}-key.pem"; then
     if [[ -n "${previous}" ]]; then
-      mv "${previous}" "${CERT_DIR}/${safe_filename}.pem"
-      log_error "The key could not be installed, so the previous certificate was put back"
+      if mv "${previous}" "${CERT_DIR}/${safe_filename}.pem"; then
+        log_error "The key could not be installed, so the previous certificate was put back"
+      else
+        log_error "The key could not be installed and the previous certificate could not be restored"
+        log_info "A copy of it is at ${previous}. Put it back before the proxy reloads."
+        rm -rf "${staging}" 2>/dev/null || true
+        return 1
+      fi
     else
       rm -f "${CERT_DIR}/${safe_filename}.pem"
       log_error "The key could not be installed, so the new certificate was removed"
