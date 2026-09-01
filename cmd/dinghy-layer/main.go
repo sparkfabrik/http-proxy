@@ -169,9 +169,11 @@ var (
 
 // traefikExposed reports whether Traefik serves this container. The Docker
 // provider runs with exposedByDefault false, so a container is routed only when
-// it opts in, and one that did not is not serving its rules.
+// it opts in. Traefik parses the label as a Go boolean, so True, TRUE, t and 1
+// all enable it, and anything unparseable does not.
 func traefikExposed(labels map[string]string) bool {
-	return labels["traefik.enable"] == "true"
+	enabled, err := strconv.ParseBool(labels["traefik.enable"])
+	return err == nil && enabled
 }
 
 // labelHostnames are the hostnames a container's own Traefik rules claim, which
@@ -212,7 +214,7 @@ func virtualHostNames(virtualHost string) []string {
 // record or reach the reader's terminal as escape sequences.
 func sanitizeField(value string) string {
 	return strings.Map(func(r rune) rune {
-		if r == 0x7f || (r < 0x20 && r != '\t') {
+		if r == 0x7f || (r >= 0x80 && r <= 0x9f) || (r < 0x20 && r != '\t') {
 			return -1
 		}
 		if r == '\t' {
@@ -503,9 +505,13 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 	// mounted path, and silent at debug level, so say it plainly instead.
 	if utils.HasTraefikLabel(inspect.Config.Labels) {
 		// Recorded though Traefik routes it, so hosts shows the whole picture.
+		// Always recorded, with nothing when the container is not exposed, so
+		// turning traefik.enable off clears the rows it had.
+		var served []string
 		if traefikExposed(inspect.Config.Labels) {
-			cl.recordHosts(containerID, containerInfo, "traefik-labels", labelHostnames(inspect.Config.Labels))
+			served = labelHostnames(inspect.Config.Labels)
 		}
+		cl.recordHosts(containerID, containerInfo, "traefik-labels", served)
 		if containerInfo.VirtualHost != "" {
 			cl.logger.Warn("Ignoring VIRTUAL_HOST and VIRTUAL_PATH on a container carrying a traefik. label",
 				"container_id", utils.FormatDockerID(containerID),

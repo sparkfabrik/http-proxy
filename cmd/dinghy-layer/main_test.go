@@ -889,6 +889,32 @@ func TestLabelHostnamesTakesEveryHostnameInAMatcher(t *testing.T) {
 	}
 }
 
+// Asserts recordHosts's half of the contract only. That the caller always calls
+// it, so disabling a container clears its rows, is not covered: the call site is
+// in processContainer, which needs a Docker client this package cannot fake.
+func TestRecordingNothingClearsAContainersRows(t *testing.T) {
+	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: t.TempDir()})
+	info := ContainerInfo{Name: "app-1"}
+
+	cl.recordHosts("abc", info, "traefik-labels", []string{"a.spark.loc"})
+	if len(cl.hosts["abc"]) != 1 {
+		t.Fatalf("expected the row to be recorded first, got %v", cl.hosts["abc"])
+	}
+
+	// What the caller passes when the container is no longer exposed.
+	cl.recordHosts("abc", info, "traefik-labels", nil)
+	if rows, ok := cl.hosts["abc"]; ok {
+		t.Errorf("rows survived the container being disabled: %v", rows)
+	}
+}
+
+func TestSanitizeFieldStripsC1Controls(t *testing.T) {
+	// U+009B is a control-sequence introducer, so a terminal acts on it.
+	if got := sanitizeField("a\u009b31mb"); got != "a31mb" {
+		t.Errorf("C1 control survived: %q", got)
+	}
+}
+
 func TestRecordedFieldsCarryNoControlCharacters(t *testing.T) {
 	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: t.TempDir()})
 	info := ContainerInfo{
@@ -925,7 +951,13 @@ func TestOnlyAnExposedContainerCountsAsServed(t *testing.T) {
 		want   bool
 	}{
 		{"opted in", map[string]string{"traefik.enable": "true"}, true},
+		{"capitalised", map[string]string{"traefik.enable": "True"}, true},
+		{"upper case", map[string]string{"traefik.enable": "TRUE"}, true},
+		{"one", map[string]string{"traefik.enable": "1"}, true},
+		{"t", map[string]string{"traefik.enable": "t"}, true},
 		{"opted out", map[string]string{"traefik.enable": "false"}, false},
+		{"zero", map[string]string{"traefik.enable": "0"}, false},
+		{"not a boolean", map[string]string{"traefik.enable": "yes"}, false},
 		{"no enable label", map[string]string{"traefik.http.routers.app.rule": "Host(`a.loc`)"}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
