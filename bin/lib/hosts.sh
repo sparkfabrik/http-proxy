@@ -118,9 +118,9 @@ hosts_list() {
 
 # Redacts credential values in a command line. Two mechanisms, because a
 # credential appears two ways: as its own argument after a flag, and inside one
-# argument such as the script passed to sh -c. Arguments arrive one per line so
-# the first case can replace the whole value however many spaces it contains, and
-# the second is applied within each argument. Matched on the flag NAME: guessing
+# argument such as the script passed to sh -c. Arguments arrive NUL separated,
+# not newline separated: an argument containing a newline would otherwise be read
+# as two, and only its first line redacted. Matched on the flag NAME: guessing
 # from the shape of a value hides the wrong things.
 HOSTS_SECRET='[Aa][Uu][Tt][Hh]|[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Pp][Aa][Ss][Ss][Pp][Hh][Rr][Aa][Ss][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Kk][Ee][Yy]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Bb][Ee][Aa][Rr][Ee][Rr]'
 
@@ -132,7 +132,7 @@ hosts_redact_args() {
   # value. Neither is complete cover and nothing here claims to be.
   local assignment="([A-Za-z_][A-Za-z0-9_]*(${HOSTS_SECRET})[A-Za-z0-9_]*)"
 
-  while IFS= read -r arg; do
+  while IFS= read -r -d '' arg; do
     [[ -z "${arg}" ]] && continue
     original="${arg}"
     if [[ "${prev}" =~ ^--?[A-Za-z0-9_-]*(${HOSTS_SECRET})[A-Za-z0-9_-]*$ ]]; then
@@ -292,7 +292,7 @@ hosts_describe_local() {
   done <<<"${mounts}"
 
   if [[ -n "${path}" ]]; then
-    command_line="$(docker inspect -f '{{.Path}}{{println}}{{range .Args}}{{println .}}{{end}}' "${container}" 2>/dev/null |
+    command_line="$(docker inspect -f '{{.Path}}{{printf "\x00"}}{{range .Args}}{{printf "%s\x00" .}}{{end}}' "${container}" 2>/dev/null |
       hosts_redact_args)"
     printf '  command        %s\n' "${command_line}"
   fi

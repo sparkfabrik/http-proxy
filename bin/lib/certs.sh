@@ -426,11 +426,32 @@ certs_generate() {
 # Separate from certs_delete so it can be exercised: everything above it needs a
 # terminal to confirm, which a test does not have.
 certs_remove_files() {
-  if ! rm -f "$@"; then
-    log_error "Some files could not be removed, so nothing is being applied"
-    log_info "Check what is left with: $(basename "${0}") certs list"
+  # All or nothing. A plain rm over several files can delete the certificate and
+  # fail on its key, leaving a pair the proxy would try to serve. The files are
+  # moved aside first and only discarded once every move has succeeded; a move
+  # that fails puts back the ones already moved.
+  local holding file base moved=()
+  holding="$(mktemp -d "${CERT_DIR}/.remove.XXXXXX")" || {
+    log_error "Could not create a working directory in ${CERT_DIR}, so nothing was removed"
     return 1
-  fi
+  }
+
+  for file in "$@"; do
+    base="$(basename "${file}")"
+    if ! mv "${file}" "${holding}/${base}"; then
+      local undo
+      for undo in "${moved[@]}"; do
+        mv "${holding}/$(basename "${undo}")" "${undo}" 2>/dev/null || true
+      done
+      rm -rf "${holding}"
+      log_error "${base} could not be removed, so nothing was removed"
+      log_info "Check what is installed with: $(basename "${0}") certs list"
+      return 1
+    fi
+    moved+=("${file}")
+  done
+
+  rm -rf "${holding}"
   return 0
 }
 

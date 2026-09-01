@@ -2337,12 +2337,33 @@ CASES
         # shellcheck source=/dev/null
         . "${LIB_HELPERS}"
         . bin/lib/certs.sh
-        rm(){ return 1; }
+        mv(){ return 1; }
         certs_remove_files "$1"' _ "${dir}/protected.pem" 2>&1)" && rc=0 || rc=$?
-    if [ "${rc}" -ne 0 ] && grep -q "could not be removed" <<<"${out}"; then
+    if [ "${rc}" -ne 0 ] && grep -q "could not be removed" <<<"${out}" &&
+        [ -f "${dir}/protected.pem" ]; then
         passed=$((passed + 1))
     else
-        error "a failed removal was reported as success (rc=${rc}): ${out}"
+        error "a failed removal was reported as success or lost the file (rc=${rc}): ${out}"
+    fi
+
+    # A removal that fails halfway must put back what it already moved, or the
+    # proxy is left with a certificate whose key is gone.
+    total=$((total + 1))
+    printf 'CERT' >"${dir}/pair.pem"
+    printf 'KEY' >"${dir}/pair-key.pem"
+    out="$(env CERT_DIR="${dir}" bash -c '
+        log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/certs.sh
+        # Succeeds on the certificate, fails on the key: the partial case.
+        mv(){ case "$1" in *-key.pem) return 1 ;; *) command mv "$@" ;; esac; }
+        certs_remove_files "$1" "$2"' _ "${dir}/pair.pem" "${dir}/pair-key.pem" 2>&1)" && rc=0 || rc=$?
+    if [ "${rc}" -ne 0 ] && [ -f "${dir}/pair.pem" ] && [ -f "${dir}/pair-key.pem" ] &&
+        [ "$(cat "${dir}/pair.pem")" = "CERT" ]; then
+        passed=$((passed + 1))
+    else
+        error "a partial removal left the pair broken (rc=${rc}, cert=$([ -f "${dir}/pair.pem" ] && echo present || echo gone), key=$([ -f "${dir}/pair-key.pem" ] && echo present || echo gone))"
     fi
 
     # A name ending in -key is the filename of another domain's private key, so
@@ -2579,7 +2600,7 @@ test_hosts_command() {
         . bin/lib/hosts.sh
         docker() {
             case "$*" in
-                *Path*Args*) printf "node\nserver.js\n" ;;
+                *Path*Args*) printf "%s\0" node server.js ;;
                 *NetworkSettings.Networks*) printf "bridge=172.17.0.3\n" ;;
                 *Config.Image*) printf "node:lts\nrunning\nbridge\n172.17.0.3 \nnode\n" ;;
                 *Config.Env*) printf "VIRTUAL_HOST=local.spark.loc\nVIRTUAL_PORT=3000\n" ;;
@@ -2741,7 +2762,7 @@ test_hosts_command() {
     }
 
     total=$((total + 1))
-    redacted="$(printf 'serve\n--auth\nabc123\n--port\n80\n' | redact)"
+    redacted="$(printf '%s\0' 'serve' '--auth' 'abc123' '--port' '80' | redact)"
     if [ "${redacted}" = "serve --auth <redacted> --port 80" ]; then
         passed=$((passed + 1))
     else
@@ -2750,7 +2771,7 @@ test_hosts_command() {
 
     # The value's spaces used to end the redaction after its first word.
     total=$((total + 1))
-    redacted="$(printf 'serve\n--auth\nmy secret value\n--host\ndb\n' | redact)"
+    redacted="$(printf '%s\0' 'serve' '--auth' 'my secret value' '--host' 'db' | redact)"
     if [ "${redacted}" = "serve --auth <redacted> --host db" ]; then
         passed=$((passed + 1))
     else
@@ -2759,7 +2780,7 @@ test_hosts_command() {
 
     # A value starting with - used to be skipped entirely.
     total=$((total + 1))
-    redacted="$(printf 'serve\n--token\n-weird-looking\n' | redact)"
+    redacted="$(printf '%s\0' 'serve' '--token' '-weird-looking' | redact)"
     if [ "${redacted}" = "serve --token <redacted>" ]; then
         passed=$((passed + 1))
     else
@@ -2768,7 +2789,7 @@ test_hosts_command() {
 
     # The real shape on this machine: the credential is inside one argument.
     total=$((total + 1))
-    redacted="$(printf 'bash\n-c\nnpx serve --host 0.0.0.0 --auth %s\n' "'abc123'" | redact)"
+    redacted="$(printf '%s\0' 'bash' '-c' "npx serve --host 0.0.0.0 --auth 'abc123'" | redact)"
     if grep -q -- "--auth <redacted>" <<<"${redacted}" && ! grep -q "abc123" <<<"${redacted}"; then
         passed=$((passed + 1))
     else
@@ -2776,7 +2797,7 @@ test_hosts_command() {
     fi
 
     total=$((total + 1))
-    redacted="$(printf 'serve\n--auth=abc123\n' | redact)"
+    redacted="$(printf '%s\0' 'serve' '--auth=abc123' | redact)"
     if [ "${redacted}" = "serve --auth=<redacted>" ]; then
         passed=$((passed + 1))
     else
@@ -2784,7 +2805,7 @@ test_hosts_command() {
     fi
 
     total=$((total + 1))
-    redacted="$(printf 'serve\n--host\n0.0.0.0\n--no-https\n' | redact)"
+    redacted="$(printf '%s\0' 'serve' '--host' '0.0.0.0' '--no-https' | redact)"
     if [ "${redacted}" = "serve --host 0.0.0.0 --no-https" ]; then
         passed=$((passed + 1))
     else
@@ -2801,7 +2822,7 @@ test_hosts_command() {
         . bin/lib/hosts.sh
         docker() {
             case "$*" in
-                *Path*Args*) printf "docker-entrypoint.sh\nserve\n--auth\nsecret\n" ;;
+                *Path*Args*) printf "%s\0" docker-entrypoint.sh serve --auth secret ;;
                 *NetworkSettings.Networks*) printf "bridge=172.17.0.3\n" ;;
                 *Config.Image*) printf "node:lts\nrunning\nbridge\n172.17.0.3 \ndocker-entrypoint.sh\n" ;;
                 *Config.Env*) printf "VIRTUAL_HOST=app.spark.loc\nVIRTUAL_PORT=3000\n" ;;
@@ -2849,7 +2870,7 @@ test_hosts_command() {
         . bin/lib/hosts.sh
         docker() {
             case "$*" in
-                *Path*Args*) printf "nginx\n-g\ndaemon off;\n" ;;
+                *Path*Args*) printf "%s\0" nginx -g "daemon off;" ;;
                 *NetworkSettings.Networks*) printf "bridge=172.17.0.9\n" ;;
                 *Config.Image*) printf "nginx\nrunning\nbridge\n172.17.0.9 \nnginx\n" ;;
                 *Config.Env*) printf "PATH=/usr/bin\n" ;;
@@ -2866,7 +2887,7 @@ test_hosts_command() {
     fi
 
     total=$((total + 1))
-    redacted="$(printf 'serve\n--credential\nlive\n--bearer\nlive2\n--passphrase\nlive3\n' | redact)"
+    redacted="$(printf '%s\0' 'serve' '--credential' 'live' '--bearer' 'live2' '--passphrase' 'live3' | redact)"
     if [ "${redacted}" = "serve --credential <redacted> --bearer <redacted> --passphrase <redacted>" ]; then
         passed=$((passed + 1))
     else
@@ -2882,7 +2903,7 @@ test_hosts_command() {
         . bin/lib/hosts.sh
         docker() {
             case "$*" in
-                *Path*Args*) printf "nginx\n" ;;
+                *Path*Args*) printf "%s\0" nginx ;;
                 *NetworkSettings.Networks*) printf "bridge=172.17.0.9\n" ;;
                 *Config.Image*) printf "nginx\nrunning\nbridge\n172.17.0.9 \nnginx\n" ;;
                 *Config.Env*) printf "PATH=/usr/bin\n" ;;
@@ -2902,7 +2923,7 @@ test_hosts_command() {
     fi
 
     total=$((total + 1))
-    redacted="$(printf 'serve\n--password="my secret value"\n--host\ndb\n' | redact)"
+    redacted="$(printf '%s\0' 'serve' '--password="my secret value"' '--host' 'db' | redact)"
     if [ "${redacted}" = 'serve --password=<redacted> --host db' ]; then
         passed=$((passed + 1))
     else
@@ -2910,7 +2931,7 @@ test_hosts_command() {
     fi
 
     total=$((total + 1))
-    redacted="$(printf 'sh\n-c\nserve --auth my\\ secret --host db\n' | redact)"
+    redacted="$(printf '%s\0' 'sh' '-c' 'serve --auth my\\ secret --host db' | redact)"
     if [ "${redacted}" = 'sh -c serve --auth <redacted> --host db' ]; then
         passed=$((passed + 1))
     else
@@ -2920,7 +2941,7 @@ test_hosts_command() {
     # An environment-style assignment carries a credential the same way a flag
     # does, matched on the same names.
     total=$((total + 1))
-    redacted="$(printf 'sh\n-c\nGITHUB_TOKEN=abc123 npm publish\n' | redact)"
+    redacted="$(printf '%s\0' 'sh' '-c' 'GITHUB_TOKEN=abc123 npm publish' | redact)"
     if [ "${redacted}" = 'sh -c GITHUB_TOKEN=<redacted> npm publish' ]; then
         passed=$((passed + 1))
     else
@@ -2929,7 +2950,7 @@ test_hosts_command() {
 
     # A URL's userinfo is positional, so it needs no judgement about the value.
     total=$((total + 1))
-    redacted="$(printf 'psql\npostgres://admin:s3cret@db:5432/app\n' | redact)"
+    redacted="$(printf '%s\0' 'psql' 'postgres://admin:s3cret@db:5432/app' | redact)"
     if [ "${redacted}" = 'psql postgres://admin:<redacted>@db:5432/app' ]; then
         passed=$((passed + 1))
     else
@@ -2940,7 +2961,7 @@ test_hosts_command() {
     # redacted: losing a flag name from the display leaks nothing, printing a
     # credential does.
     total=$((total + 1))
-    redacted="$(printf 'sh\n-c\nserve --token -secret --host db\n' | redact)"
+    redacted="$(printf '%s\0' 'sh' '-c' 'serve --token -secret --host db' | redact)"
     if [ "${redacted}" = 'sh -c serve --token <redacted> --host db' ]; then
         passed=$((passed + 1))
     else
