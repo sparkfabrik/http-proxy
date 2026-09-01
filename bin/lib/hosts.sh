@@ -138,7 +138,7 @@ hosts_redact_command() {
     -e "s#(--?(${flags})[= ])[^'\" ]+#\\1<redacted>#g" \
     -e "s#([A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|ACCESS_KEY|CREDENTIALS)[A-Za-z0-9_]*=)'[^']*'#\\1'<redacted>'#g" \
     -e "s#([A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|ACCESS_KEY|CREDENTIALS)[A-Za-z0-9_]*=)\"[^\"]*\"#\\1\"<redacted>\"#g" \
-    -e 's#([A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|ACCESS_KEY|CREDENTIALS)[A-Za-z0-9_]*=)[^ ]+#\1<redacted>#g' \
+    -e "s#([A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|ACCESS_KEY|CREDENTIALS)[A-Za-z0-9_]*=)[^'\" ]+#\\1<redacted>#g" \
     -e 's#(://)[^/@ ]+:[^/@ ]+@#\1<redacted>@#g'
 }
 
