@@ -172,7 +172,7 @@ hosts_describe_local() {
 
   if ! info="$(docker inspect --format '{{.Config.Image}}{{"\n"}}{{.State.Status}}{{"\n"}}{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}{{"\n"}}{{.Path}} {{join .Args " "}}' "${container}" 2>/dev/null)"; then
     echo "  container      ${container}, not found"
-    echo "  directory      $(hosts_abbreviate "${directory}")"
+    echo "  directory      $(hosts_abbreviate "${directory:--}")"
     echo "  routed by      ${routing}"
     log_error "The record names a container Docker no longer has; the proxy drops it on its next event"
     return 1
@@ -197,7 +197,7 @@ hosts_describe_local() {
   echo "  container      ${container}"
   echo "  image          ${image}"
   echo "  status         ${status}"
-  echo "  directory      $(hosts_abbreviate "${directory}")"
+  echo "  directory      $(hosts_abbreviate "${directory:--}")"
   case "${routing}" in
   virtual-host) echo "  routed by      VIRTUAL_HOST${port:+, port ${port}}" ;;
   traefik-labels) echo "  routed by      traefik.* labels${port:+, port ${port}}" ;;
