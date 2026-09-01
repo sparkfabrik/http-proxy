@@ -1786,6 +1786,8 @@ test_self_update_applies_the_update() {
     root="$(mktemp -d)"
     mkdir -p "${root}/src/bin"
     cp bin/spark-http-proxy "${root}/src/bin/"
+    # A complete checkout carries the libraries too, and the CLI refuses without them.
+    cp -R bin/lib "${root}/src/bin/"
     # Beside the script, which is one of the two places the CLI looks and the
     # one that does not depend on HOME.
     cp compose.yml "${root}/src/bin/"
@@ -1867,6 +1869,8 @@ test_self_update_after_a_rewrite() {
     root="$(mktemp -d)"
     mkdir -p "${root}/src/bin"
     cp bin/spark-http-proxy "${root}/src/bin/"
+    # A complete checkout carries the libraries too, and the CLI refuses without them.
+    cp -R bin/lib "${root}/src/bin/"
     cp compose.yml "${root}/src/bin/"
     (
         cd "${root}/src" || exit 1
@@ -2131,6 +2135,21 @@ test_hosts_command() {
         passed=$((passed + 1))
     else
         error "an empty state file was not handled, exit ${rc}: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # A help request answered with an error is wrong whatever the rest of the CLI does.
+    rc=0
+    out="$(env HOSTS_STATE_FILE="${dir}/hosts.tsv" TAILSCALE_SUMMARY_FILE="${dir}/summary" bash -c '
+        log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
+        . bin/lib/hosts.sh
+        hosts_command --help' 2>&1)" || rc=$?
+
+    total=$((total + 1))
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "list" && echo "${out}" | grep -q "describe" && echo "${out}" | grep -q -- "--json"; then
+        success "--help succeeds and names each subcommand"
+        passed=$((passed + 1))
+    else
+        error "--help exited ${rc}: $(echo "${out}" | tr '\n' ' ')"
     fi
 
     # The dispatch must be registered, or the fallthrough hands `hosts` to compose.

@@ -172,6 +172,18 @@ hosts_describe() {
   fi
 }
 
+# One usage string, so the help and the error cannot drift apart.
+hosts_usage() {
+  echo "Usage: ${0} hosts [list|describe <hostname>|--json]"
+  echo ""
+  echo "  list                 Every hostname served, local and from peers (the default)"
+  echo "  describe <hostname>  One hostname: its container, directory and routing"
+  echo "  --json               The local records, machine-readable"
+  echo ""
+  echo "Hostnames served by other machines carry no directory, and are listed in full by:"
+  echo "  ${0} tailscale-peers --json"
+}
+
 hosts_command() {
   local subcommand="${1:-list}"
 
@@ -185,9 +197,12 @@ hosts_command() {
     fi
     cat "${HOSTS_JSON_FILE}"
     ;;
+  -h | --help)
+    hosts_usage
+    ;;
   *)
     log_error "Unknown option: ${subcommand}"
-    log_info "Usage: ${0} hosts [list|describe <hostname>|--json]"
+    hosts_usage >&2
     return 1
     ;;
   esac

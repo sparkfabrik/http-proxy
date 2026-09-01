@@ -159,12 +159,50 @@ func (cl *CompatibilityLayer) extractContainerInfo(inspect types.ContainerJSON) 
 	}
 }
 
+// hostRulePattern matches the hostnames in a native Traefik router rule, which
+// quotes them with backticks or double quotes.
+var hostRulePattern = regexp.MustCompile("Host\\((?:`|\")([^`\"]+)(?:`|\")\\)")
+
+// labelHostnames are the hostnames a container's own Traefik rules claim, which
+// is where routing comes from when native labels are present.
+func labelHostnames(labels map[string]string) []string {
+	seen := make(map[string]bool)
+	hosts := make([]string, 0, 1)
+
+	for key, rule := range labels {
+		if !strings.HasPrefix(key, "traefik.http.routers.") || !strings.HasSuffix(key, ".rule") {
+			continue
+		}
+		for _, match := range hostRulePattern.FindAllStringSubmatch(rule, -1) {
+			if !seen[match[1]] {
+				seen[match[1]] = true
+				hosts = append(hosts, match[1])
+			}
+		}
+	}
+
+	slices.Sort(hosts)
+	return hosts
+}
+
+// virtualHostNames are the hostnames VIRTUAL_HOST declares.
+func virtualHostNames(virtualHost string) []string {
+	hosts := make([]string, 0, 1)
+	for _, host := range parseVirtualHosts(virtualHost) {
+		hosts = append(hosts, host.hostname)
+	}
+	return hosts
+}
+
 // recordHosts replaces what a container contributes, one row per hostname.
-func (cl *CompatibilityLayer) recordHosts(containerID string, info ContainerInfo, routing string) {
-	rows := make([]hostRow, 0, 1)
-	for _, host := range parseVirtualHosts(info.VirtualHost) {
+func (cl *CompatibilityLayer) recordHosts(containerID string, info ContainerInfo, routing string, hostnames []string) {
+	rows := make([]hostRow, 0, len(hostnames))
+	for _, hostname := range hostnames {
+		if hostname == "" {
+			continue
+		}
 		rows = append(rows, hostRow{
-			hostname:  host.hostname,
+			hostname:  hostname,
 			container: info.Name,
 			directory: info.Directory,
 			routing:   routing,
@@ -224,9 +262,27 @@ func (cl *CompatibilityLayer) writeHostsFile() error {
 
 // writeFileAtomically writes through a temporary file and a rename.
 func writeFileAtomically(path string, data []byte) error {
-	temp := path + ".tmp"
-	if err := os.WriteFile(temp, data, ConfigFilePermissions); err != nil {
+	// Created rather than named: the state directory is writable from the host,
+	// and a predictable name could already be a symlink to somewhere else.
+	file, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("failed to create a temporary file beside %s: %w", path, err)
+	}
+	temp := file.Name()
+
+	if err := file.Chmod(ConfigFilePermissions); err != nil {
+		file.Close()
+		os.Remove(temp)
+		return fmt.Errorf("failed to set the permissions of %s: %w", temp, err)
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		os.Remove(temp)
 		return fmt.Errorf("failed to write %s: %w", temp, err)
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(temp)
+		return fmt.Errorf("failed to close %s: %w", temp, err)
 	}
 	if err := os.Rename(temp, path); err != nil {
 		os.Remove(temp)
@@ -415,7 +471,7 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 	// mounted path, and silent at debug level, so say it plainly instead.
 	if utils.HasTraefikLabel(inspect.Config.Labels) {
 		// Recorded though Traefik routes it, so hosts shows the whole picture.
-		cl.recordHosts(containerID, containerInfo, "traefik-labels")
+		cl.recordHosts(containerID, containerInfo, "traefik-labels", labelHostnames(inspect.Config.Labels))
 		if containerInfo.VirtualHost != "" {
 			cl.logger.Warn("Ignoring VIRTUAL_HOST and VIRTUAL_PATH on a container carrying a traefik. label",
 				"container_id", utils.FormatDockerID(containerID),
@@ -450,7 +506,7 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 		return "", err
 	}
 
-	cl.recordHosts(containerID, containerInfo, "virtual-host")
+	cl.recordHosts(containerID, containerInfo, "virtual-host", virtualHostNames(containerInfo.VirtualHost))
 
 	return cl.configFileName(containerID), nil
 }

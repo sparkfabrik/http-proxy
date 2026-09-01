@@ -725,11 +725,12 @@ func TestContainerDirectoryIsEmptyWhenThereIsNothingToShow(t *testing.T) {
 
 func TestRecordHostsWritesOneRowPerHostname(t *testing.T) {
 	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: t.TempDir()})
-	cl.recordHosts("abc123", ContainerInfo{
+	info := ContainerInfo{
 		Name:        "app-1",
 		VirtualHost: "one.spark.loc,two.spark.loc:8080",
 		Directory:   "/home/dev/app",
-	}, "virtual-host")
+	}
+	cl.recordHosts("abc123", info, "virtual-host", virtualHostNames(info.VirtualHost))
 
 	rows := cl.hosts["abc123"]
 	if len(rows) != 2 {
@@ -745,8 +746,8 @@ func TestRecordHostsWritesOneRowPerHostname(t *testing.T) {
 
 func TestRecordHostsForgetsAContainerWithNoHostnames(t *testing.T) {
 	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: t.TempDir()})
-	cl.recordHosts("abc123", ContainerInfo{Name: "app-1", VirtualHost: "one.spark.loc"}, "virtual-host")
-	cl.recordHosts("abc123", ContainerInfo{Name: "app-1", VirtualHost: ""}, "traefik-labels")
+	cl.recordHosts("abc123", ContainerInfo{Name: "app-1"}, "virtual-host", []string{"one.spark.loc"})
+	cl.recordHosts("abc123", ContainerInfo{Name: "app-1"}, "traefik-labels", nil)
 
 	if _, ok := cl.hosts["abc123"]; ok {
 		t.Errorf("a container serving no hostname is still recorded: %+v", cl.hosts)
@@ -758,8 +759,8 @@ func TestWriteHostsFileIsSortedAndTabSeparated(t *testing.T) {
 	path := filepath.Join(dir, "hosts.tsv")
 	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: dir, HostsStateFile: path})
 
-	cl.recordHosts("b", ContainerInfo{Name: "zeta", VirtualHost: "zeta.spark.loc", Directory: "/z"}, "virtual-host")
-	cl.recordHosts("a", ContainerInfo{Name: "alpha", VirtualHost: "alpha.spark.loc"}, "traefik-labels")
+	cl.recordHosts("b", ContainerInfo{Name: "zeta", Directory: "/z"}, "virtual-host", []string{"zeta.spark.loc"})
+	cl.recordHosts("a", ContainerInfo{Name: "alpha"}, "traefik-labels", []string{"alpha.spark.loc"})
 
 	if err := cl.writeHostsFile(); err != nil {
 		t.Fatalf("writing the hosts file failed: %v", err)
@@ -778,7 +779,7 @@ func TestWriteHostsFileIsSortedAndTabSeparated(t *testing.T) {
 func TestWriteHostsFileLeavesNoTemporaryFile(t *testing.T) {
 	dir := t.TempDir()
 	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: dir, HostsStateFile: filepath.Join(dir, "hosts.tsv")})
-	cl.recordHosts("a", ContainerInfo{Name: "alpha", VirtualHost: "alpha.spark.loc"}, "virtual-host")
+	cl.recordHosts("a", ContainerInfo{Name: "alpha"}, "virtual-host", []string{"alpha.spark.loc"})
 
 	if err := cl.writeHostsFile(); err != nil {
 		t.Fatalf("writing failed: %v", err)
@@ -802,8 +803,8 @@ func TestWriteHostsFileAlsoPublishesParseableJSON(t *testing.T) {
 		HostsStateFile:    filepath.Join(dir, "hosts.tsv"),
 		HostsJSONFile:     filepath.Join(dir, "hosts.json"),
 	})
-	cl.recordHosts("a", ContainerInfo{Name: "app-1", VirtualHost: "one.spark.loc", Directory: "/home/dev/app"}, "virtual-host")
-	cl.recordHosts("b", ContainerInfo{Name: "other-1", VirtualHost: "two.spark.loc"}, "traefik-labels")
+	cl.recordHosts("a", ContainerInfo{Name: "app-1", Directory: "/home/dev/app"}, "virtual-host", []string{"one.spark.loc"})
+	cl.recordHosts("b", ContainerInfo{Name: "other-1"}, "traefik-labels", []string{"two.spark.loc"})
 
 	if err := cl.writeHostsFile(); err != nil {
 		t.Fatalf("writing failed: %v", err)
@@ -829,5 +830,58 @@ func TestWriteHostsFileAlsoPublishesParseableJSON(t *testing.T) {
 	}
 	if entries[1].Routing != "traefik-labels" {
 		t.Errorf("routing was not published: %+v", entries[1])
+	}
+}
+
+func TestLabelHostnamesReadsTheRouterRules(t *testing.T) {
+	hosts := labelHostnames(map[string]string{
+		"traefik.http.routers.app.rule":       "Host(`app.spark.loc`) || Host(`www.spark.loc`)",
+		"traefik.http.routers.api.rule":       "Host(\"api.spark.loc\") && PathPrefix(`/v1`)",
+		"traefik.http.routers.app.entrypoint": "websecure",
+		"com.docker.compose.project":          "not-a-rule",
+	})
+
+	want := []string{"api.spark.loc", "app.spark.loc", "www.spark.loc"}
+	if len(hosts) != len(want) {
+		t.Fatalf("expected %v, got %v", want, hosts)
+	}
+	for i := range want {
+		if hosts[i] != want[i] {
+			t.Errorf("expected %v, got %v", want, hosts)
+			break
+		}
+	}
+}
+
+func TestLabelHostnamesDeduplicates(t *testing.T) {
+	hosts := labelHostnames(map[string]string{
+		"traefik.http.routers.a.rule": "Host(`same.spark.loc`)",
+		"traefik.http.routers.b.rule": "Host(`same.spark.loc`)",
+	})
+
+	if len(hosts) != 1 {
+		t.Errorf("a hostname claimed by two routers should appear once, got %v", hosts)
+	}
+}
+
+func TestLabelHostnamesIsEmptyWithoutARule(t *testing.T) {
+	if hosts := labelHostnames(map[string]string{"traefik.enable": "true"}); len(hosts) != 0 {
+		t.Errorf("expected no hostnames, got %v", hosts)
+	}
+}
+
+func TestLabelRoutedContainerIsRecordedFromItsRules(t *testing.T) {
+	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: t.TempDir()})
+	labels := map[string]string{"traefik.http.routers.app.rule": "Host(`labelled.spark.loc`)"}
+
+	// A label-routed container usually carries no VIRTUAL_HOST at all.
+	cl.recordHosts("abc", ContainerInfo{Name: "app-1", Directory: "/home/dev/app"}, "traefik-labels", labelHostnames(labels))
+
+	rows := cl.hosts["abc"]
+	if len(rows) != 1 || rows[0].hostname != "labelled.spark.loc" {
+		t.Fatalf("a label-routed container contributed nothing usable: %+v", rows)
+	}
+	if rows[0].routing != "traefik-labels" {
+		t.Errorf("routing was not recorded: %+v", rows[0])
 	}
 }

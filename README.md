@@ -140,7 +140,7 @@ macos.test.spark.loc                   Mac-Test  -                      -
 
 `hosts describe <hostname>` reports one host, including how it is routed. A remote
 host shows the machine and no directory: local paths are not published to the
-tailnet. `hosts --json` prints the same rows as JSON.
+tailnet. `hosts --json` prints the local records as JSON. Hostnames served by other machines are not in it; `tailscale-peers --json` carries those.
 
 Directories come from the compose working directory, or the first bind mount for a
 container started with `docker run`.
