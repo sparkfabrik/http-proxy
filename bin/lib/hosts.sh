@@ -57,7 +57,11 @@ hosts_remote_rows() {
 hosts_abbreviate() {
   local path="$1"
   [[ -z "${path}" ]] && return 0
-  printf '%s' "${path/#${HOME}/\~}"
+  if [[ "${path}" == "${HOME}" || "${path}" == "${HOME}/"* ]]; then
+    printf '~%s' "${path#"${HOME}"}"
+    return 0
+  fi
+  printf '%s' "${path}"
 }
 
 # An absent state file means the services image predates this command, which is

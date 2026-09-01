@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -861,6 +862,77 @@ func TestLabelHostnamesDeduplicates(t *testing.T) {
 
 	if len(hosts) != 1 {
 		t.Errorf("a hostname claimed by two routers should appear once, got %v", hosts)
+	}
+}
+
+func TestLabelHostnamesTakesEveryHostnameInAMatcher(t *testing.T) {
+	cases := []struct {
+		name string
+		rule string
+		want []string
+	}{
+		{"one hostname", "Host(`a.spark.loc`)", []string{"a.spark.loc"}},
+		{"two, spaced", "Host(`a.spark.loc`, `b.spark.loc`)", []string{"a.spark.loc", "b.spark.loc"}},
+		{"two, unspaced", "Host(`a.spark.loc`,`b.spark.loc`)", []string{"a.spark.loc", "b.spark.loc"}},
+		{"double quoted", `Host("a.spark.loc", "b.spark.loc")`, []string{"a.spark.loc", "b.spark.loc"}},
+		{"with another matcher", "Host(`a.spark.loc`) && PathPrefix(`/api`)", []string{"a.spark.loc"}},
+		{"two matchers", "Host(`a.spark.loc`) || Host(`b.spark.loc`)", []string{"a.spark.loc", "b.spark.loc"}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := labelHostnames(map[string]string{"traefik.http.routers.app.rule": c.rule})
+			if !slices.Equal(got, c.want) {
+				t.Errorf("rule %s: got %v, want %v", c.rule, got, c.want)
+			}
+		})
+	}
+}
+
+func TestRecordedFieldsCarryNoControlCharacters(t *testing.T) {
+	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: t.TempDir()})
+	info := ContainerInfo{
+		Name:      "app\t1",
+		Directory: "/home/dev/a\x1b[31mred\nb",
+	}
+
+	cl.recordHosts("abc", info, "virtual-host", []string{"a.loc\tb.loc"})
+
+	rows := cl.hosts["abc"]
+	if len(rows) != 1 {
+		t.Fatalf("expected one row, got %d", len(rows))
+	}
+	for name, got := range map[string]string{
+		"hostname":  rows[0].hostname,
+		"container": rows[0].container,
+		"directory": rows[0].directory,
+	} {
+		if strings.ContainsAny(got, "\t\n\r\x1b") {
+			t.Errorf("%s still carries a control character: %q", name, got)
+		}
+	}
+	if rows[0].container != "app 1" {
+		t.Errorf("a tab should become a space, got %q", rows[0].container)
+	}
+}
+
+func TestOnlyAnExposedContainerCountsAsServed(t *testing.T) {
+	// Traefik runs exposedByDefault false, so a container that did not opt in is
+	// not served and must not be reported as serving its rules.
+	for _, c := range []struct {
+		name   string
+		labels map[string]string
+		want   bool
+	}{
+		{"opted in", map[string]string{"traefik.enable": "true"}, true},
+		{"opted out", map[string]string{"traefik.enable": "false"}, false},
+		{"no enable label", map[string]string{"traefik.http.routers.app.rule": "Host(`a.loc`)"}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := traefikExposed(c.labels); got != c.want {
+				t.Errorf("traefikExposed(%v) = %v, want %v", c.labels, got, c.want)
+			}
+		})
 	}
 }
 
