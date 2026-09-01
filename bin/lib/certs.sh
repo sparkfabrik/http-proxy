@@ -30,6 +30,30 @@ reject_path_in_domain() {
   return 0
 }
 
+# Rejects a domain whose stored filename would collide with another domain's.
+# The mapping is lossy in two ways: a name ending in -key produces the filename
+# used for the private key of the name without it, so generating "api-key" would
+# overwrite the key of "api" and deleting it would remove it; and a literal
+# _wildcard_ is the encoding of *, so it aliases an existing wildcard.
+reject_colliding_domain() {
+  local domain="$1" safe
+  safe="$(cert_safe_filename "${domain}")"
+
+  if [[ "${safe}" == *-key ]]; then
+    log_error "'${domain}' cannot be stored: its filename is the private key of '${domain%-key}'"
+    log_info "A certificate for it would overwrite that key. Rename the host."
+    return 1
+  fi
+
+  if [[ "${domain}" == *_wildcard_* ]]; then
+    log_error "'${domain}' cannot be stored: _wildcard_ is how * is encoded in filenames"
+    log_info "For a wildcard use the * itself, quoted: '*.${domain#*_wildcard_.}'"
+    return 1
+  fi
+
+  return 0
+}
+
 # Derive the safe filename used to store a domain's certificate files
 cert_safe_filename() {
   local domain="$1"
@@ -99,11 +123,19 @@ certs_days_until() {
 certs_read() {
   local cert_file="$1" out enddate issuer sans expired=no iso
 
-  out="$(openssl x509 -in "${cert_file}" -noout -enddate -issuer -ext subjectAltName 2>/dev/null)" || return 1
-
+  # Expiry and issuer only, with options every openssl and LibreSSL has.
+  out="$(openssl x509 -in "${cert_file}" -noout -enddate -issuer 2>/dev/null)" || return 1
   enddate="$(sed -n 's/^notAfter=//p' <<<"${out}")"
   issuer="$(sed -n 's/^issuer=//p' <<<"${out}")"
-  sans="$(grep -o 'DNS:[^,]*' <<<"${out}" | sed 's/^DNS://' | paste -sd, -)"
+
+  # -ext is newer than the LibreSSL macOS ships, so -text is the fallback rather
+  # than letting the whole record fail with it.
+  sans="$(openssl x509 -in "${cert_file}" -noout -ext subjectAltName 2>/dev/null |
+    grep -o 'DNS:[^,]*' | sed 's/^DNS://' | paste -sd, -)"
+  if [[ -z "${sans}" ]]; then
+    sans="$(openssl x509 -in "${cert_file}" -noout -text 2>/dev/null |
+      grep -A1 'Subject Alternative Name' | grep -o 'DNS:[^,]*' | sed 's/^DNS://' | paste -sd, -)"
+  fi
 
   iso="$(certs_iso_date "${enddate}")" || iso=""
   openssl x509 -in "${cert_file}" -noout -checkend 0 >/dev/null 2>&1 || expired=yes
@@ -306,6 +338,7 @@ certs_generate() {
   fi
 
   reject_path_in_domain "${domain}" || return 1
+  reject_colliding_domain "${domain}" || return 1
   install_mkcert || return 1
 
   local safe_filename
@@ -314,14 +347,29 @@ certs_generate() {
   log_info "Generating certificates for: ${domain}"
   log_info "Certificate files will be named: ${safe_filename}.pem and ${safe_filename}-key.pem"
 
-  if ! mkcert -cert-file "${CERT_DIR}/${safe_filename}.pem" \
-    -key-file "${CERT_DIR}/${safe_filename}-key.pem" \
-    -- "${domain}" ||
-    [[ ! -f "${CERT_DIR}/${safe_filename}.pem" || ! -f "${CERT_DIR}/${safe_filename}-key.pem" ]]; then
+  # Staged, so a failure cannot truncate a pair that is currently working, and
+  # the proxy's watcher never sees a half-written file.
+  local staging
+  staging="$(mktemp -d "${CERT_DIR}/.generate.XXXXXX")" || {
+    log_error "Could not create a staging directory in ${CERT_DIR}"
+    return 1
+  }
+
+  if ! mkcert -cert-file "${staging}/cert.pem" -key-file "${staging}/key.pem" -- "${domain}" ||
+    [[ ! -s "${staging}/cert.pem" || ! -s "${staging}/key.pem" ]]; then
+    rm -rf "${staging}"
     log_error "mkcert could not generate a certificate for ${domain}"
-    log_info "Nothing was applied to the proxy. Any partial files are in ${CERT_DIR}"
+    log_info "Nothing was changed, so any certificate already installed still works"
     return 1
   fi
+
+  if ! mv "${staging}/cert.pem" "${CERT_DIR}/${safe_filename}.pem" ||
+    ! mv "${staging}/key.pem" "${CERT_DIR}/${safe_filename}-key.pem"; then
+    rm -rf "${staging}"
+    log_error "The certificate was generated but could not be installed in ${CERT_DIR}"
+    return 1
+  fi
+  rm -rf "${staging}"
 
   log_success "Certificates generated successfully:"
   log_info "  Certificate: ${CERT_DIR}/${safe_filename}.pem"
@@ -361,6 +409,7 @@ certs_delete() {
   local domain safe_filename cert_file key_file
   for domain in "$@"; do
     reject_path_in_domain "${domain}" || return 1
+    reject_colliding_domain "${domain}" || return 1
     safe_filename="$(cert_safe_filename "${domain}")"
     cert_file="${CERT_DIR}/${safe_filename}.pem"
     key_file="${CERT_DIR}/${safe_filename}-key.pem"

@@ -2074,7 +2074,7 @@ sed -n '/^abbreviate_home()/,/^}/p' bin/spark-http-proxy >"${LIB_HELPERS}"
 export LIB_HELPERS
 
 test_certs_command() {
-    local passed=0 total=0 dir out rc
+    local passed=0 total=0 dir out rc domain_case sans_field
 
     # Two real certificates, one wildcard, generated here so the assertions do
     # not depend on what this machine happens to have installed.
@@ -2301,19 +2301,22 @@ CASES
         install_mkcert(){ return 0; }
         # Stands in for mkcert: writes files only when it is given a name.
         mkcert(){
-            local seen_terminator=false name=""
+            local seen_terminator=false name="" cert="" key=""
             while [ "$#" -gt 0 ]; do
                 case "$1" in
                     --) seen_terminator=true ;;
-                    -cert-file|-key-file) shift ;;
+                    -cert-file) cert="$2"; shift ;;
+                    -key-file) key="$2"; shift ;;
                     -*) [ "${seen_terminator}" = true ] && name="$1" ;;
                     *) name="$1" ;;
                 esac
                 shift
             done
+            # Reproduces mkcert: a name read as a flag prints usage, writes
+            # nothing, and still exits 0.
             [ -n "${name}" ] || { echo "Usage of mkcert:" >&2; return 0; }
-            printf "" >"'"${dir}"'/-dashy.pem"
-            printf "" >"'"${dir}"'/-dashy-key.pem"
+            printf "cert" >"${cert}"
+            printf "key" >"${key}"
         }
         apply_certificates(){ echo "APPLIED"; }
         certs_generate -dashy' 2>&1)" && rc=0 || rc=$?
@@ -2340,6 +2343,65 @@ CASES
         passed=$((passed + 1))
     else
         error "a failed removal was reported as success (rc=${rc}): ${out}"
+    fi
+
+    # A name ending in -key is the filename of another domain's private key, so
+    # storing it would overwrite that key and deleting it would remove it.
+    while read -r domain_case; do
+        total=$((total + 1))
+        out="$(env CERT_DIR="${dir}" bash -c '
+            log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
+            # shellcheck source=/dev/null
+            . "${LIB_HELPERS}"
+            . bin/lib/certs.sh
+            reject_colliding_domain "$1"' _ "${domain_case}" 2>&1)" && rc=0 || rc=$?
+        if [ "${rc}" -ne 0 ]; then
+            passed=$((passed + 1))
+        else
+            error "'${domain_case}' was accepted although its filename collides"
+        fi
+    done <<'COLLIDING'
+api-key
+app.spark.loc-key
+_wildcard_.spark.loc
+COLLIDING
+
+    total=$((total + 1))
+    if env CERT_DIR="${dir}" bash -c '
+        log_info(){ :; }; log_error(){ :; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/certs.sh
+        reject_colliding_domain "api.spark.loc" && reject_colliding_domain "*.spark.loc"' 2>/dev/null; then
+        passed=$((passed + 1))
+    else
+        error "an ordinary domain or a real wildcard was rejected as colliding"
+    fi
+
+    # Expiry and issuer must survive an openssl without -ext, which is what
+    # macOS ships as LibreSSL.
+    total=$((total + 1))
+    out="$(env CERT_DIR="${dir}" bash -c '
+        log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/certs.sh
+        openssl() {
+            case "$*" in
+                *-ext*) echo "unknown option -ext" >&2; return 1 ;;
+                *) command openssl "$@" ;;
+            esac
+        }
+        certs_read "$1"' _ "${dir}/api.spark.loc.pem" 2>&1)" && rc=0 || rc=$?
+    # The SAN list is the fourth field. Checked by position, because the fixture
+    # certificates are self-signed so the issuer also contains the domain and a
+    # plain grep would pass with no SANs at all.
+    sans_field="$(cut -f4 <<<"${out}")"
+    if [ "${rc}" -eq 0 ] && grep -qE "^[0-9]{4}-[0-9]{2}-[0-9]{2}" <<<"${out}" &&
+        [ "${sans_field}" = "api.spark.loc" ]; then
+        passed=$((passed + 1))
+    else
+        error "without -ext the SANs were lost rather than read via -text (rc=${rc}, sans='${sans_field}'): ${out}"
     fi
 
     rm -rf "${dir}"
@@ -2428,6 +2490,7 @@ test_hosts_command() {
         docker() {
             case "$*" in
                 *Path*Args*) printf "node\nserver.js\n" ;;
+                *NetworkSettings.Networks*) printf "bridge=172.17.0.3\n" ;;
                 *Config.Image*) printf "node:lts\nrunning\nbridge\n172.17.0.3 \nnode\n" ;;
                 *Config.Env*) printf "VIRTUAL_HOST=local.spark.loc\nVIRTUAL_PORT=3000\n" ;;
                 *Mounts*) printf "" ;;
@@ -2649,6 +2712,7 @@ test_hosts_command() {
         docker() {
             case "$*" in
                 *Path*Args*) printf "docker-entrypoint.sh\nserve\n--auth\nsecret\n" ;;
+                *NetworkSettings.Networks*) printf "bridge=172.17.0.3\n" ;;
                 *Config.Image*) printf "node:lts\nrunning\nbridge\n172.17.0.3 \ndocker-entrypoint.sh\n" ;;
                 *Config.Env*) printf "VIRTUAL_HOST=app.spark.loc\nVIRTUAL_PORT=3000\n" ;;
                 *Mounts*) printf "bind||/home/dev/app|/home/dev/app|rw\nvolume|cache|/var/lib/docker/volumes/cache/_data|/cache|ro\n" ;;
@@ -2696,6 +2760,7 @@ test_hosts_command() {
         docker() {
             case "$*" in
                 *Path*Args*) printf "nginx\n-g\ndaemon off;\n" ;;
+                *NetworkSettings.Networks*) printf "bridge=172.17.0.9\n" ;;
                 *Config.Image*) printf "nginx\nrunning\nbridge\n172.17.0.9 \nnginx\n" ;;
                 *Config.Env*) printf "PATH=/usr/bin\n" ;;
                 *Mounts*) printf "" ;;
@@ -2728,9 +2793,11 @@ test_hosts_command() {
         docker() {
             case "$*" in
                 *Path*Args*) printf "nginx\n" ;;
+                *NetworkSettings.Networks*) printf "bridge=172.17.0.9\n" ;;
                 *Config.Image*) printf "nginx\nrunning\nbridge\n172.17.0.9 \nnginx\n" ;;
                 *Config.Env*) printf "PATH=/usr/bin\n" ;;
                 *Config.Labels*) printf "" ;;
+                *ExposedPorts*) printf "" ;;
                 *Mounts*) printf "" ;;
                 ps*) printf "Up 1 minute\n" ;;
                 *) return 1 ;;
@@ -2742,6 +2809,14 @@ test_hosts_command() {
         passed=$((passed + 1))
     else
         log "❌ a container without VIRTUAL_PORT was not probed: ${out}"
+    fi
+
+    total=$((total + 1))
+    redacted="$(printf 'serve\n--password="my secret value"\n--host\ndb\n' | redact)"
+    if [ "${redacted}" = 'serve --password=<redacted> --host db' ]; then
+        passed=$((passed + 1))
+    else
+        log "❌ a quoted --flag=value credential leaked part of its value: got ${redacted}"
     fi
 
     rm -rf "${dir}"

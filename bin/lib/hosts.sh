@@ -136,6 +136,8 @@ hosts_redact_args() {
       arg="<redacted>"
     else
       arg="$(sed -E \
+        -e "s/${flag}='[^']*'/\1=<redacted>/g" \
+        -e "s/${flag}=\"[^\"]*\"/\1=<redacted>/g" \
         -e "s/${flag}=[^[:space:]]*/\1=<redacted>/g" \
         -e "s/${flag}([[:space:]]+)'[^']*'/\1\3<redacted>/g" \
         -e "s/${flag}([[:space:]]+)\"[^\"]*\"/\1\3<redacted>/g" \
@@ -181,7 +183,6 @@ hosts_describe_local() {
   detail="$(docker inspect -f '{{.Config.Image}}
 {{.State.Status}}
 {{.HostConfig.NetworkMode}}
-{{range $k,$v := .NetworkSettings.Networks}}{{$v.IPAddress}} {{end}}
 {{.Path}}' "${container}" 2>/dev/null)" || detail=""
 
   if [[ -z "${detail}" ]]; then
@@ -196,11 +197,10 @@ hosts_describe_local() {
     read -r image
     read -r status
     read -r netmode
-    read -r ip
     read -r path
   } <<<"${detail}"
-  ip="${ip% }"
-  ip="${ip%% *}"
+  ip="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}={{$v.IPAddress}}{{println}}{{end}}' "${container}" 2>/dev/null |
+    LC_ALL=C sort | sed -n 's/^[^=]*=//p' | grep -v '^$' | head -1)"
 
   # VIRTUAL_PORT is filtered here rather than in the template: Docker's template
   # functions have no hasPrefix.
@@ -211,6 +211,12 @@ hosts_describe_local() {
   if [[ -z "${port}" ]]; then
     port="$(docker inspect -f '{{range $k,$v := .Config.Labels}}{{$k}}={{$v}}{{println}}{{end}}' "${container}" 2>/dev/null |
       sed -n 's/^traefik\.http\.services\..*\.loadbalancer\.server\.port=//p' | head -1)"
+  fi
+  # Traefik uses the image's lowest exposed TCP port when nothing declares one,
+  # matching getDefaultPort in cmd/dinghy-layer.
+  if [[ -z "${port}" ]]; then
+    port="$(docker inspect -f '{{range $p,$v := .Config.ExposedPorts}}{{$p}}{{println}}{{end}}' "${container}" 2>/dev/null |
+      sed -n 's|/tcp$||p' | sort -n | head -1)"
   fi
 
   # docker ps renders the uptime, which avoids date arithmetic that differs
