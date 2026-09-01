@@ -252,16 +252,15 @@ cert_name_covers() {
   [[ "${hostname#*.}" == "${name#\*.}" ]]
 }
 
+# Prints one certificate's record. The caller has run require_openssl.
 cert_describe_file() {
   local cert_file="$1" key_file="${1%.pem}-key.pem" names not_before not_after issuer state
 
-  require_openssl "${cert_file}" || return 1
-
-  names="$(cert_dns_names "${cert_file}" | paste -sd ',' - | sed 's/,/, /g')"
+  names="$(cert_dns_names "${cert_file}" | paste -sd ',' -)"
   not_before="$(openssl x509 -in "${cert_file}" -noout -startdate | sed 's/^notBefore=//')"
   not_after="$(openssl x509 -in "${cert_file}" -noout -enddate | sed 's/^notAfter=//')"
   issuer="$(openssl x509 -in "${cert_file}" -noout -issuer | sed -E 's/.*CN ?= ?//')"
-  state="valid  "
+  state="valid"
   if ! openssl x509 -in "${cert_file}" -noout -checkend 0 >/dev/null 2>&1; then
     state="expired"
   fi
@@ -273,8 +272,8 @@ cert_describe_file() {
   else
     echo "  private key    missing, expected $(abbreviate_home "${key_file}")"
   fi
-  echo "  covers         ${names}"
-  echo "  ${state}        $(cert_iso_date "${not_before}") to $(cert_iso_date "${not_after}")"
+  echo "  covers         ${names//,/, }"
+  printf '  %-15s%s to %s\n' "${state}" "$(cert_iso_date "${not_before}")" "$(cert_iso_date "${not_after}")"
   echo "  issued by      ${issuer}"
 
   # The only field that needs the proxy, so it degrades instead of failing.
@@ -303,6 +302,7 @@ certs_describe() {
 
   cert_file="${CERT_DIR}/$(cert_safe_filename "${wanted}").pem"
   if [[ -f "${cert_file}" ]]; then
+    require_openssl "${cert_file}" || return 1
     cert_describe_file "${cert_file}"
     return $?
   fi
