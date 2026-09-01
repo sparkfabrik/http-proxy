@@ -136,6 +136,8 @@ hosts_redact_command() {
     -e "s#(--?(${flags})[= ])'[^']*'#\\1'<redacted>'#g" \
     -e "s#(--?(${flags})[= ])\"[^\"]*\"#\\1\"<redacted>\"#g" \
     -e "s#(--?(${flags})[= ])[^'\" ]+#\\1<redacted>#g" \
+    -e "s#([A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|ACCESS_KEY|CREDENTIALS)[A-Za-z0-9_]*=)'[^']*'#\\1'<redacted>'#g" \
+    -e "s#([A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|ACCESS_KEY|CREDENTIALS)[A-Za-z0-9_]*=)\"[^\"]*\"#\\1\"<redacted>\"#g" \
     -e 's#([A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|ACCESS_KEY|CREDENTIALS)[A-Za-z0-9_]*=)[^ ]+#\1<redacted>#g' \
     -e 's#(://)[^/@ ]+:[^/@ ]+@#\1<redacted>@#g'
 }
@@ -151,14 +153,16 @@ hosts_backend_url() {
   local hostname="$1" api_port router service provider
   api_port="$(hosts_proxy_port 8080)"
   [[ -z "${api_port}" ]] && return 0
-  # One router per line, then the one whose rule names this exact host.
+  # One router per line, then the one whose rule names this exact host. A rule
+  # quotes the host with backticks or, escaped in the JSON, double quotes.
   router="$(curl -s --max-time 5 "http://127.0.0.1:${api_port}/api/http/routers?search=${hostname}" 2>/dev/null |
-    sed 's/},{/}\n{/g' | grep -F "Host(\`${hostname}\`)" | head -n 1)"
+    sed 's/},{/}\n{/g' | grep -F -e "Host(\`${hostname}\`)" -e "Host(\\\"${hostname}\\\")" | head -n 1)"
   [[ -z "${router}" ]] && return 0
   service="$(grep -o '"service":"[^"]*"' <<<"${router}" | head -n 1 | cut -d'"' -f4)"
   provider="$(grep -o '"provider":"[^"]*"' <<<"${router}" | head -n 1 | cut -d'"' -f4)"
   [[ -z "${service}" || -z "${provider}" ]] && return 0
-  curl -s --max-time 5 "http://127.0.0.1:${api_port}/api/http/services/${service}@${provider}" 2>/dev/null |
+  [[ "${service}" == *@* ]] || service="${service}@${provider}"
+  curl -s --max-time 5 "http://127.0.0.1:${api_port}/api/http/services/${service}" 2>/dev/null |
     grep -o '"url":"[^"]*"' | head -n 1 | cut -d'"' -f4
 }
 
@@ -191,8 +195,10 @@ hosts_describe_local() {
   fi
 
   backend="$(hosts_backend_url "${hostname}")"
-  port="${backend##*:}"
-  port="${port%%/*}"
+  port=""
+  if [[ "${backend}" =~ ^[a-z]+://[^/]*:([0-9]+)(/|$) ]]; then
+    port="${BASH_REMATCH[1]}"
+  fi
 
   echo "  container      ${container}"
   echo "  image          ${image}"

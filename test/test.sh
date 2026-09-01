@@ -2133,7 +2133,7 @@ case "$1 $2" in
             printf 'bind\x1f\x1f%s/projects/app\x1f%s/projects/app\x1ftrue\n' "${HOME}" "${HOME}"
             printf 'volume\x1fapp-cache\x1f/var/lib/docker/volumes/app-cache/_data\x1f/cache\x1ffalse\n'
         else
-            printf 'node:lts\nrunning\nbridge \nnode server.js --auth s3cret --token=t0k3n API_KEY=k3y https://user:pw@db.spark.loc/x\n'
+            printf 'node:lts\nrunning\nbridge \nnode server.js --auth s3cret --token=t0k3n API_KEY=k3y API_TOKEN='"'"'live secret'"'"' https://user:pw@db.spark.loc/x\n'
         fi ;;
     *) echo "unexpected docker call: $*" >&2; exit 1 ;;
 esac
@@ -2142,7 +2142,7 @@ DOCKER
 #!/usr/bin/env bash
 url="${*: -1}"
 case "${url}" in
-    */api/http/routers*) echo '[{"rule":"Host(`local.spark.loc`)","service":"app-1","provider":"file"},{"rule":"Host(`labelled.spark.loc`)","service":"other-1","provider":"docker"}]' ;;
+    */api/http/routers*) echo '[{"rule":"Host(`local.spark.loc`)","service":"app-1","provider":"file"},{"rule":"Host(\"labelled.spark.loc\")","service":"other-1@docker","provider":"docker"}]' ;;
     */api/http/services/*) echo '{"loadBalancer":{"servers":[{"url":"http://172.17.0.5:8080"}]}}' ;;
     *) printf '200' ;;
 esac
@@ -2234,15 +2234,17 @@ CURL
     # Redaction by flag name, assignment name and URL userinfo, never by the
     # shape of a value. Every planted secret must be gone; the flags must stay.
     total=$((total + 1))
-    if ! echo "${out}" | grep -qE "s3cret|t0k3n|k3y|user:pw" &&
-        echo "${out}" | grep -q -- "--auth <redacted> --token=<redacted> API_KEY=<redacted> https://<redacted>@db.spark.loc/x"; then
+    if ! echo "${out}" | grep -qE "s3cret|t0k3n|k3y|live|secret'|user:pw" &&
+        echo "${out}" | grep -q -- "--auth <redacted> --token=<redacted> API_KEY=<redacted> API_TOKEN='<redacted>' https://<redacted>@db.spark.loc/x"; then
         success "describe redacts secrets in the command by flag, assignment and URL"
         passed=$((passed + 1))
     else
         error "a secret survived in the command line: $(echo "${out}" | grep command)"
     fi
 
-    # A container routed by native labels has no VIRTUAL_HOST to report.
+    # A container routed by native labels has no VIRTUAL_HOST to report. Its
+    # rule quotes the host with double quotes and its service is already
+    # provider-qualified, both of which Traefik's API can return.
     rc=0
     out="$(run_hosts "${dir}/hosts.tsv" hosts_describe labelled.spark.loc)" || rc=$?
     total=$((total + 1))
