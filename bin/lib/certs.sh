@@ -299,7 +299,7 @@ cert_describe_file() {
 }
 
 certs_describe() {
-  local wanted="$1" cert_file name near_miss=""
+  local wanted="$1" cert_file name names near_miss=""
 
   if [[ -z "${wanted}" ]]; then
     log_error "Which domain? For example: $(basename "${0}") certs describe '*.spark.loc'"
@@ -326,6 +326,12 @@ certs_describe() {
   fi
   while IFS= read -r cert_file; do
     [[ -z "${cert_file}" ]] && continue
+    names="$(cert_dns_names "${cert_file}")"
+    if [[ -z "${names}" ]]; then
+      # Said out loud, or a broken file would read as "nothing covers it".
+      log_warning "Skipping $(cert_abbreviate_home "${cert_file}"): openssl found no DNS names in it"
+      continue
+    fi
     while IFS= read -r name; do
       if cert_name_covers "${name}" "${wanted}"; then
         log_info "No certificate is named ${wanted}. It is covered by ${name}:"
@@ -338,7 +344,7 @@ certs_describe() {
       if [[ "${name}" == \*.* && "${wanted}" == *".${name#\*.}" ]]; then
         near_miss="${name}"
       fi
-    done < <(cert_dns_names "${cert_file}")
+    done <<<"${names}"
   done < <(cert_files)
 
   log_error "No certificate covers ${wanted}"
