@@ -235,14 +235,15 @@ certs_list() {
     return 0
   fi
 
-  local i
+  local i noun="certificates"
+  [[ "${total}" -eq 1 ]] && noun="certificate"
   if [[ "${have_openssl}" != "true" ]]; then
     echo "DOMAIN"
     for ((i = 0; i < total; i++)); do
       printf '%s\n' "${domains[i]}"
     done
     echo ""
-    log_info "${total} certificates. Install openssl to see expiry and trust."
+    log_info "${total} ${noun}. Install openssl to see expiry and trust."
     return 0
   fi
 
@@ -260,9 +261,9 @@ certs_list() {
 
   echo ""
   if [[ "${expired_count}" -eq 0 ]]; then
-    log_info "${total} certificates, none expired."
+    log_info "${total} ${noun}, none expired."
   else
-    log_info "${total} certificates, ${expired_count} expired."
+    log_info "${total} ${noun}, ${expired_count} expired."
   fi
   [[ "${show_trust}" != "true" ]] && log_info "Trust is not shown: the mkcert CA could not be read."
 
@@ -366,8 +367,10 @@ certs_generate() {
     return 1
   }
 
-  if ! mkcert -cert-file "${staging}/cert.pem" -key-file "${staging}/key.pem" -- "${domain}" ||
+  local mkcert_output
+  if ! mkcert_output="$(mkcert -cert-file "${staging}/cert.pem" -key-file "${staging}/key.pem" -- "${domain}" 2>&1)" ||
     [[ ! -s "${staging}/cert.pem" || ! -s "${staging}/key.pem" ]]; then
+    [[ -n "${mkcert_output}" ]] && printf '%s\n' "${mkcert_output}" >&2
     rm -rf "${staging}"
     log_error "mkcert could not generate a certificate for ${domain}"
     log_info "Nothing was changed, so any certificate already installed still works"
