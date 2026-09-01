@@ -138,9 +138,39 @@ pg-workflows.githuman.sparkfabrik.loc  local     githuman-pg-workflows  ~/webapp
 macos.test.spark.loc                   Mac-Test  -                      -
 ```
 
-`hosts describe <hostname>` reports one host, including how it is routed. A remote
-host shows the machine and no directory: local paths are not published to the
-tailnet. `hosts --json` prints the local records as JSON. Hostnames served by other machines are not in it; `tailscale-peers --json` carries those.
+`hosts describe <hostname>` reads the container behind one hostname live from
+Docker and the proxy, so it answers "what is this container" without a
+`docker inspect` by hand:
+
+```console
+$ spark-http-proxy hosts describe sparkdock.githuman.sparkfabrik.loc
+sparkdock.githuman.sparkfabrik.loc
+  container      githuman-sparkdock
+  image          node:lts
+  status         running, up 29 hours
+  directory      ~/webapps/sparkfabrik/agents/tailcat-use-cases/sparkdock
+  routed by      VIRTUAL_HOST, port 3847
+  backend        http://172.17.0.3:3847
+  network        bridge
+  reachable      200
+  mounts         ~/webapps/sparkfabrik/agents/tailcat-use-cases/sparkdock -> same path (rw)
+                 githuman-npm-cache -> /cache/npm (rw)
+                 githuman-data -> /data/githuman (rw)
+  command        docker-entrypoint.sh bash -c npx githuman@0.9.0 serve --host 0.0.0.0 --auth <redacted>
+```
+
+The port and backend are what Traefik routes to, read from its API, so they are
+right for `VIRTUAL_HOST` and for native `traefik.*` labels alike. `reachable` is
+the HTTP status of a request sent through the proxy with that `Host` header,
+which is the path a browser takes; on Docker Desktop the container's own address
+is inside the VM and would not answer from the host. Secrets in the command line
+are redacted by flag name (`--auth`, `--token`, `--password` and similar, bare or
+`--flag=value`), by assignment name (`*_TOKEN=`, `*_SECRET=`, ...) and in URL
+userinfo. A value passed some other way is printed as is.
+
+A remote host shows the machine and no directory: local paths are not published
+to the tailnet. A record whose container Docker no longer has is reported as
+such and the command fails. `hosts --json` prints the local records as JSON. Hostnames served by other machines are not in it; `tailscale-peers --json` carries those.
 
 Directories come from the compose working directory, or the first bind mount for a
 container started with `docker run`.

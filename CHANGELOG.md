@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `spark-http-proxy hosts describe` reads the container live: image, status and uptime, the port it is routed to, the backend and network, whether it answers through the proxy, its mounts, and its command with secrets redacted by flag name ([#164](https://github.com/sparkfabrik/http-proxy/issues/164))
 - `tailscale-peers --refresh` replaces `tailscale-refresh-peers`, which is removed
 - The peer table has two groups, `PROXY` and `EXCLUDED`, with the reason in a `STATUS` column
 - The peer summary is one line: machines, how many run this proxy and forward what, how many are excluded

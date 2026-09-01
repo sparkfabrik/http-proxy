@@ -127,8 +127,130 @@ hosts_list() {
   done
 }
 
+# Redacts secret-bearing values in a command line: by flag name (bare, quoted
+# or --flag=value), by assignment name, and the userinfo of a URL. Never by the
+# shape of a value, so a secret passed some other way is still printed.
+hosts_redact_command() {
+  local flags='auth|token|password|passwd|pass|secret|api-key|apikey|access-key|secret-key|client-secret|credentials|bearer'
+  sed -E \
+    -e "s#(--?(${flags})[= ])'[^']*'#\\1'<redacted>'#g" \
+    -e "s#(--?(${flags})[= ])\"[^\"]*\"#\\1\"<redacted>\"#g" \
+    -e "s#(--?(${flags})[= ])[^'\" ]+#\\1<redacted>#g" \
+    -e 's#([A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|ACCESS_KEY|CREDENTIALS)[A-Za-z0-9_]*=)[^ ]+#\1<redacted>#g' \
+    -e 's#(://)[^/@ ]+:[^/@ ]+@#\1<redacted>@#g'
+}
+
+# The published host port of one proxy port, empty when the proxy is not up.
+hosts_proxy_port() {
+  docker port http-proxy "$1/tcp" 2>/dev/null | head -n 1 | sed 's/.*://'
+}
+
+# The backend URL Traefik routes a hostname to, read from its API. Empty when
+# the proxy is not running or nothing routes the hostname.
+hosts_backend_url() {
+  local hostname="$1" api_port router service provider
+  api_port="$(hosts_proxy_port 8080)"
+  [[ -z "${api_port}" ]] && return 0
+  # One router per line, then the one whose rule names this exact host.
+  router="$(curl -s --max-time 5 "http://127.0.0.1:${api_port}/api/http/routers?search=${hostname}" 2>/dev/null |
+    sed 's/},{/}\n{/g' | grep -F "Host(\`${hostname}\`)" | head -n 1)"
+  [[ -z "${router}" ]] && return 0
+  service="$(grep -o '"service":"[^"]*"' <<<"${router}" | head -n 1 | cut -d'"' -f4)"
+  provider="$(grep -o '"provider":"[^"]*"' <<<"${router}" | head -n 1 | cut -d'"' -f4)"
+  [[ -z "${service}" || -z "${provider}" ]] && return 0
+  curl -s --max-time 5 "http://127.0.0.1:${api_port}/api/http/services/${service}@${provider}" 2>/dev/null |
+    grep -o '"url":"[^"]*"' | head -n 1 | cut -d'"' -f4
+}
+
+# The record for a hostname served on this machine, read from Docker live.
+hosts_describe_local() {
+  local hostname="$1" container="$2" directory="$3" routing="$4"
+  local info image state command networks uptime status backend port http_port code
+  local mounts line type name source destination rw first=true
+
+  echo "${hostname}"
+
+  if ! info="$(docker inspect --format '{{.Config.Image}}{{"\n"}}{{.State.Status}}{{"\n"}}{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}{{"\n"}}{{.Path}} {{join .Args " "}}' "${container}" 2>/dev/null)"; then
+    echo "  container      ${container}, not found"
+    echo "  directory      $(hosts_abbreviate "${directory}")"
+    echo "  routed by      ${routing}"
+    log_error "The record names a container Docker no longer has; the proxy drops it on its next event"
+    return 1
+  fi
+  image="$(sed -n 1p <<<"${info}")"
+  state="$(sed -n 2p <<<"${info}")"
+  networks="$(sed -n 3p <<<"${info}" | sed 's/ $//; s/ /, /g')"
+  command="$(sed -n '4,$p' <<<"${info}" | hosts_redact_command)"
+
+  # docker ps renders the uptime, so no date arithmetic on either platform.
+  uptime="$(docker ps -a --filter "name=^${container}$" --format '{{.Status}}' 2>/dev/null | head -n 1)"
+  status="${state}"
+  if [[ -n "${uptime}" ]]; then
+    uptime="$(tr '[:upper:]' '[:lower:]' <<<"${uptime:0:1}")${uptime:1}"
+    [[ "${uptime}" == "${state}"* ]] && status="${uptime}" || status="${state}, ${uptime}"
+  fi
+
+  backend="$(hosts_backend_url "${hostname}")"
+  port="${backend##*:}"
+  port="${port%%/*}"
+
+  echo "  container      ${container}"
+  echo "  image          ${image}"
+  echo "  status         ${status}"
+  echo "  directory      $(hosts_abbreviate "${directory}")"
+  case "${routing}" in
+  virtual-host) echo "  routed by      VIRTUAL_HOST${port:+, port ${port}}" ;;
+  traefik-labels) echo "  routed by      traefik.* labels${port:+, port ${port}}" ;;
+  *) echo "  routed by      ${routing}" ;;
+  esac
+
+  http_port="$(hosts_proxy_port 80)"
+  if [[ -z "${http_port}" ]]; then
+    echo "  backend        unknown, the proxy is not running"
+    echo "  network        ${networks:-none}"
+    echo "  reachable      unknown, the proxy is not running"
+  else
+    echo "  backend        ${backend:-none, the proxy has no route for this hostname}"
+    echo "  network        ${networks:-none}"
+    # Through the proxy, as a browser would go: on Docker Desktop the
+    # container's own address lives inside the VM and does not answer the host.
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H "Host: ${hostname}" "http://127.0.0.1:${http_port}/" 2>/dev/null)"
+    if [[ -z "${code}" || "${code}" == "000" ]]; then
+      echo "  reachable      no answer within 5s"
+    else
+      echo "  reachable      ${code}"
+    fi
+  fi
+
+  # A bind mount has no name, and read collapses adjacent tabs, so the fields
+  # are separated by a character that is not whitespace.
+  mounts="$(docker inspect --format '{{range .Mounts}}{{.Type}}{{"\x1f"}}{{.Name}}{{"\x1f"}}{{.Source}}{{"\x1f"}}{{.Destination}}{{"\x1f"}}{{.RW}}{{"\n"}}{{end}}' "${container}" 2>/dev/null)"
+  if [[ -z "${mounts}" ]]; then
+    echo "  mounts         none"
+  fi
+  while IFS=$'\x1f' read -r type name source destination rw; do
+    [[ -z "${destination}" ]] && continue
+    [[ "${rw}" == "true" ]] && rw="rw" || rw="ro"
+    if [[ "${type}" == "volume" && -n "${name}" ]]; then
+      line="${name} -> ${destination} (${rw})"
+    elif [[ "${source}" == "${destination}" ]]; then
+      line="$(hosts_abbreviate "${source}") -> same path (${rw})"
+    else
+      line="$(hosts_abbreviate "${source}") -> ${destination} (${rw})"
+    fi
+    if [[ "${first}" == "true" ]]; then
+      echo "  mounts         ${line}"
+      first=false
+    else
+      echo "                 ${line}"
+    fi
+  done <<<"${mounts}"
+
+  echo "  command        ${command}"
+}
+
 hosts_describe() {
-  local wanted="$1" hostname container directory routing machine found=false local_out line rest
+  local wanted="$1" hostname container directory routing machine found=false local_out line rest rc=0
 
   if [[ -z "${wanted}" ]]; then
     log_error "Which hostname? Usage: ${0} hosts describe <hostname>"
@@ -154,11 +276,7 @@ hosts_describe() {
     routing="${rest#*$'\t'}"
     [[ "${hostname}" != "${wanted}" ]] && continue
     found=true
-    echo "${hostname}"
-    echo "  served by      this machine"
-    echo "  container      ${container}"
-    echo "  directory      $(hosts_abbreviate "${directory}")"
-    echo "  routed by      ${routing}"
+    hosts_describe_local "${hostname}" "${container}" "${directory}" "${routing}" || rc=1
   done <<<"${local_out}"
 
   while IFS=$'\t' read -r hostname machine; do
@@ -174,6 +292,7 @@ hosts_describe() {
     log_info "See what does with: ${0} hosts"
     return 1
   fi
+  return "${rc}"
 }
 
 # One usage string, so the help and the error cannot drift apart.
@@ -181,7 +300,7 @@ hosts_usage() {
   echo "Usage: ${0} hosts [list|describe <hostname>|--json]"
   echo ""
   echo "  list                 Every hostname served, local and from peers (the default)"
-  echo "  describe <hostname>  One hostname: its container, directory and routing"
+  echo "  describe <hostname>  One hostname's container, read live: image, status, routing, backend, mounts, command"
   echo "  --json               The local records, machine-readable"
   echo ""
   echo "Hostnames served by other machines carry no directory, and are listed in full by:"
