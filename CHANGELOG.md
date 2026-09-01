@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `certs list|describe|generate|delete` replaces `generate-mkcert`, `list-certs` and `remove-cert`
 - `tailscale-peers --refresh` replaces `tailscale-refresh-peers`, which is removed
 - The peer table has two groups, `PROXY` and `EXCLUDED`, with the reason in a `STATUS` column
 - The peer summary is one line: machines, how many run this proxy and forward what, how many are excluded
@@ -37,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `self-update` applies the update it pulled instead of printing the command to do it
 - `version` reports each container's image revision instead of `unknown`
 - `tailscale-status` says how many machines the document holds and how many are online
-- `generate-mkcert` and `remove-cert` apply certificates without restarting the proxy ([#145](https://github.com/sparkfabrik/http-proxy/issues/145))
+- `certs generate` and `certs delete` apply certificates without restarting the proxy ([#145](https://github.com/sparkfabrik/http-proxy/issues/145))
 - A destructive command run without a terminal refuses instead of proceeding ([#147](https://github.com/sparkfabrik/http-proxy/issues/147))
 - `status` names the machines forwarding and what each serves ([#142](https://github.com/sparkfabrik/http-proxy/issues/142))
 - Every base image is pinned to a digest beside its tag ([#139](https://github.com/sparkfabrik/http-proxy/issues/139))
@@ -46,8 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Errors and warnings go to stderr rather than stdout
 - Warn when a container's routing variables are ignored ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
 - Warn when two containers claim the same host and path, naming both ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
-- `generate-mkcert` and `remove-cert` reject an argument containing a path ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
+- `certs generate` and `certs delete` reject an argument containing a path ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
 - `self-test` verifies end-to-end routing rather than only DNS liveness ([#104](https://github.com/sparkfabrik/http-proxy/issues/104))
+
+### Deprecated
+
+- `generate-mkcert`, `list-certs` and `remove-cert`, which warn and route to `certs`
 
 ### Fixed
 

@@ -1184,42 +1184,42 @@ test_prompts_without_a_terminal() {
     }
 
     # A missing argument has a message waiting for it.
-    rc=0; out="$(run_cli generate-mkcert)" || rc=$?
+    rc=0; out="$(run_cli certs generate)" || rc=$?
     total=$((total + 1))
     if echo "${out}" | grep -qi "domain name required" && [ "${rc}" -ne 0 ]; then
-        success "generate-mkcert without a domain says so and fails"
+        success "certs generate without a domain says so and fails"
         passed=$((passed + 1))
     else
-        error "generate-mkcert exited ${rc} saying: $(echo "${out}" | tr '\n' ' ')"
+        error "certs generate exited ${rc} saying: $(echo "${out}" | tr '\n' ' ')"
     fi
 
-    rc=0; out="$(run_cli remove-cert)" || rc=$?
+    rc=0; out="$(run_cli certs delete)" || rc=$?
     total=$((total + 1))
     if echo "${out}" | grep -qi "domain name required" && [ "${rc}" -ne 0 ]; then
-        success "remove-cert without a domain says so and fails"
+        success "certs delete without a domain says so and fails"
         passed=$((passed + 1))
     else
-        error "remove-cert exited ${rc} saying: $(echo "${out}" | tr '\n' ' ')"
+        error "certs delete exited ${rc} saying: $(echo "${out}" | tr '\n' ' ')"
     fi
 
     # A destructive action that cannot be confirmed must not happen, and must
     # say why rather than stopping silently.
     touch "${certs}/app.spark.loc.pem" "${certs}/app.spark.loc-key.pem"
-    rc=0; out="$(run_cli remove-cert app.spark.loc)" || rc=$?
+    rc=0; out="$(run_cli certs delete app.spark.loc)" || rc=$?
     total=$((total + 1))
     if [ -f "${certs}/app.spark.loc.pem" ]; then
-        success "remove-cert leaves the certificate when it cannot confirm"
+        success "certs delete leaves the certificate when it cannot confirm"
         passed=$((passed + 1))
     else
-        error "remove-cert deleted a certificate without confirmation"
+        error "certs delete deleted a certificate without confirmation"
     fi
 
     total=$((total + 1))
     if echo "${out}" | grep -qi "terminal" && [ "${rc}" -ne 0 ]; then
-        success "remove-cert says why it stopped without a terminal"
+        success "certs delete says why it stopped without a terminal"
         passed=$((passed + 1))
     else
-        error "remove-cert stopped without explaining: exit ${rc}, $(echo "${out}" | tr '\n' ' ')"
+        error "certs delete stopped without explaining: exit ${rc}, $(echo "${out}" | tr '\n' ' ')"
     fi
 
     # destroy, against a project holding nothing, so a wrong answer here costs
@@ -1306,9 +1306,14 @@ MKCERT
 
     # The restart belongs to the shared helper, which reaches it only when the
     # guard is absent. A restart in either command's own body is unconditional.
-    for body in generate_mkcert remove_cert; do
+    for body in certs_generate certs_delete; do
         total=$((total + 1))
-        if awk "/^${body}\(\) \{/,/^\}/" bin/spark-http-proxy | grep -q "dc_cmd restart"; then
+        extracted="$(awk "/^${body}\(\) \{/,/^\}/" bin/lib/certs.sh)"
+        if [ -z "${extracted}" ]; then
+            # An empty extraction would make the grep below vacuously pass, so a
+            # renamed or moved body fails here instead of going unchecked.
+            error "${body} was not found in bin/lib/certs.sh, so nothing was checked"
+        elif grep -q "dc_cmd restart" <<<"${extracted}"; then
             error "${body} restarts the proxy directly rather than through the helper"
         else
             success "${body} does not restart the proxy directly"
@@ -1320,7 +1325,7 @@ MKCERT
     # file that only mentions the flag. A false positive is the expensive one: it
     # sends the scan to an entrypoint that runs its whole body and withdraws peer
     # routes, which is why the pattern requires the guard and not the flag.
-    local probe fake
+    local probe fake extracted
     probe="$(grep -oE "grep -qE '[^']+'" bin/spark-http-proxy | head -1 | sed "s/grep -qE '//; s/'$//")"
 
     total=$((total + 1))
@@ -1377,7 +1382,7 @@ STUB
         : >"${log}"
         env PATH="${stub}:${mkcert_stub:+${mkcert_stub}:}${PATH}" HOME="${home}" \
             CAROOT="${caroot}" STUB_LOG="${log}" "$@" \
-            timeout 60 bin/spark-http-proxy generate-mkcert "${host}" </dev/null 2>&1
+            timeout 60 bin/spark-http-proxy certs generate "${host}" </dev/null 2>&1
     }
 
     # An image carrying the guard: the scan runs and nothing is restarted.
@@ -1432,7 +1437,7 @@ STUB
     rc=0; out="$(stub_generate STUB_NOT_RUNNING=1)" || rc=$?
     total=$((total + 1))
     if [ "${rc}" -eq 0 ] && ! grep -qE "restart|scan" "${log}"; then
-        success "generate-mkcert succeeds with the proxy stopped, touching nothing"
+        success "certs generate succeeds with the proxy stopped, touching nothing"
         passed=$((passed + 1))
     else
         error "exit ${rc}, calls: $(tr '\n' ' ' <"${log}")"
@@ -1663,17 +1668,17 @@ STUB
     certs="${CERT_DIR:-${HOME}/.local/spark/http-proxy/certs}"
     rc=0
     out="$(env PATH="${mkcert_stub:+${mkcert_stub}:}${PATH}" \
-        timeout 60 bin/spark-http-proxy generate-mkcert "${host}" </dev/null 2>&1)" || rc=$?
+        timeout 60 bin/spark-http-proxy certs generate "${host}" </dev/null 2>&1)" || rc=$?
 
     total=$((total + 1))
     if [ "${rc}" -eq 0 ]; then
-        success "generate-mkcert succeeds against the running stack"
+        success "certs generate succeeds against the running stack"
         passed=$((passed + 1))
     else
         # The directory is named because a stack brought up before it existed has
         # docker create it, owned by root, and then nothing the user runs can
         # write a certificate into it.
-        error "generate-mkcert exited ${rc}: $(echo "${out}" | tr '\n' ' ')"
+        error "certs generate exited ${rc}: $(echo "${out}" | tr '\n' ' ')"
         error "  certificate directory: $(ls -ld "${certs}" 2>&1), running as $(id -un)"
     fi
 
@@ -1713,8 +1718,8 @@ STUB
             ;;
     esac
 
-    # Removal, driven through the scan rather than through remove-cert, because
-    # confirming a removal needs a terminal and CI has none. What remove-cert
+    # Removal, driven through the scan rather than through certs delete, because
+    # confirming a removal needs a terminal and CI has none. What certs delete
     # does with the proxy is covered by the stubbed assertions above.
     rm -f "${certs}/${host}.pem" "${certs}/${host}-key.pem"
     docker exec http-proxy /entrypoint.sh --tls-only >/dev/null 2>&1 || true
@@ -2030,16 +2035,18 @@ test_state_dir_and_library_loading() {
     total=$((total + 1))
     out="$(HOME=/home/dev bash -c '
         log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
         . bin/lib/hosts.sh
-        hosts_abbreviate /home/dev; echo
-        hosts_abbreviate /home/dev/app; echo
-        hosts_abbreviate /home/dev-old/app; echo')"
+        abbreviate_home /home/dev; echo
+        abbreviate_home /home/dev/app; echo
+        abbreviate_home /home/dev-old/app; echo')"
     if [ "${out}" = "~
 ~/app
 /home/dev-old/app" ]; then
         passed=$((passed + 1))
     else
-        log "❌ hosts_abbreviate mishandled HOME or a sibling path: ${out}"
+        log "❌ abbreviate_home mishandled HOME or a sibling path: ${out}"
     fi
 
     # A checkout without bin/lib must fail rather than fall through to compose.
@@ -2059,6 +2066,182 @@ test_state_dir_and_library_loading() {
     [ "${passed}" -eq "${total}" ]
 }
 
+# The libraries call helpers defined in the entrypoint, the way they already call
+# log_info. A harness that sources a library needs them, so they are extracted
+# once to a file the inner shells source by path.
+LIB_HELPERS="$(mktemp)"
+sed -n '/^abbreviate_home()/,/^}/p' bin/spark-http-proxy >"${LIB_HELPERS}"
+export LIB_HELPERS
+
+test_certs_command() {
+    local passed=0 total=0 dir out rc
+
+    # Two real certificates, one wildcard, generated here so the assertions do
+    # not depend on what this machine happens to have installed.
+    dir="$(mktemp -d)"
+    local d
+    for d in '*.spark.loc' 'api.spark.loc'; do
+        local safe="${d//\*/_wildcard_}"
+        openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout "${dir}/${safe}-key.pem" -out "${dir}/${safe}.pem" \
+            -days 3650 -subj "/CN=${d}" -addext "subjectAltName=DNS:${d}" >/dev/null 2>&1
+    done
+
+    run_certs() {
+        env CERT_DIR="${dir}" bash -c '
+            log_info(){ echo "$1"; }
+            log_warning(){ echo "$1" >&2; }
+            log_error(){ echo "$1" >&2; }
+            log_success(){ echo "$1"; }
+            # shellcheck source=/dev/null
+            . "${LIB_HELPERS}"
+            # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/certs.sh
+            "$@"' _ "$@" 2>&1
+    }
+
+    # The table, its columns and its count.
+    total=$((total + 1))
+    out="$(run_certs certs_list)"
+    if grep -q "^DOMAIN.*EXPIRES" <<<"${out}" && grep -q "2 certificates, none expired" <<<"${out}"; then
+        passed=$((passed + 1))
+    else
+        error "certs list did not render a table with a count: ${out}"
+    fi
+
+    # Wildcards are shown as * and sort before names, which sorting on the
+    # stored _wildcard_ filename would get wrong.
+    total=$((total + 1))
+    if [ "$(grep -c '^\*\.spark\.loc' <<<"${out}")" = "1" ] &&
+        [ "$(grep -n '^\*\.spark\.loc' <<<"${out}" | cut -d: -f1)" -lt \
+            "$(grep -n '^api\.spark\.loc' <<<"${out}" | cut -d: -f1)" ]; then
+        passed=$((passed + 1))
+    else
+        error "the wildcard is not shown as * before the named certificate: ${out}"
+    fi
+
+    # The count must match the certificates on disk, not the file count.
+    total=$((total + 1))
+    local on_disk
+    on_disk="$(find "${dir}" -name '*.pem' ! -name '*-key.pem' | wc -l | tr -d ' ')"
+    if grep -q "${on_disk} certificates" <<<"${out}"; then
+        passed=$((passed + 1))
+    else
+        error "the count disagrees with the ${on_disk} certificates on disk: ${out}"
+    fi
+
+    # describe names what the certificate covers and when it expires.
+    total=$((total + 1))
+    out="$(run_certs certs_describe '*.spark.loc')"
+    if grep -q "covers .*\*\.spark\.loc" <<<"${out}" && grep -qE "expires +[0-9]{4}-[0-9]{2}-[0-9]{2}" <<<"${out}"; then
+        passed=$((passed + 1))
+    else
+        error "certs describe did not name the SANs and the expiry: ${out}"
+    fi
+
+    total=$((total + 1))
+    out="$(run_certs certs_describe nothing.spark.loc)" && rc=0 || rc=$?
+    if [ "${rc}" -ne 0 ] && grep -q "No certificate" <<<"${out}"; then
+        passed=$((passed + 1))
+    else
+        error "certs describe accepted a domain with no certificate (rc=${rc})"
+    fi
+
+    # Without openssl the domain column still renders, and says why alone.
+    total=$((total + 1))
+    out="$(env CERT_DIR="${dir}" bash -c '
+        log_info(){ echo "$1"; }; log_warning(){ echo "$1" >&2; }; log_error(){ echo "$1" >&2; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/certs.sh
+        certs_have_openssl(){ return 1; }
+        certs_list' 2>&1)"
+    if grep -q "^DOMAIN$" <<<"${out}" && grep -q "Install openssl" <<<"${out}" &&
+        ! grep -q "EXPIRES" <<<"${out}"; then
+        passed=$((passed + 1))
+    else
+        error "certs list without openssl did not degrade to the domain column: ${out}"
+    fi
+
+    # An unreadable CA drops the whole column rather than printing unknown rows.
+    total=$((total + 1))
+    out="$(env CERT_DIR="${dir}" bash -c '
+        log_info(){ echo "$1"; }; log_warning(){ echo "$1" >&2; }; log_error(){ echo "$1" >&2; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/certs.sh
+        certs_ca_name(){ return 0; }
+        certs_list' 2>&1)"
+    if ! grep -q "TRUSTED" <<<"${out}" && grep -q "EXPIRES" <<<"${out}" &&
+        grep -q "Trust is not shown" <<<"${out}"; then
+        passed=$((passed + 1))
+    else
+        error "an unreadable CA did not remove the TRUSTED column: ${out}"
+    fi
+
+    # The deprecated names still work, warn on stderr, and match the new output.
+    local name new
+    while read -r name new; do
+        total=$((total + 1))
+        local old_out new_out old_err
+        old_err="$(bin/spark-http-proxy "${name}" 2>&1 >/dev/null)" || true
+        old_out="$(bin/spark-http-proxy "${name}" 2>/dev/null)" || true
+        new_out="$(bin/spark-http-proxy certs "${new}" 2>/dev/null)" || true
+        if grep -q "deprecated" <<<"${old_err}" && grep -q "certs ${new}" <<<"${old_err}" &&
+            [ "${old_out}" = "${new_out}" ]; then
+            passed=$((passed + 1))
+        else
+            error "${name} did not warn on stderr and match 'certs ${new}' on stdout"
+        fi
+    done <<'PAIRS'
+list-certs list
+PAIRS
+
+    # Deprecated names work but are not advertised.
+    total=$((total + 1))
+    local usage completion
+    usage="$(bin/spark-http-proxy help 2>&1)"
+    completion="$(bin/spark-http-proxy completion 2>/dev/null | grep '^    commands=')"
+    if ! grep -qE 'generate-mkcert|list-certs|remove-cert' <<<"${usage}" &&
+        ! grep -qE 'generate-mkcert|list-certs|remove-cert' <<<"${completion}" &&
+        grep -q 'certs' <<<"${usage}" && grep -q 'certs' <<<"${completion}"; then
+        passed=$((passed + 1))
+    else
+        error "the deprecated names are still advertised in help or completion"
+    fi
+
+    # certs list and describe run without Docker; generate and delete do not.
+    local args
+    while read -r expectation args; do
+        total=$((total + 1))
+        # shellcheck disable=SC2086
+        # shellcheck source=/dev/null
+        if . <(sed -n '/^needs_no_prerequisites()/,/^}/p' bin/spark-http-proxy) &&
+            needs_no_prerequisites ${args}; then
+            actual=exempt
+        else
+            actual=needs
+        fi
+        if [ "${actual}" = "${expectation}" ]; then
+            passed=$((passed + 1))
+        else
+            error "prerequisites for '${args}': ${actual}, expected ${expectation}"
+        fi
+    done <<'CASES'
+exempt certs
+exempt certs list
+exempt certs describe example.spark.loc
+needs certs generate example.spark.loc
+needs certs delete example.spark.loc
+exempt list-certs
+CASES
+
+    rm -rf "${dir}"
+    log "Certs command tests: ${passed}/${total} passed"
+    [ "${passed}" -eq "${total}" ]
+}
+
 test_hosts_command() {
     local passed=0 total=0 dir out rc
 
@@ -2073,7 +2256,11 @@ test_hosts_command() {
                 log_info(){ echo "$1"; }
                 log_warning(){ echo "$1" >&2; }
                 log_error(){ echo "$1" >&2; }
-                . bin/lib/hosts.sh
+                # shellcheck source=/dev/null
+            . "${LIB_HELPERS}"
+            # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/hosts.sh
                 "$@"' _ "${@:2}" 2>&1
     }
 
@@ -2160,7 +2347,11 @@ test_hosts_command() {
     out="$(env HOSTS_JSON_FILE="${dir}/hosts.json" HOSTS_STATE_FILE="${dir}/hosts.tsv" \
         TAILSCALE_SUMMARY_FILE="${dir}/summary" bash -c '
             log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
-            . bin/lib/hosts.sh
+            # shellcheck source=/dev/null
+            . "${LIB_HELPERS}"
+            # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/hosts.sh
             hosts_command --json' 2>&1)" || rc=$?
 
     total=$((total + 1))
@@ -2178,7 +2369,11 @@ test_hosts_command() {
             TAILSCALE_SUMMARY_FILE=/dev/null RUNNING="$1" bash -c '
                 log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
                 is_running(){ [ "${RUNNING}" = "yes" ]; }
-                . bin/lib/hosts.sh
+                # shellcheck source=/dev/null
+            . "${LIB_HELPERS}"
+            # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/hosts.sh
                 hosts_list' 2>&1
     }
 
@@ -2216,6 +2411,8 @@ test_hosts_command() {
     out="$(env HOSTS_STATE_FILE="${dir}/empty.tsv" TAILSCALE_SUMMARY_FILE=/dev/null bash -c '
         log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
         is_running(){ return 0; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
         . bin/lib/hosts.sh
         hosts_list' 2>&1)" || rc=$?
     total=$((total + 1))
@@ -2230,6 +2427,8 @@ test_hosts_command() {
     rc=0
     out="$(env HOSTS_STATE_FILE="${dir}/hosts.tsv" TAILSCALE_SUMMARY_FILE="${dir}/summary" bash -c '
         log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
         . bin/lib/hosts.sh
         hosts_command --help' 2>&1)" || rc=$?
 
@@ -2391,7 +2590,7 @@ test_suggested_commands_are_pasteable() {
     local passed=0 total=0 offenders
 
     total=$((total + 1))
-    offenders="$(grep -nE '(echo|log_[a-z]+|printf).*(generate-mkcert|remove-cert|start-with-tailscale|tailscale-peers)[^"]*<[a-z_-]+>' bin/spark-http-proxy || true)"
+    offenders="$(grep -nE '(echo|log_[a-z]+|printf).*(certs generate|certs delete|start-with-tailscale|tailscale-peers)[^"]*<[a-z_-]+>' bin/spark-http-proxy || true)"
     if [ -z "${offenders}" ]; then
         success "suggested commands carry no shell metacharacters"
         passed=$((passed + 1))
@@ -2437,7 +2636,7 @@ test_status_summary() {
     # The advice sits beside the hostnames it applies to, and has to survive
     # being copied: a placeholder pastes as arguments or as a redirection.
     total=$((total + 1))
-    if echo "${out}" | grep -q "generate-mkcert 'nest.spark.loc'"; then
+    if echo "${out}" | grep -q "certs generate 'nest.spark.loc'"; then
         success "status shows a certificate command for a hostname it just listed"
         passed=$((passed + 1))
     else
@@ -2478,7 +2677,7 @@ test_status_summary() {
     # On a tailnet with one proxy this is the permanent state, so certificate
     # advice here would print on every status forever.
     total=$((total + 1))
-    if echo "${out}" | grep -q "generate-mkcert"; then
+    if echo "${out}" | grep -q "certs generate"; then
         error "status advised on certificates with nothing forwarded: $(echo "${out}" | tr '\n' ' ')"
     else
         success "nothing forwarded means no certificate advice"
@@ -2517,8 +2716,8 @@ test_status_summary() {
     total=$((total + 1))
     local col_long col_short
     # Only the table rows: the example command names a hostname too.
-    col_long="$(echo "${out}" | grep -v generate-mkcert | grep "macos.spark.loc" | grep -bo "macos.spark.loc" | cut -d: -f1)"
-    col_short="$(echo "${out}" | grep -v generate-mkcert | grep "app.spark.loc" | grep -bo "app.spark.loc" | cut -d: -f1)"
+    col_long="$(echo "${out}" | grep -v 'certs generate' | grep "macos.spark.loc" | grep -bo "macos.spark.loc" | cut -d: -f1)"
+    col_short="$(echo "${out}" | grep -v 'certs generate' | grep "app.spark.loc" | grep -bo "app.spark.loc" | cut -d: -f1)"
     if [ -n "${col_long}" ] && [ "${col_long}" = "${col_short}" ]; then
         success "the hostname column lines up whatever the machine names are"
         passed=$((passed + 1))
@@ -3324,6 +3523,12 @@ main() {
     local state_dir_passed=0
     test_state_dir_and_library_loading && state_dir_passed=1
     [ "$state_dir_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing the certs command..."
+    total=$((total + 1))
+    local certs_passed=0
+    test_certs_command && certs_passed=1
+    [ "$certs_passed" -eq 1 ] && passed=$((passed + 1))
 
     log "Testing the hosts command..."
     total=$((total + 1))
