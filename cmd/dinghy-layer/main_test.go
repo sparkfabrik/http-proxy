@@ -908,6 +908,18 @@ func TestRecordingNothingClearsAContainersRows(t *testing.T) {
 	}
 }
 
+func TestAHostnameThatSanitizesToNothingIsNotARow(t *testing.T) {
+	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: t.TempDir()})
+
+	cl.recordHosts("abc", ContainerInfo{Name: "app-1"}, "traefik-labels",
+		[]string{"\x01\x02", "\t", "real.spark.loc"})
+
+	rows := cl.hosts["abc"]
+	if len(rows) != 1 || rows[0].hostname != "real.spark.loc" {
+		t.Errorf("expected only the real hostname, got %v", rows)
+	}
+}
+
 func TestSanitizeFieldStripsC1Controls(t *testing.T) {
 	// U+009B is a control-sequence introducer, so a terminal acts on it.
 	if got := sanitizeField("a\u009b31mb"); got != "a31mb" {

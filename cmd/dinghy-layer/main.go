@@ -228,11 +228,14 @@ func sanitizeField(value string) string {
 func (cl *CompatibilityLayer) recordHosts(containerID string, info ContainerInfo, routing string, hostnames []string) {
 	rows := make([]hostRow, 0, len(hostnames))
 	for _, hostname := range hostnames {
-		if hostname == "" {
+		// Sanitised first: a name of only control characters is not empty until
+		// it has been stripped, and an empty hostname is not a row.
+		hostname = sanitizeField(hostname)
+		if strings.TrimSpace(hostname) == "" {
 			continue
 		}
 		rows = append(rows, hostRow{
-			hostname:  sanitizeField(hostname),
+			hostname:  hostname,
 			container: sanitizeField(info.Name),
 			directory: sanitizeField(info.Directory),
 			routing:   routing,
