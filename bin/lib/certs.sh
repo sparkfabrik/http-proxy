@@ -401,9 +401,11 @@ certs_generate() {
       if mv "${previous}" "${CERT_DIR}/${safe_filename}.pem"; then
         log_error "The key could not be installed, so the previous certificate was put back"
       else
+        # The staging directory is deliberately left in place: the copy named
+        # here is inside it, and removing it would delete the only remaining
+        # copy of the certificate the user is being told to restore.
         log_error "The key could not be installed and the previous certificate could not be restored"
         log_info "A copy of it is at ${previous}. Put it back before the proxy reloads."
-        rm -rf "${staging}" 2>/dev/null || true
         return 1
       fi
     else

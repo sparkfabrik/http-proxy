@@ -2515,6 +2515,44 @@ COLLIDING
         error "an unbackupable certificate was overwritten anyway (rc=${rc}): ${out}"
     fi
 
+    # When the restore fails, the copy the message names must still exist: it is
+    # inside the staging directory, so removing that would delete the only copy
+    # of the certificate the user is told to put back.
+    total=$((total + 1))
+    printf 'ORIGINAL' >"${dir}/norestore.spark.loc.pem"
+    printf 'ORIGINAL-KEY' >"${dir}/norestore.spark.loc-key.pem"
+    out="$(env CERT_DIR="${dir}" bash -c '
+        log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }; log_success(){ echo "SUCCESS"; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/certs.sh
+        install_mkcert(){ return 0; }
+        mkcert(){
+            local cert="" key=""
+            while [ "$#" -gt 0 ]; do
+                case "$1" in
+                    -cert-file) cert="$2"; shift ;;
+                    -key-file) key="$2"; shift ;;
+                esac
+                shift
+            done
+            printf "NEW" >"${cert}"; printf "NEW" >"${key}"
+        }
+        # The key install fails, and so does putting the old certificate back.
+        # Keyed on the source: the key install and the restore fail, the
+        # certificate install succeeds, which is the sequence being tested.
+        mv(){ case "$1" in */key.pem|*previous-cert.pem) return 1 ;; *) command mv "$@" ;; esac; }
+        apply_certificates(){ echo "APPLIED"; }
+        certs_generate norestore.spark.loc' 2>&1)" && rc=0 || rc=$?
+    local named_copy
+    named_copy="$(grep -oE '/[^ ]*previous-cert\.pem' <<<"${out}" | head -1)"
+    if [ "${rc}" -ne 0 ] && [ -n "${named_copy}" ] && [ -f "${named_copy}" ] &&
+        [ "$(cat "${named_copy}")" = "ORIGINAL" ]; then
+        passed=$((passed + 1))
+    else
+        error "the recovery copy the message names does not exist (rc=${rc}, named='${named_copy}'): ${out}"
+    fi
+
     rm -rf "${dir}"
     log "Certs command tests: ${passed}/${total} passed"
     [ "${passed}" -eq "${total}" ]
