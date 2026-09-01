@@ -323,7 +323,7 @@ Source: `.github/instructions/go.instructions.md` (Effective Go + Google Go Styl
 
 ## Bash Script Style (`bin/spark-http-proxy`)
 
-The CLI is a single Bash script. Follow the conventions already established in it:
+The CLI is one Bash script plus libraries in `bin/lib/`, sourced at startup. Follow the conventions already established in it:
 
 - `set -e` at the top — every new function must be safe to run under errexit
 - Logging via the four helpers: `log_info`, `log_success`, `log_error`, `log_warning`
@@ -337,6 +337,13 @@ The CLI is a single Bash script. Follow the conventions already established in i
   4. `generate_completion` commands string
 - Commands that do not need Docker (e.g. pure git or config ops) must be added to the
   prerequisite skip list near line 326
+
+Lint with `-x` and every file, or shellcheck does not follow the libraries and their
+code goes unchecked:
+
+```bash
+docker run --rm -v "$(pwd):/src" -w /src koalaman/shellcheck:stable -x bin/spark-http-proxy bin/lib/*.sh
+```
 
 ## Docker / Dockerfile Style
 

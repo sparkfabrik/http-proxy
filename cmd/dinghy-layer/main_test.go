@@ -682,3 +682,114 @@ func TestRecordClaimsCoversBareHosts(t *testing.T) {
 		t.Errorf("claim holder = %q, want it to stay with first", got)
 	}
 }
+
+func TestContainerDirectoryPrefersTheComposeWorkingDir(t *testing.T) {
+	inspect := types.ContainerJSON{
+		Config: &container.Config{Labels: map[string]string{
+			"com.docker.compose.project.working_dir": "/home/dev/project",
+		}},
+		Mounts: []types.MountPoint{{Type: "bind", Source: "/somewhere/else"}},
+	}
+
+	if got := containerDirectory(inspect); got != "/home/dev/project" {
+		t.Errorf("expected the compose working directory, got %q", got)
+	}
+}
+
+func TestContainerDirectoryFallsBackToTheFirstBindMount(t *testing.T) {
+	inspect := types.ContainerJSON{
+		Config: &container.Config{Labels: map[string]string{}},
+		Mounts: []types.MountPoint{
+			{Type: "volume", Source: "a-named-volume"},
+			{Type: "bind", Source: "/home/dev/run-without-compose"},
+			{Type: "bind", Source: "/later/one"},
+		},
+	}
+
+	if got := containerDirectory(inspect); got != "/home/dev/run-without-compose" {
+		t.Errorf("expected the first bind mount, got %q", got)
+	}
+}
+
+func TestContainerDirectoryIsEmptyWhenThereIsNothingToShow(t *testing.T) {
+	inspect := types.ContainerJSON{
+		Config: &container.Config{Labels: map[string]string{}},
+		Mounts: []types.MountPoint{{Type: "volume", Source: "a-named-volume"}},
+	}
+
+	if got := containerDirectory(inspect); got != "" {
+		t.Errorf("expected no directory, got %q", got)
+	}
+}
+
+func TestRecordHostsWritesOneRowPerHostname(t *testing.T) {
+	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: t.TempDir()})
+	cl.recordHosts("abc123", ContainerInfo{
+		Name:        "app-1",
+		VirtualHost: "one.spark.loc,two.spark.loc:8080",
+		Directory:   "/home/dev/app",
+	}, "virtual-host")
+
+	rows := cl.hosts["abc123"]
+	if len(rows) != 2 {
+		t.Fatalf("expected a row per hostname, got %d: %+v", len(rows), rows)
+	}
+	if rows[0].hostname != "one.spark.loc" || rows[1].hostname != "two.spark.loc" {
+		t.Errorf("hostnames were not split as the router parses them: %+v", rows)
+	}
+	if rows[1].directory != "/home/dev/app" || rows[1].routing != "virtual-host" {
+		t.Errorf("a row lost its directory or routing: %+v", rows[1])
+	}
+}
+
+func TestRecordHostsForgetsAContainerWithNoHostnames(t *testing.T) {
+	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: t.TempDir()})
+	cl.recordHosts("abc123", ContainerInfo{Name: "app-1", VirtualHost: "one.spark.loc"}, "virtual-host")
+	cl.recordHosts("abc123", ContainerInfo{Name: "app-1", VirtualHost: ""}, "traefik-labels")
+
+	if _, ok := cl.hosts["abc123"]; ok {
+		t.Errorf("a container serving no hostname is still recorded: %+v", cl.hosts)
+	}
+}
+
+func TestWriteHostsFileIsSortedAndTabSeparated(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hosts.tsv")
+	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: dir, HostsStateFile: path})
+
+	cl.recordHosts("b", ContainerInfo{Name: "zeta", VirtualHost: "zeta.spark.loc", Directory: "/z"}, "virtual-host")
+	cl.recordHosts("a", ContainerInfo{Name: "alpha", VirtualHost: "alpha.spark.loc"}, "traefik-labels")
+
+	if err := cl.writeHostsFile(); err != nil {
+		t.Fatalf("writing the hosts file failed: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading it back failed: %v", err)
+	}
+	want := "alpha.spark.loc\talpha\t\ttraefik-labels\nzeta.spark.loc\tzeta\t/z\tvirtual-host\n"
+	if string(data) != want {
+		t.Errorf("hosts file is not what the CLI parses:\n got %q\nwant %q", data, want)
+	}
+}
+
+func TestWriteHostsFileLeavesNoTemporaryFile(t *testing.T) {
+	dir := t.TempDir()
+	cl := NewCompatibilityLayer(&CompatibilityConfig{TraefikDynamicDir: dir, HostsStateFile: filepath.Join(dir, "hosts.tsv")})
+	cl.recordHosts("a", ContainerInfo{Name: "alpha", VirtualHost: "alpha.spark.loc"}, "virtual-host")
+
+	if err := cl.writeHostsFile(); err != nil {
+		t.Fatalf("writing failed: %v", err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("a temporary file was left behind: %s", e.Name())
+		}
+	}
+}

@@ -124,6 +124,27 @@ When generating certificates, you can choose between specific domains or wildcar
 
 **⚠️ Important**: Wildcard certificates have nesting limitations. A certificate for `*.spark.loc` will NOT work for nested domains like `test.foo.spark.loc`. To match nested domains, you need to generate a more specific wildcard like `*.foo.spark.loc`.
 
+### What is being served
+
+`hosts` answers three questions at once: which hostnames this proxy serves, which
+machine serves each, and for containers on this machine, which directory they run
+from.
+
+```console
+$ spark-http-proxy hosts
+HOSTNAME                               MACHINE   CONTAINER              DIRECTORY
+graphile-poc.githuman.sparkfabrik.loc  local     githuman-graphile-poc  ~/webapps/graphile-poc
+pg-workflows.githuman.sparkfabrik.loc  local     githuman-pg-workflows  ~/webapps/pg-workflows
+macos.test.spark.loc                   Mac-Test  -                      -
+```
+
+`hosts describe <hostname>` reports one host, including how it is routed. A remote
+host shows the machine and no directory: local paths are not published to the
+tailnet. `hosts --json` prints the state file the command reads.
+
+Directories come from the compose working directory, or the first bind mount for a
+container started with `docker run`.
+
 ### Optional Commands
 
 ```bash

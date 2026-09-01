@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -51,6 +52,18 @@ type CompatibilityLayer struct {
 	// already running and a compose stack starts afterwards, so both containers
 	// arrive as separate events.
 	claims map[routeClaim]claimHolder
+
+	// hosts records what each container serves, keyed by container id, so the
+	// state file can be rewritten whole from memory after a single event.
+	hosts map[string][]hostRow
+}
+
+// hostRow is one line of the hosts state file.
+type hostRow struct {
+	hostname  string
+	container string
+	directory string
+	routing   string
 }
 
 // routeClaim identifies a route by what a request has to match to reach it.
@@ -76,6 +89,8 @@ type CompatibilityConfig struct {
 	DryRun            bool
 	LogLevel          string
 	TraefikDynamicDir string
+	// HostsStateFile is what `spark-http-proxy hosts` reads. Empty disables it.
+	HostsStateFile string
 }
 
 // Validate checks if the configuration is valid
@@ -92,6 +107,7 @@ func NewCompatibilityLayer(cfg *CompatibilityConfig) *CompatibilityLayer {
 	return &CompatibilityLayer{
 		config: cfg,
 		claims: make(map[routeClaim]claimHolder),
+		hosts:  make(map[string][]hostRow),
 	}
 }
 
@@ -116,6 +132,8 @@ type ContainerInfo struct {
 	VirtualPort string
 	VirtualPath string
 	IsRunning   bool
+	// Directory is where the project runs from, for getting back to its source.
+	Directory string
 }
 
 // extractContainerInfo extracts relevant information from a container inspection
@@ -127,7 +145,76 @@ func (cl *CompatibilityLayer) extractContainerInfo(inspect types.ContainerJSON) 
 		VirtualPort: utils.GetDockerEnvVar(inspect.Config.Env, "VIRTUAL_PORT"),
 		VirtualPath: utils.GetDockerEnvVar(inspect.Config.Env, "VIRTUAL_PATH"),
 		IsRunning:   inspect.State.Running,
+		Directory:   containerDirectory(inspect),
 	}
+}
+
+// recordHosts replaces what a container contributes to the hosts state file.
+// One row per hostname, because a container can carry several VIRTUAL_HOST
+// values and each is a separate answer to "what serves this name".
+func (cl *CompatibilityLayer) recordHosts(containerID string, info ContainerInfo, routing string) {
+	rows := make([]hostRow, 0, 1)
+	for _, host := range parseVirtualHosts(info.VirtualHost) {
+		rows = append(rows, hostRow{
+			hostname:  host.hostname,
+			container: info.Name,
+			directory: info.Directory,
+			routing:   routing,
+		})
+	}
+	if len(rows) == 0 {
+		delete(cl.hosts, containerID)
+		return
+	}
+	cl.hosts[containerID] = rows
+}
+
+// writeHostsFile rewrites the state file from memory, sorted so the CLI renders
+// a stable order and a diff of the file means something changed.
+func (cl *CompatibilityLayer) writeHostsFile() error {
+	if cl.config.HostsStateFile == "" {
+		return nil
+	}
+
+	rows := make([]hostRow, 0, len(cl.hosts))
+	for _, containerRows := range cl.hosts {
+		rows = append(rows, containerRows...)
+	}
+	slices.SortFunc(rows, func(a, b hostRow) int {
+		if c := strings.Compare(a.hostname, b.hostname); c != 0 {
+			return c
+		}
+		return strings.Compare(a.container, b.container)
+	})
+
+	var b strings.Builder
+	for _, row := range rows {
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\n", row.hostname, row.container, row.directory, row.routing)
+	}
+
+	temp := cl.config.HostsStateFile + ".tmp"
+	if err := os.WriteFile(temp, []byte(b.String()), ConfigFilePermissions); err != nil {
+		return fmt.Errorf("failed to write %s: %w", temp, err)
+	}
+	if err := os.Rename(temp, cl.config.HostsStateFile); err != nil {
+		os.Remove(temp)
+		return fmt.Errorf("failed to rename %s: %w", temp, err)
+	}
+	return nil
+}
+
+// containerDirectory is where the project runs from: the compose working
+// directory, or the first bind mount for a container started without compose.
+func containerDirectory(inspect types.ContainerJSON) string {
+	if dir := inspect.Config.Labels["com.docker.compose.project.working_dir"]; dir != "" {
+		return dir
+	}
+	for _, m := range inspect.Mounts {
+		if m.Type == "bind" && m.Source != "" {
+			return m.Source
+		}
+	}
+	return ""
 }
 
 // HandleInitialScan performs initial processing of existing containers
@@ -180,7 +267,17 @@ func (cl *CompatibilityLayer) HandleInitialScan(ctx context.Context) error {
 		cl.logger.Error("Failed to reconcile Traefik configs", "error", err)
 	}
 
+	cl.persistHosts()
+
 	return nil
+}
+
+// persistHosts writes the state file and reports a failure without failing the
+// event, since the routing itself succeeded.
+func (cl *CompatibilityLayer) persistHosts() {
+	if err := cl.writeHostsFile(); err != nil {
+		cl.logger.Error("Failed to write the hosts state file", "error", err)
+	}
 }
 
 // HandleEvent processes a Docker event
@@ -188,8 +285,11 @@ func (cl *CompatibilityLayer) HandleEvent(ctx context.Context, event events.Mess
 	switch event.Action {
 	case "start":
 		_, err := cl.processContainer(ctx, event.Actor.ID)
+		cl.persistHosts()
 		return err
 	case "die":
+		delete(cl.hosts, event.Actor.ID)
+		cl.persistHosts()
 		return cl.removeTraefikConfig(event.Actor.ID)
 	default:
 		// Unhandled events are not an error, just log and continue
@@ -206,6 +306,7 @@ func main() {
 		DryRun:            config.GetEnvOrDefault("DRY_RUN", "false") == "true",
 		LogLevel:          config.GetEnvOrDefault("LOG_LEVEL", "info"),
 		TraefikDynamicDir: config.GetEnvOrDefault("TRAEFIK_DYNAMIC_DIR", DefaultTraefikDynamicDir),
+		HostsStateFile:    config.GetEnvOrDefault("HOSTS_STATE_FILE", config.DefaultHostsStateFile),
 	}
 
 	// Validate configuration
@@ -282,6 +383,9 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 	// it. That is easy to hit when reaching for a middleware alongside a
 	// mounted path, and silent at debug level, so say it plainly instead.
 	if utils.HasTraefikLabel(inspect.Config.Labels) {
+		// Recorded even though Traefik routes it, so hosts shows the whole
+		// local picture rather than only what this layer routes.
+		cl.recordHosts(containerID, containerInfo, "traefik-labels")
 		if containerInfo.VirtualHost != "" {
 			cl.logger.Warn("Ignoring VIRTUAL_HOST and VIRTUAL_PATH on a container carrying a traefik. label",
 				"container_id", utils.FormatDockerID(containerID),
@@ -315,6 +419,8 @@ func (cl *CompatibilityLayer) processContainer(ctx context.Context, containerID 
 	if err := cl.writeTraefikConfig(containerID, traefikConfig); err != nil {
 		return "", err
 	}
+
+	cl.recordHosts(containerID, containerInfo, "virtual-host")
 
 	return cl.configFileName(containerID), nil
 }

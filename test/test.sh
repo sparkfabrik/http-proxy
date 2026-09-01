@@ -1964,6 +1964,117 @@ test_self_update_after_a_rewrite() {
     [ "${passed}" -eq "${total}" ]
 }
 
+# hosts reads two state files and renders them; the library is sourced directly
+# so the cases run without a stack.
+test_hosts_command() {
+    local passed=0 total=0 dir out rc
+
+    dir="$(mktemp -d)"
+    printf 'local.spark.loc\tapp-1\t%s/projects/app\tvirtual-host\n' "${HOME}" >"${dir}/hosts.tsv"
+    printf 'labelled.spark.loc\tother-1\t\ttraefik-labels\n' >>"${dir}/hosts.tsv"
+    printf 'ok\n9 4\nMac-Test\tmacos.spark.loc,second.spark.loc\n' >"${dir}/summary"
+
+    run_hosts() {
+        env HOSTS_STATE_FILE="$1" TAILSCALE_SUMMARY_FILE="${dir}/summary" \
+            bash -c '
+                log_info(){ echo "$1"; }
+                log_warning(){ echo "$1" >&2; }
+                log_error(){ echo "$1" >&2; }
+                . bin/lib/hosts.sh
+                "$@"' _ "${@:2}" 2>&1
+    }
+
+    out="$(run_hosts "${dir}/hosts.tsv" hosts_list)"
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "local.spark.loc" && echo "${out}" | grep -q "macos.spark.loc"; then
+        success "hosts lists a local container and a peer hostname together"
+        passed=$((passed + 1))
+    else
+        error "hosts did not list both: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    total=$((total + 1))
+    if echo "${out}" | grep -qE "local.spark.loc.*~/projects/app"; then
+        success "a local directory is shown abbreviated to ~"
+        passed=$((passed + 1))
+    else
+        error "the home directory was not abbreviated: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    total=$((total + 1))
+    if echo "${out}" | grep -qE "macos.spark.loc +Mac-Test +- +-"; then
+        success "a peer row names the machine and publishes no directory"
+        passed=$((passed + 1))
+    else
+        error "the peer row is not as expected: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    total=$((total + 1))
+    if echo "${out}" | grep -q "second.spark.loc"; then
+        success "every hostname a peer forwards gets its own row"
+        passed=$((passed + 1))
+    else
+        error "a peer's second hostname is missing: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    # A record shaped differently must stop the command rather than render part of it.
+    printf 'broken\trow\n' >"${dir}/bad.tsv"
+    rc=0
+    out="$(run_hosts "${dir}/bad.tsv" hosts_list)" || rc=$?
+
+    total=$((total + 1))
+    if [ "${rc}" -ne 0 ] && ! echo "${out}" | grep -q "HOSTNAME"; then
+        success "an unrecognised hosts record refuses instead of rendering"
+        passed=$((passed + 1))
+    else
+        error "a malformed record still rendered, exit ${rc}: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    rc=0
+    out="$(run_hosts "${dir}/hosts.tsv" hosts_describe local.spark.loc)" || rc=$?
+    total=$((total + 1))
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "app-1" && echo "${out}" | grep -q "virtual-host"; then
+        success "describe names the container and how it is routed"
+        passed=$((passed + 1))
+    else
+        error "describe did not report the local host: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    rc=0
+    out="$(run_hosts "${dir}/hosts.tsv" hosts_describe macos.spark.loc)" || rc=$?
+    total=$((total + 1))
+    if [ "${rc}" -eq 0 ] && echo "${out}" | grep -q "Mac-Test" && echo "${out}" | grep -q "not published"; then
+        success "describe says a peer's directory is not published"
+        passed=$((passed + 1))
+    else
+        error "describe did not report the peer host: $(echo "${out}" | tr '\n' ' ')"
+    fi
+
+    rc=0
+    out="$(run_hosts "${dir}/hosts.tsv" hosts_describe nothing.spark.loc)" || rc=$?
+    total=$((total + 1))
+    if [ "${rc}" -ne 0 ]; then
+        success "describe fails on a hostname nothing serves"
+        passed=$((passed + 1))
+    else
+        error "describe reported success for an unserved hostname"
+    fi
+
+    # The dispatch must be registered, or the fallthrough hands `hosts` to compose.
+    total=$((total + 1))
+    if awk '/^hosts\)/,/^  ;;/' bin/spark-http-proxy | grep -q "hosts_command"; then
+        success "hosts is registered in the dispatch rather than falling through to compose"
+        passed=$((passed + 1))
+    else
+        error "hosts is not registered, so it would reach docker compose"
+    fi
+
+    rm -rf "${dir}"
+    log "Hosts tests: ${passed}/${total} passed"
+    [ "${passed}" -eq "${total}" ]
+}
+
 test_version_reports_the_image_revision() {
     local passed=0 total=0 name out revision
 
@@ -3027,6 +3138,12 @@ main() {
     local rewrite_passed=0
     test_self_update_after_a_rewrite && rewrite_passed=1
     [ "$rewrite_passed" -eq 1 ] && passed=$((passed + 1))
+
+    log "Testing the hosts command..."
+    total=$((total + 1))
+    local hosts_passed=0
+    test_hosts_command && hosts_passed=1
+    [ "$hosts_passed" -eq 1 ] && passed=$((passed + 1))
 
     log "Testing what version reports about the containers..."
     total=$((total + 1))
