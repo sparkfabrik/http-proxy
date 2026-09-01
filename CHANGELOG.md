@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `spark-http-proxy certs` groups the certificate commands: `list` is a table of every certificate with its files, `describe` reads one with openssl and says what it covers and whether the proxy serves it, `generate` and `delete` keep their behaviour ([#160](https://github.com/sparkfabrik/http-proxy/issues/160))
 - `spark-http-proxy hosts` lists what the proxy serves, which machine serves it, and the directory local containers run from
 - HTTPS to a forwarded hostname needs a certificate on the machine reaching it, now documented ([#118](https://github.com/sparkfabrik/http-proxy/issues/118))
 - `tailscale-refresh-peers` runs a discovery cycle now instead of waiting for the next one ([#132](https://github.com/sparkfabrik/http-proxy/issues/132))
@@ -48,6 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Warn when two containers claim the same host and path, naming both ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
 - `generate-mkcert` and `remove-cert` reject an argument containing a path ([#113](https://github.com/sparkfabrik/http-proxy/issues/113))
 - `self-test` verifies end-to-end routing rather than only DNS liveness ([#104](https://github.com/sparkfabrik/http-proxy/issues/104))
+
+### Deprecated
+
+- `generate-mkcert`, `list-certs` and `remove-cert` still run but warn and point at `certs generate`, `certs list` and `certs delete` ([#160](https://github.com/sparkfabrik/http-proxy/issues/160))
 
 ### Fixed
 

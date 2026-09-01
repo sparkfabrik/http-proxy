@@ -277,16 +277,16 @@ uses `bin/compose.yml` with pre-built GHCR images.
 
 Sorted by what a command does to state that cannot be recreated.
 
-**Read freely.** `status`, `show-config`, `tailscale-peers`, `list-certs`,
+**Read freely.** `status`, `show-config`, `tailscale-peers`, `certs list`, `certs describe`,
 `logs`, `self-test`.
 
 **Run deliberately.** `start*`, `restart`, `stop-metrics`, `stop-tailscale`,
-`upgrade`, `self-update`, `configure-dns`, `generate-mkcert`,
+`upgrade`, `self-update`, `configure-dns`, `certs generate`,
 `tailscale-peers --refresh`. Recoverable, but they restart containers, rewrite
 system DNS, or install a certificate authority.
 
 **Ask first.** `clean` and `destroy` (both remove volumes, so both take
-monitoring data; `destroy` also removes images), `remove-cert`,
+monitoring data; `destroy` also removes images), `certs delete`,
 `docker compose down -v`, `git push --force`, and any write to
 `~/.local/spark/http-proxy/state` — that directory is a trust input rather than
 a cache, since its contents decide whose traffic is forwarded where.
@@ -335,8 +335,11 @@ The CLI is one Bash script plus libraries in `bin/lib/`, sourced at startup. Fol
   2. `case` dispatch block (before the `*` catch-all)
   3. `show_usage` help text
   4. `generate_completion` commands string
-- Commands that do not need Docker (e.g. pure git or config ops) must be added to the
-  prerequisite skip list near line 326
+- Commands that do not need Docker (e.g. pure git or config ops) must be added to
+  `needs_prerequisites`
+- The test suite sources the script up to the first top-level `case "$1" in`, the
+  dispatch, so a top-level `case` placed before it hides every later function from
+  the tests; keep such logic inside a function
 
 Lint with `-x` and every file, or shellcheck does not follow the libraries and their
 code goes unchecked:

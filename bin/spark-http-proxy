@@ -349,7 +349,7 @@ _${script_name//-/_}_completion() {
     prev="\${COMP_WORDS[COMP_CWORD-1]}"
 
     # Available commands
-    commands="version help self-test start status hosts restart start-with-metrics stop-metrics clean destroy logs dashboard grafana prometheus configure-dns completion install-completion generate-mkcert list-certs remove-cert upgrade self-update up down pull build ps top exec show-config start-with-tailscale stop-tailscale tailscale-peers tailscale-status"
+    commands="version help self-test start status hosts restart start-with-metrics stop-metrics clean destroy logs dashboard grafana prometheus configure-dns completion install-completion certs upgrade self-update up down pull build ps top exec show-config start-with-tailscale stop-tailscale tailscale-peers tailscale-status"
 
     # Available services for logs command
     services="traefik dinghy_layer join_networks dns tailscale_peers prometheus grafana"
@@ -359,7 +359,11 @@ _${script_name//-/_}_completion() {
             COMPREPLY=( \$(compgen -W "\${services}" -- \${cur}) )
             return 0
             ;;
-        generate-mkcert|remove-cert)
+        certs)
+            COMPREPLY=( \$(compgen -W "list describe generate delete" -- \${cur}) )
+            return 0
+            ;;
+        describe|generate|delete)
             # No completion for domain names
             return 0
             ;;
@@ -488,12 +492,22 @@ open_url() {
   fi
 }
 
-# Ensure prerequisites are met
-# Ignore if the first argument is "help" or "version" or "completion".
-if [[ "$1" != "help" && "$1" != "version" && "$1" != "completion" && "$1" != "install-completion" && "$1" != "self-update" && "$1" != "list-certs" && "$1" != "tailscale-status" ]]; then
-  if ! check_prerequisites; then
-    exit 1
-  fi
+# Whether a command needs Docker. The test suite sources this file up to the
+# dispatch, so this stays a function and not a top-level case.
+needs_prerequisites() {
+  case "${1}" in
+  help | version | completion | install-completion | self-update | list-certs | tailscale-status) return 1 ;;
+  certs)
+    case "${2:-list}" in
+    list | describe | help | -h | --help) return 1 ;;
+    esac
+    ;;
+  esac
+  return 0
+}
+
+if needs_prerequisites "$@" && ! check_prerequisites; then
+  exit 1
 fi
 
 # Records an optional stack that is already running but was never recorded, so
@@ -553,9 +567,7 @@ show_usage() {
   echo ""
   echo "Configuration & Setup:"
   echo "  show-config          Show current configuration and file locations"
-  echo "  generate-mkcert      Generate SSL certificates for a domain (supports wildcards)"
-  echo "  list-certs           List installed certificates"
-  echo "  remove-cert          Remove installed certificates for one or more domains"
+  echo "  certs                Certificates for HTTPS: list, describe, generate, delete (mkcert)"
   echo "  configure-dns        Configure system DNS to automatically resolve proxy domains"
   echo "                       (macOS: /etc/resolver, Linux: systemd-resolved)"
   echo "  completion           Generate shell completion script"
@@ -607,258 +619,6 @@ show_detailed_help() {
   echo "  • macOS: Creates /etc/resolver files for seamless *.loc domain resolution"
   echo "  • Linux: Configures systemd-resolved for domain-specific DNS routing"
   echo "  • Eliminates manual /etc/hosts file editing"
-}
-
-install_mkcert() {
-  if command -v mkcert >/dev/null 2>&1; then
-    log_info "Running mkcert -install to ensure root CA is installed..."
-    mkcert -install
-    return 0
-  fi
-
-  # Try different package managers based on availability
-  if command -v brew >/dev/null 2>&1; then
-    log_info "Installing mkcert with Homebrew..."
-    if brew install mkcert nss && mkcert -install; then
-      log_success "mkcert installed successfully"
-      return 0
-    else
-      log_error "Failed to install mkcert with Homebrew"
-      return 1
-    fi
-  elif command -v pacman >/dev/null 2>&1; then
-    log_info "Installing mkcert with pacman..."
-    if sudo pacman -S --noconfirm nss mkcert && mkcert -install; then
-      log_success "mkcert installed successfully"
-      return 0
-    else
-      log_error "Failed to install mkcert with pacman"
-      return 1
-    fi
-  else
-    log_error "mkcert not found and no supported package manager available"
-    log_info "Please install mkcert manually:"
-    log_info "  - Arch Linux: sudo pacman -S nss mkcert"
-    log_info "  - macOS: brew install mkcert nss"
-    return 1
-  fi
-}
-
-# Applies a certificate change to the proxy. Traefik serves a certificate only
-# when the dynamic configuration references it, and that reference is written by
-# the container's certificate scan, so re-running the scan is what applies a
-# change. A restart applies it too, by running the same scan on the way up, but
-# it drops every connection on the machine.
-apply_certificates() {
-  if ! is_running http-proxy; then
-    log_info "The proxy is not running. The change applies when it starts."
-    return 0
-  fi
-
-  # An image predating the scan guard would pass --tls-only through to Traefik
-  # and run the rest of its entrypoint on the way, withdrawing peer routes.
-  # The guard itself, not the flag anywhere in the file. A mention in a comment
-  # would otherwise read as support and send the scan to an entrypoint that runs
-  # its whole body, withdrawing peer routes on the way. A pattern that stops
-  # matching costs a restart, which still applies the certificate, so the
-  # tighter test fails in the safe direction.
-  if docker exec http-proxy grep -qE '^[[:space:]]*if .*--tls-only' /entrypoint.sh 2>/dev/null; then
-    log_info "Applying certificates..."
-    # Only the proxy knows why a scan failed, and without its message the
-    # warning says a thing did not work and nothing about what to look at.
-    local scan_error
-    if ! scan_error="$(docker exec http-proxy /entrypoint.sh --tls-only 2>&1 >/dev/null)"; then
-      log_warning "The proxy did not apply the certificates"
-      if [ -n "${scan_error}" ]; then
-        log_info "The proxy said: ${scan_error}"
-      fi
-      log_info "Apply them with: $(basename "${0}") restart"
-      # The certificate exists but the proxy is not serving it, so the command
-      # did not do what it says it does. Reporting success here would have a
-      # script move on to a hostname that is not answering yet.
-      return 1
-    fi
-    return 0
-  fi
-
-  # An older proxy cannot run the scan on its own, and nothing references a new
-  # certificate, so nothing would ever apply it. The restart runs the scan.
-  log_info "Restarting Traefik to apply the change..."
-  dc_cmd restart traefik
-}
-
-generate_mkcert() {
-  local domain="$1"
-
-  if [ -z "${domain}" ] && [ -t 0 ]; then
-    read -rp "Enter domain name: " domain
-  fi
-
-  if [ -z "${domain}" ]; then
-    log_error "Domain name required"
-    exit 1
-  fi
-
-  if ! reject_path_in_domain "${domain}"; then
-    exit 1
-  fi
-
-  if ! install_mkcert; then
-    exit 1
-  fi
-
-  # Create a safe filename for wildcard domains
-  local safe_filename
-  safe_filename="$(cert_safe_filename "${domain}")"
-
-  log_info "Generating certificates for: ${domain}"
-  log_info "Certificate files will be named: ${safe_filename}.pem and ${safe_filename}-key.pem"
-
-  mkcert -cert-file "${CERT_DIR}/${safe_filename}.pem" \
-    -key-file "${CERT_DIR}/${safe_filename}-key.pem" \
-    "${domain}"
-
-  log_success "Certificates generated successfully:"
-  log_info "  Certificate: ${CERT_DIR}/${safe_filename}.pem"
-  log_info "  Private key: ${CERT_DIR}/${safe_filename}-key.pem"
-
-  apply_certificates
-}
-
-# Reject a certificate argument that names a path rather than a hostname.
-# A certificate covers a hostname, and a container mounted under a path with
-# VIRTUAL_PATH is served by the certificate of the host it sits on. Without this
-# check the path would be folded into the filename and the request would half
-# succeed, leaving a certificate nothing can use.
-reject_path_in_domain() {
-  local domain="$1"
-
-  if [[ "${domain}" == */* ]]; then
-    log_error "'${domain}' contains a path. A certificate covers a hostname."
-    log_info "Use the hostname on its own: ${domain%%/*}"
-    log_info "A container mounted with VIRTUAL_PATH is served by its host's certificate."
-    return 1
-  fi
-
-  return 0
-}
-
-# Derive the safe filename used to store a domain's certificate files
-cert_safe_filename() {
-  local domain="$1"
-  local safe_filename="${domain}"
-  # Replace * with _wildcard_ for filename safety
-  safe_filename="${safe_filename//\*/_wildcard_}"
-  # Replace other problematic characters
-  safe_filename="${safe_filename//\//_}"
-  echo "${safe_filename}"
-}
-
-# List installed certificates in the cert directory
-list_certs() {
-  log_info "Certificate directory: ${CERT_DIR}"
-
-  local found=0
-  local cert_file
-  for cert_file in "${CERT_DIR}"/*.pem; do
-    # Guard against the literal glob when no files match
-    [[ -e "${cert_file}" ]] || break
-    # Skip key files; they are listed alongside their certificate
-    [[ "${cert_file}" == *-key.pem ]] && continue
-
-    local safe_filename
-    safe_filename="$(basename "${cert_file}" .pem)"
-    # Reverse the safe-filename mapping for display
-    local domain="${safe_filename//_wildcard_/\*}"
-
-    echo ""
-    log_success "${domain}"
-    log_info "  Certificate: ${cert_file}"
-    local key_file="${CERT_DIR}/${safe_filename}-key.pem"
-    if [[ -f "${key_file}" ]]; then
-      log_info "  Private key: ${key_file}"
-    else
-      log_warning "  Private key missing: ${key_file}"
-    fi
-    found=$((found + 1))
-  done
-
-  if [[ "${found}" -eq 0 ]]; then
-    echo ""
-    log_warning "No certificates found. Generate one with: $(basename "${0}") generate-mkcert '*.spark.loc'"
-    return 0
-  fi
-
-  echo ""
-  log_info "${found} certificate(s) installed"
-  # A domain just listed, so the line works when it is copied.
-  log_info "Remove one with: $(basename "${0}") remove-cert '${domain}'"
-}
-
-# Remove installed certificate pairs for one or more domains
-remove_cert() {
-  if [ "$#" -eq 0 ]; then
-    local -a prompted=()
-    if [ -t 0 ]; then
-      read -rp "Enter domain name(s) to remove: " -a prompted
-      set -- "${prompted[@]}"
-    fi
-  fi
-
-  if [ "$#" -eq 0 ]; then
-    log_error "Domain name required"
-    exit 1
-  fi
-
-  local -a files=()
-  local -a matched=()
-  local -a missing=()
-  local domain safe_filename cert_file key_file
-  for domain in "$@"; do
-    if ! reject_path_in_domain "${domain}"; then
-      exit 1
-    fi
-    safe_filename="$(cert_safe_filename "${domain}")"
-    cert_file="${CERT_DIR}/${safe_filename}.pem"
-    key_file="${CERT_DIR}/${safe_filename}-key.pem"
-
-    if [[ ! -f "${cert_file}" && ! -f "${key_file}" ]]; then
-      missing+=("${domain}")
-      continue
-    fi
-
-    log_warning "Will remove certificate for: ${domain}"
-    [[ -f "${cert_file}" ]] && { log_info "  Certificate: ${cert_file}"; files+=("${cert_file}"); }
-    [[ -f "${key_file}" ]] && { log_info "  Private key: ${key_file}"; files+=("${key_file}"); }
-    matched+=("${domain}")
-  done
-
-  for domain in "${missing[@]}"; do
-    log_error "No certificate found for domain: ${domain}"
-  done
-
-  if [[ "${#matched[@]}" -eq 0 ]]; then
-    log_info "List installed certificates with: $(basename "${0}") list-certs"
-    exit 1
-  fi
-
-  if [ ! -t 0 ]; then
-    log_error "Cannot confirm removal without a terminal, so nothing was removed"
-    log_info "Re-run this interactively to confirm"
-    exit 1
-  fi
-
-  read -p "Remove ${#matched[@]} certificate(s)? (y/N): " -n 1 -r
-  echo
-  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    log_info "Removal cancelled"
-    return 0
-  fi
-
-  rm -f "${files[@]}"
-  log_success "Removed ${#matched[@]} certificate(s): ${matched[*]}"
-
-  apply_certificates
 }
 
 open_dashboard() {
@@ -1382,7 +1142,7 @@ show_tailscale_summary() {
   # Whether one exists is not checked. The example is a hostname listed just
   # above, so the command works when it is copied.
   echo "   Over HTTPS each needs a certificate here, for example:"
-  echo "     ${0} generate-mkcert '${example}'"
+  echo "     ${0} certs generate '${example}'"
   echo "   💡 Detail: ${0} tailscale-peers"
 }
 
@@ -1974,9 +1734,14 @@ grafana) open_grafana ;;
 prometheus) open_prometheus ;;
 completion) generate_completion ;;
 install-completion) install_completion ;;
-generate-mkcert) generate_mkcert "${2}" ;;
-list-certs) list_certs ;;
-remove-cert) remove_cert "${@:2}" ;;
+certs)
+  certs_command "${@:2}"
+  exit $?
+  ;;
+generate-mkcert | list-certs | remove-cert)
+  certs_deprecated "$@"
+  exit $?
+  ;;
 upgrade)
   ensure_state_dir
   ensure_running
