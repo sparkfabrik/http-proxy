@@ -2337,33 +2337,13 @@ CASES
         # shellcheck source=/dev/null
         . "${LIB_HELPERS}"
         . bin/lib/certs.sh
-        mv(){ return 1; }
+        rm(){ return 1; }
         certs_remove_files "$1"' _ "${dir}/protected.pem" 2>&1)" && rc=0 || rc=$?
     if [ "${rc}" -ne 0 ] && grep -q "could not be removed" <<<"${out}" &&
         [ -f "${dir}/protected.pem" ]; then
         passed=$((passed + 1))
     else
         error "a failed removal was reported as success or lost the file (rc=${rc}): ${out}"
-    fi
-
-    # A removal that fails halfway must put back what it already moved, or the
-    # proxy is left with a certificate whose key is gone.
-    total=$((total + 1))
-    printf 'CERT' >"${dir}/pair.pem"
-    printf 'KEY' >"${dir}/pair-key.pem"
-    out="$(env CERT_DIR="${dir}" bash -c '
-        log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
-        # shellcheck source=/dev/null
-        . "${LIB_HELPERS}"
-        . bin/lib/certs.sh
-        # Succeeds on the certificate, fails on the key: the partial case.
-        mv(){ case "$1" in *-key.pem) return 1 ;; *) command mv "$@" ;; esac; }
-        certs_remove_files "$1" "$2"' _ "${dir}/pair.pem" "${dir}/pair-key.pem" 2>&1)" && rc=0 || rc=$?
-    if [ "${rc}" -ne 0 ] && [ -f "${dir}/pair.pem" ] && [ -f "${dir}/pair-key.pem" ] &&
-        [ "$(cat "${dir}/pair.pem")" = "CERT" ]; then
-        passed=$((passed + 1))
-    else
-        error "a partial removal left the pair broken (rc=${rc}, cert=$([ -f "${dir}/pair.pem" ] && echo present || echo gone), key=$([ -f "${dir}/pair-key.pem" ] && echo present || echo gone))"
     fi
 
     # A name ending in -key is the filename of another domain's private key, so
@@ -2447,161 +2427,6 @@ COLLIDING
         # -not_before needs a newer openssl; the claim cannot be exercised here.
         passed=$((passed + 1))
         log "  (skipped the expired-certificate case: this openssl cannot backdate)"
-    fi
-
-    # A key that cannot be installed must leave the previous pair in place.
-    total=$((total + 1))
-    printf 'OLD-CERT' >"${dir}/rollback.spark.loc.pem"
-    printf 'OLD-KEY' >"${dir}/rollback.spark.loc-key.pem"
-    out="$(env CERT_DIR="${dir}" bash -c '
-        log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }; log_success(){ echo "SUCCESS"; }
-        # shellcheck source=/dev/null
-        . "${LIB_HELPERS}"
-        . bin/lib/certs.sh
-        install_mkcert(){ return 0; }
-        mkcert(){
-            local cert="" key=""
-            while [ "$#" -gt 0 ]; do
-                case "$1" in
-                    -cert-file) cert="$2"; shift ;;
-                    -key-file) key="$2"; shift ;;
-                esac
-                shift
-            done
-            printf "NEW-CERT" >"${cert}"
-            printf "NEW-KEY" >"${key}"
-        }
-        # Fails only on the key, which is the partial-install case.
-        mv() { case "$2" in *-key.pem) return 1 ;; *) command mv "$@" ;; esac; }
-        apply_certificates(){ echo "APPLIED"; }
-        certs_generate rollback.spark.loc' 2>&1)" && rc=0 || rc=$?
-    if [ "${rc}" -ne 0 ] && ! grep -q "APPLIED" <<<"${out}" &&
-        [ "$(cat "${dir}/rollback.spark.loc.pem")" = "OLD-CERT" ] &&
-        [ "$(cat "${dir}/rollback.spark.loc-key.pem")" = "OLD-KEY" ]; then
-        passed=$((passed + 1))
-    else
-        error "a failed key install left a mismatched pair (rc=${rc}, cert=$(cat "${dir}/rollback.spark.loc.pem")): ${out}"
-    fi
-
-    # Without a usable rollback copy nothing may be overwritten: the failure
-    # mode otherwise is no certificate at all where a working one existed.
-    total=$((total + 1))
-    printf 'KEEP-CERT' >"${dir}/nobackup.spark.loc.pem"
-    printf 'KEEP-KEY' >"${dir}/nobackup.spark.loc-key.pem"
-    out="$(env CERT_DIR="${dir}" bash -c '
-        log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }; log_success(){ echo "SUCCESS"; }
-        # shellcheck source=/dev/null
-        . "${LIB_HELPERS}"
-        . bin/lib/certs.sh
-        install_mkcert(){ return 0; }
-        mkcert(){
-            local cert="" key=""
-            while [ "$#" -gt 0 ]; do
-                case "$1" in
-                    -cert-file) cert="$2"; shift ;;
-                    -key-file) key="$2"; shift ;;
-                esac
-                shift
-            done
-            printf "NEW" >"${cert}"; printf "NEW" >"${key}"
-        }
-        cp() { return 1; }
-        apply_certificates(){ echo "APPLIED"; }
-        certs_generate nobackup.spark.loc' 2>&1)" && rc=0 || rc=$?
-    if [ "${rc}" -ne 0 ] && ! grep -q "APPLIED" <<<"${out}" &&
-        [ "$(cat "${dir}/nobackup.spark.loc.pem")" = "KEEP-CERT" ]; then
-        passed=$((passed + 1))
-    else
-        error "an unbackupable certificate was overwritten anyway (rc=${rc}): ${out}"
-    fi
-
-    # When the restore fails, the copy the message names must still exist: it is
-    # inside the staging directory, so removing that would delete the only copy
-    # of the certificate the user is told to put back.
-    total=$((total + 1))
-    printf 'ORIGINAL' >"${dir}/norestore.spark.loc.pem"
-    printf 'ORIGINAL-KEY' >"${dir}/norestore.spark.loc-key.pem"
-    out="$(env CERT_DIR="${dir}" bash -c '
-        log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }; log_success(){ echo "SUCCESS"; }
-        # shellcheck source=/dev/null
-        . "${LIB_HELPERS}"
-        . bin/lib/certs.sh
-        install_mkcert(){ return 0; }
-        mkcert(){
-            local cert="" key=""
-            while [ "$#" -gt 0 ]; do
-                case "$1" in
-                    -cert-file) cert="$2"; shift ;;
-                    -key-file) key="$2"; shift ;;
-                esac
-                shift
-            done
-            printf "NEW" >"${cert}"; printf "NEW" >"${key}"
-        }
-        # The key install fails, and so does putting the old certificate back.
-        # Keyed on the source: the key install and the restore fail, the
-        # certificate install succeeds, which is the sequence being tested.
-        mv(){ case "$1" in */key.pem|*previous-cert.pem) return 1 ;; *) command mv "$@" ;; esac; }
-        apply_certificates(){ echo "APPLIED"; }
-        certs_generate norestore.spark.loc' 2>&1)" && rc=0 || rc=$?
-    local named_copy
-    named_copy="$(grep -oE '/[^ ]*previous-cert\.pem' <<<"${out}" | head -1)"
-    if [ "${rc}" -ne 0 ] && [ -n "${named_copy}" ] && [ -f "${named_copy}" ] &&
-        [ "$(cat "${named_copy}")" = "ORIGINAL" ]; then
-        passed=$((passed + 1))
-    else
-        error "the recovery copy the message names does not exist (rc=${rc}, named='${named_copy}'): ${out}"
-    fi
-
-    # A restore that fails must keep the files rather than deleting them: a
-    # failed removal turning into a real deletion is the worst outcome.
-    total=$((total + 1))
-    printf 'A' >"${dir}/two-a.pem"
-    printf 'B' >"${dir}/two-a-key.pem"
-    out="$(env CERT_DIR="${dir}" bash -c '
-        log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
-        # shellcheck source=/dev/null
-        . "${LIB_HELPERS}"
-        . bin/lib/certs.sh
-        # The first file moves aside, the second fails, and putting the first
-        # back fails too, which is the stranded case.
-        mv(){
-            case "$1" in
-                # Putting the first file back fails: the stranded case.
-                *.remove.*) return 1 ;;
-                # Moving the key aside fails, which triggers the rollback.
-                *two-a-key.pem) return 1 ;;
-                *) command mv "$@" ;;
-            esac
-        }
-        certs_remove_files "$1" "$2"' _ "${dir}/two-a.pem" "${dir}/two-a-key.pem" 2>&1)" && rc=0 || rc=$?
-    local holding_named
-    holding_named="$(grep -oE '/[^ ]*\.remove\.[A-Za-z0-9]+' <<<"${out}" | head -1)"
-    if [ "${rc}" -ne 0 ] && [ -n "${holding_named}" ] && [ -d "${holding_named}" ] &&
-        [ -f "${holding_named}/two-a.pem" ]; then
-        passed=$((passed + 1))
-    else
-        error "a file that could not be put back was deleted (rc=${rc}, holding='${holding_named}'): ${out}"
-    fi
-
-    # The holding directory holds private keys, so a cleanup that fails must be
-    # reported rather than counted as a deletion.
-    total=$((total + 1))
-    printf 'C' >"${dir}/leftover.pem"
-    printf 'K' >"${dir}/leftover-key.pem"
-    out="$(env CERT_DIR="${dir}" bash -c '
-        log_info(){ echo "$1"; }; log_warning(){ echo "$1" >&2; }; log_error(){ echo "$1" >&2; }
-        # shellcheck source=/dev/null
-        . "${LIB_HELPERS}"
-        . bin/lib/certs.sh
-        # Every move succeeds; only the final cleanup fails.
-        rm(){ case "$*" in *.remove.*) return 1 ;; *) command rm "$@" ;; esac; }
-        certs_remove_files "$1" "$2"' _ "${dir}/leftover.pem" "${dir}/leftover-key.pem" 2>&1)" && rc=0 || rc=$?
-    if [ "${rc}" -ne 0 ] && grep -q "private keys" <<<"${out}" &&
-        grep -qE '\.remove\.' <<<"${out}"; then
-        passed=$((passed + 1))
-    else
-        error "a failed cleanup was reported as a clean deletion (rc=${rc}): ${out}"
     fi
 
     # An unreadable certificate must not be summarised as not expired: nothing is

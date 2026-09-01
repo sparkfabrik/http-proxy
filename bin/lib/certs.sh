@@ -385,67 +385,16 @@ certs_generate() {
   log_info "Generating certificates for: ${domain}"
   log_info "Certificate files will be named: ${safe_filename}.pem and ${safe_filename}-key.pem"
 
-  # Staged, so a failure cannot truncate a pair that is currently working, and
-  # the proxy's watcher never sees a half-written file.
-  local staging
-  staging="$(mktemp -d "${CERT_DIR}/.generate.XXXXXX")" || {
-    log_error "Could not create a staging directory in ${CERT_DIR}"
-    return 1
-  }
-
-  local mkcert_output
-  if ! mkcert_output="$(mkcert -cert-file "${staging}/cert.pem" -key-file "${staging}/key.pem" -- "${domain}" 2>&1)" ||
-    [[ ! -s "${staging}/cert.pem" || ! -s "${staging}/key.pem" ]]; then
-    [[ -n "${mkcert_output}" ]] && printf '%s\n' "${mkcert_output}" >&2
-    rm -rf "${staging}"
+  # The domain goes after --, or mkcert reads a name beginning with - as a flag,
+  # prints its usage, writes nothing and still exits 0. The files are checked for
+  # afterwards for the same reason.
+  if ! mkcert -cert-file "${CERT_DIR}/${safe_filename}.pem" \
+    -key-file "${CERT_DIR}/${safe_filename}-key.pem" \
+    -- "${domain}" ||
+    [[ ! -s "${CERT_DIR}/${safe_filename}.pem" || ! -s "${CERT_DIR}/${safe_filename}-key.pem" ]]; then
     log_error "mkcert could not generate a certificate for ${domain}"
-    log_info "Nothing was changed, so any certificate already installed still works"
     return 1
   fi
-
-  # Both files or neither: a certificate installed beside the previous key is a
-  # mismatched pair the proxy would serve.
-  # Nothing is overwritten until it can be put back. Proceeding without a
-  # rollback copy risks the worse outcome: a removed new certificate and no old
-  # one either, where before there was a working pair.
-  local previous=""
-  if [[ -f "${CERT_DIR}/${safe_filename}.pem" ]]; then
-    previous="${staging}/previous-cert.pem"
-    if ! cp "${CERT_DIR}/${safe_filename}.pem" "${previous}"; then
-      rm -rf "${staging}"
-      log_error "The certificate already installed could not be copied aside, so it was left alone"
-      log_info "Nothing was changed. The proxy still serves what it did before."
-      return 1
-    fi
-  fi
-
-  if ! mv "${staging}/cert.pem" "${CERT_DIR}/${safe_filename}.pem"; then
-    rm -rf "${staging}"
-    log_error "The certificate was generated but could not be installed in ${CERT_DIR}"
-    return 1
-  fi
-
-  if ! mv "${staging}/key.pem" "${CERT_DIR}/${safe_filename}-key.pem"; then
-    if [[ -n "${previous}" ]]; then
-      if mv "${previous}" "${CERT_DIR}/${safe_filename}.pem"; then
-        log_error "The key could not be installed, so the previous certificate was put back"
-      else
-        # The staging directory is deliberately left in place: the copy named
-        # here is inside it, and removing it would delete the only remaining
-        # copy of the certificate the user is being told to restore.
-        log_error "The key could not be installed and the previous certificate could not be restored"
-        log_info "A copy of it is at ${previous}. Put it back before the proxy reloads."
-        return 1
-      fi
-    else
-      rm -f "${CERT_DIR}/${safe_filename}.pem"
-      log_error "The key could not be installed, so the new certificate was removed"
-    fi
-    log_info "Nothing is left half-installed. The proxy still serves what it did before."
-    rm -rf "${staging}"
-    return 1
-  fi
-  rm -rf "${staging}"
 
   log_success "Certificates generated successfully:"
   log_info "  Certificate: ${CERT_DIR}/${safe_filename}.pem"
@@ -457,46 +406,9 @@ certs_generate() {
 # Separate from certs_delete so it can be exercised: everything above it needs a
 # terminal to confirm, which a test does not have.
 certs_remove_files() {
-  # All or nothing. A plain rm over several files can delete the certificate and
-  # fail on its key, leaving a pair the proxy would try to serve. The files are
-  # moved aside first and only discarded once every move has succeeded; a move
-  # that fails puts back the ones already moved.
-  local holding file base moved=()
-  holding="$(mktemp -d "${CERT_DIR}/.remove.XXXXXX")" || {
-    log_error "Could not create a working directory in ${CERT_DIR}, so nothing was removed"
-    return 1
-  }
-
-  for file in "$@"; do
-    base="$(basename "${file}")"
-    if ! mv "${file}" "${holding}/${base}"; then
-      local undo stranded=0
-      for undo in "${moved[@]}"; do
-        if ! mv "${holding}/$(basename "${undo}")" "${undo}"; then
-          stranded=$((stranded + 1))
-        fi
-      done
-
-      log_error "${base} could not be removed, so nothing was removed"
-      if [[ "${stranded}" -gt 0 ]]; then
-        # The directory stays: it holds the only copy of what could not go back,
-        # and removing it would turn a failed removal into a real deletion.
-        log_error "${stranded} file(s) could not be put back and are in ${holding}"
-        log_info "Move them back before the proxy reloads"
-      else
-        rm -rf "${holding}"
-      fi
-      log_info "Check what is installed with: $(basename "${0}") certs list"
-      return 1
-    fi
-    moved+=("${file}")
-  done
-
-  # The holding directory contains private keys. A cleanup that fails silently
-  # would leave them on disk while the command reports them deleted.
-  if ! rm -rf "${holding}"; then
-    log_warning "The files were removed from ${CERT_DIR} but copies remain in ${holding}"
-    log_info "Delete that directory: it contains private keys"
+  if ! rm -f "$@"; then
+    log_error "Some files could not be removed, so nothing is being applied"
+    log_info "Check what is left with: $(basename "${0}") certs list"
     return 1
   fi
   return 0
