@@ -316,7 +316,8 @@ certs_generate() {
 
   if ! mkcert -cert-file "${CERT_DIR}/${safe_filename}.pem" \
     -key-file "${CERT_DIR}/${safe_filename}-key.pem" \
-    "${domain}"; then
+    -- "${domain}" ||
+    [[ ! -f "${CERT_DIR}/${safe_filename}.pem" || ! -f "${CERT_DIR}/${safe_filename}-key.pem" ]]; then
     log_error "mkcert could not generate a certificate for ${domain}"
     log_info "Nothing was applied to the proxy. Any partial files are in ${CERT_DIR}"
     return 1
@@ -327,6 +328,17 @@ certs_generate() {
   log_info "  Private key: ${CERT_DIR}/${safe_filename}-key.pem"
 
   apply_certificates
+}
+
+# Separate from certs_delete so it can be exercised: everything above it needs a
+# terminal to confirm, which a test does not have.
+certs_remove_files() {
+  if ! rm -f "$@"; then
+    log_error "Some files could not be removed, so nothing is being applied"
+    log_info "Check what is left with: $(basename "${0}") certs list"
+    return 1
+  fi
+  return 0
 }
 
 certs_delete() {
@@ -386,7 +398,7 @@ certs_delete() {
     return 0
   fi
 
-  rm -f "${files[@]}"
+  certs_remove_files "${files[@]}" || return 1
   log_success "Removed ${#matched[@]} certificate(s): ${matched[*]}"
 
   apply_certificates

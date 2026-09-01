@@ -122,7 +122,7 @@ hosts_list() {
 # the first case can replace the whole value however many spaces it contains, and
 # the second is applied within each argument. Matched on the flag NAME: guessing
 # from the shape of a value hides the wrong things.
-HOSTS_SECRET='[Aa][Uu][Tt][Hh]|[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Kk][Ee][Yy]'
+HOSTS_SECRET='[Aa][Uu][Tt][Hh]|[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Pp][Aa][Ss][Ss][Pp][Hh][Rr][Aa][Ss][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Kk][Ee][Yy]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll]|[Bb][Ee][Aa][Rr][Ee][Rr]'
 
 hosts_redact_args() {
   local arg original prev="" out=""
@@ -206,6 +206,12 @@ hosts_describe_local() {
   # functions have no hasPrefix.
   port="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "${container}" 2>/dev/null |
     sed -n 's/^VIRTUAL_PORT=//p' | head -1)"
+  # A label-routed container declares its port as a traefik service label
+  # instead, and some declare neither and rely on the image's exposed port.
+  if [[ -z "${port}" ]]; then
+    port="$(docker inspect -f '{{range $k,$v := .Config.Labels}}{{$k}}={{$v}}{{println}}{{end}}' "${container}" 2>/dev/null |
+      sed -n 's/^traefik\.http\.services\..*\.loadbalancer\.server\.port=//p' | head -1)"
+  fi
 
   # docker ps renders the uptime, which avoids date arithmetic that differs
   # between BSD and GNU.
@@ -243,13 +249,13 @@ hosts_describe_local() {
   fi
   [[ -n "${netmode}" ]] && echo "  network        ${netmode}"
 
-  if [[ -n "${url:-}" ]]; then
-    code="$(hosts_probe "${hostname}")"
-    if [[ -n "${code}" ]]; then
-      echo "  reachable      ${code}"
-    else
-      echo "  reachable      no answer"
-    fi
+  # Probed through the proxy by hostname, so a container that declares no port
+  # is still reported rather than silently missing the field.
+  code="$(hosts_probe "${hostname}")"
+  if [[ -n "${code}" ]]; then
+    echo "  reachable      ${code}"
+  else
+    echo "  reachable      no answer"
   fi
 
   # Volumes carry a name and binds do not, so both are read and the name wins.

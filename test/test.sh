@@ -2289,6 +2289,59 @@ CASES
         error "Bash 4 only constructs, which macOS's /bin/bash 3.2 cannot run: ${bash4}"
     fi
 
+    # A domain beginning with - is read as a flag without a -- terminator, and
+    # mkcert then prints usage, creates nothing, and still exits 0.
+    total=$((total + 1))
+    out="$(env CERT_DIR="${dir}" bash -c '
+        log_info(){ echo "$1"; }; log_warning(){ echo "$1" >&2; }
+        log_error(){ echo "$1" >&2; }; log_success(){ echo "SUCCESS $1"; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/certs.sh
+        install_mkcert(){ return 0; }
+        # Stands in for mkcert: writes files only when it is given a name.
+        mkcert(){
+            local seen_terminator=false name=""
+            while [ "$#" -gt 0 ]; do
+                case "$1" in
+                    --) seen_terminator=true ;;
+                    -cert-file|-key-file) shift ;;
+                    -*) [ "${seen_terminator}" = true ] && name="$1" ;;
+                    *) name="$1" ;;
+                esac
+                shift
+            done
+            [ -n "${name}" ] || { echo "Usage of mkcert:" >&2; return 0; }
+            printf "" >"'"${dir}"'/-dashy.pem"
+            printf "" >"'"${dir}"'/-dashy-key.pem"
+        }
+        apply_certificates(){ echo "APPLIED"; }
+        certs_generate -dashy' 2>&1)" && rc=0 || rc=$?
+    if [ "${rc}" -eq 0 ] && grep -q "SUCCESS" <<<"${out}"; then
+        passed=$((passed + 1))
+    else
+        error "a domain beginning with - was not passed after a terminator (rc=${rc}): ${out}"
+    fi
+
+    # rm failing must not be reported as a removal. Asserted against the removal
+    # itself, because the confirmation above it needs a terminal that a test has
+    # not got: driving certs_delete here would refuse for that reason instead and
+    # prove nothing about rm.
+    total=$((total + 1))
+    printf '' >"${dir}/protected.pem"
+    out="$(env CERT_DIR="${dir}" bash -c '
+        log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/certs.sh
+        rm(){ return 1; }
+        certs_remove_files "$1"' _ "${dir}/protected.pem" 2>&1)" && rc=0 || rc=$?
+    if [ "${rc}" -ne 0 ] && grep -q "could not be removed" <<<"${out}"; then
+        passed=$((passed + 1))
+    else
+        error "a failed removal was reported as success (rc=${rc}): ${out}"
+    fi
+
     rm -rf "${dir}"
     log "Certs command tests: ${passed}/${total} passed"
     [ "${passed}" -eq "${total}" ]
@@ -2655,6 +2708,40 @@ test_hosts_command() {
         passed=$((passed + 1))
     else
         log "❌ a label-routed container was not described as such: ${out}"
+    fi
+
+    total=$((total + 1))
+    redacted="$(printf 'serve\n--credential\nlive\n--bearer\nlive2\n--passphrase\nlive3\n' | redact)"
+    if [ "${redacted}" = "serve --credential <redacted> --bearer <redacted> --passphrase <redacted>" ]; then
+        passed=$((passed + 1))
+    else
+        log "❌ an explicit credential flag was printed unchanged: got ${redacted}"
+    fi
+
+    # A container declaring no VIRTUAL_PORT is still probed by hostname.
+    total=$((total + 1))
+    out="$(bash -c '
+        log_info(){ echo "$1"; }; log_warning(){ echo "$1" >&2; }; log_error(){ echo "$1" >&2; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/hosts.sh
+        docker() {
+            case "$*" in
+                *Path*Args*) printf "nginx\n" ;;
+                *Config.Image*) printf "nginx\nrunning\nbridge\n172.17.0.9 \nnginx\n" ;;
+                *Config.Env*) printf "PATH=/usr/bin\n" ;;
+                *Config.Labels*) printf "" ;;
+                *Mounts*) printf "" ;;
+                ps*) printf "Up 1 minute\n" ;;
+                *) return 1 ;;
+            esac
+        }
+        hosts_probe() { printf 503; }
+        hosts_describe_local x.spark.loc other-1 "" traefik-labels' 2>&1)"
+    if grep -q "reachable      503" <<<"${out}" && ! grep -q "backend" <<<"${out}"; then
+        passed=$((passed + 1))
+    else
+        log "❌ a container without VIRTUAL_PORT was not probed: ${out}"
     fi
 
     rm -rf "${dir}"
