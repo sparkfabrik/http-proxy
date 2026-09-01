@@ -2404,6 +2404,64 @@ COLLIDING
         error "without -ext the SANs were lost rather than read via -text (rc=${rc}, sans='${sans_field}'): ${out}"
     fi
 
+    # Trust is a claim about the signer, and expiry is reported separately, so an
+    # expired certificate this CA signed must not be called unsigned by it.
+    total=$((total + 1))
+    openssl req -new -newkey rsa:2048 -nodes -keyout "${dir}/exp-key.pem" \
+        -out "${dir}/exp.csr" -subj "/CN=expired.spark.loc" >/dev/null 2>&1
+    openssl x509 -req -in "${dir}/exp.csr" -CA "${ca_dir}/rootCA.pem" \
+        -CAkey "${ca_dir}/ca-key.pem" -out "${dir}/expired-cert.pem" \
+        -not_before 20200101000000Z -not_after 20200102000000Z >/dev/null 2>&1
+    if [ -s "${dir}/expired-cert.pem" ]; then
+        if bash -c '
+            # shellcheck source=/dev/null
+            . "${LIB_HELPERS}"
+            . bin/lib/certs.sh
+            certs_trusted "$1" "$2"' _ "${ca_dir}/rootCA.pem" "${dir}/expired-cert.pem" 2>/dev/null; then
+            passed=$((passed + 1))
+        else
+            error "an expired certificate signed by the CA was reported as not signed by it"
+        fi
+    else
+        # -not_before needs a newer openssl; the claim cannot be exercised here.
+        passed=$((passed + 1))
+        log "  (skipped the expired-certificate case: this openssl cannot backdate)"
+    fi
+
+    # A key that cannot be installed must leave the previous pair in place.
+    total=$((total + 1))
+    printf 'OLD-CERT' >"${dir}/rollback.spark.loc.pem"
+    printf 'OLD-KEY' >"${dir}/rollback.spark.loc-key.pem"
+    out="$(env CERT_DIR="${dir}" bash -c '
+        log_info(){ echo "$1"; }; log_error(){ echo "$1" >&2; }; log_success(){ echo "SUCCESS"; }
+        # shellcheck source=/dev/null
+        . "${LIB_HELPERS}"
+        . bin/lib/certs.sh
+        install_mkcert(){ return 0; }
+        mkcert(){
+            local cert="" key=""
+            while [ "$#" -gt 0 ]; do
+                case "$1" in
+                    -cert-file) cert="$2"; shift ;;
+                    -key-file) key="$2"; shift ;;
+                esac
+                shift
+            done
+            printf "NEW-CERT" >"${cert}"
+            printf "NEW-KEY" >"${key}"
+        }
+        # Fails only on the key, which is the partial-install case.
+        mv() { case "$2" in *-key.pem) return 1 ;; *) command mv "$@" ;; esac; }
+        apply_certificates(){ echo "APPLIED"; }
+        certs_generate rollback.spark.loc' 2>&1)" && rc=0 || rc=$?
+    if [ "${rc}" -ne 0 ] && ! grep -q "APPLIED" <<<"${out}" &&
+        [ "$(cat "${dir}/rollback.spark.loc.pem")" = "OLD-CERT" ] &&
+        [ "$(cat "${dir}/rollback.spark.loc-key.pem")" = "OLD-KEY" ]; then
+        passed=$((passed + 1))
+    else
+        error "a failed key install left a mismatched pair (rc=${rc}, cert=$(cat "${dir}/rollback.spark.loc.pem")): ${out}"
+    fi
+
     rm -rf "${dir}"
     log "Certs command tests: ${passed}/${total} passed"
     [ "${passed}" -eq "${total}" ]
@@ -2817,6 +2875,14 @@ test_hosts_command() {
         passed=$((passed + 1))
     else
         log "❌ a quoted --flag=value credential leaked part of its value: got ${redacted}"
+    fi
+
+    total=$((total + 1))
+    redacted="$(printf 'sh\n-c\nserve --auth my\\ secret --host db\n' | redact)"
+    if [ "${redacted}" = 'sh -c serve --auth <redacted> --host db' ]; then
+        passed=$((passed + 1))
+    else
+        log "❌ a backslash-escaped space left part of the credential: got ${redacted}"
     fi
 
     rm -rf "${dir}"

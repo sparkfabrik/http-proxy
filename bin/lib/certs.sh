@@ -162,6 +162,17 @@ certs_ca_path() {
 # since been regenerated under the same name.
 certs_trusted() {
   local ca="$1" cert="$2"
+
+  # -no_check_time asks only who signed it. Without it an expired certificate
+  # this CA really did sign is reported as not signed by it, contradicting the
+  # expiry field beside it. The option is probed rather than assumed, because the
+  # LibreSSL macOS ships is older: a self-signed CA verifies against itself, so a
+  # failure there means the option is unsupported.
+  if openssl verify -no_check_time -CAfile "${ca}" "${ca}" >/dev/null 2>&1; then
+    openssl verify -no_check_time -CAfile "${ca}" "${cert}" >/dev/null 2>&1
+    return $?
+  fi
+
   openssl verify -CAfile "${ca}" "${cert}" >/dev/null 2>&1
 }
 
@@ -363,10 +374,30 @@ certs_generate() {
     return 1
   fi
 
-  if ! mv "${staging}/cert.pem" "${CERT_DIR}/${safe_filename}.pem" ||
-    ! mv "${staging}/key.pem" "${CERT_DIR}/${safe_filename}-key.pem"; then
+  # Both files or neither: a certificate installed beside the previous key is a
+  # mismatched pair the proxy would serve.
+  local previous=""
+  if [[ -f "${CERT_DIR}/${safe_filename}.pem" ]]; then
+    previous="${staging}/previous-cert.pem"
+    cp "${CERT_DIR}/${safe_filename}.pem" "${previous}" 2>/dev/null || previous=""
+  fi
+
+  if ! mv "${staging}/cert.pem" "${CERT_DIR}/${safe_filename}.pem"; then
     rm -rf "${staging}"
     log_error "The certificate was generated but could not be installed in ${CERT_DIR}"
+    return 1
+  fi
+
+  if ! mv "${staging}/key.pem" "${CERT_DIR}/${safe_filename}-key.pem"; then
+    if [[ -n "${previous}" ]]; then
+      mv "${previous}" "${CERT_DIR}/${safe_filename}.pem"
+      log_error "The key could not be installed, so the previous certificate was put back"
+    else
+      rm -f "${CERT_DIR}/${safe_filename}.pem"
+      log_error "The key could not be installed, so the new certificate was removed"
+    fi
+    log_info "Nothing is left half-installed. The proxy still serves what it did before."
+    rm -rf "${staging}"
     return 1
   fi
   rm -rf "${staging}"

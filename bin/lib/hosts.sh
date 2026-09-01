@@ -141,7 +141,7 @@ hosts_redact_args() {
         -e "s/${flag}=[^[:space:]]*/\1=<redacted>/g" \
         -e "s/${flag}([[:space:]]+)'[^']*'/\1\3<redacted>/g" \
         -e "s/${flag}([[:space:]]+)\"[^\"]*\"/\1\3<redacted>/g" \
-        -e "s/${flag}([[:space:]]+)[^[:space:]-][^[:space:]]*/\1\3<redacted>/g" \
+        -e "s/${flag}([[:space:]]+)[^[:space:]-](\\\\ |[^[:space:]])*/\1\3<redacted>/g" \
         <<<"${arg}")"
     fi
     if [[ -z "${out}" ]]; then
